@@ -8,7 +8,7 @@ rest, confirm, commit. Re-map on demand when the repo's tooling changes.
 ```json
 {
   "version": 1,
-  "project": "fixit",
+  "project": "acme",
   "worktree": {
     "commands": {
       "sim": "bun wk:create:sim {name}",
@@ -45,7 +45,7 @@ rest, confirm, commit. Re-map on demand when the repo's tooling changes.
   },
   "frameworks": [
     { "surface": "web", "runner": "playwright", "hosts": ["*.staging.example.com"] },
-    { "surface": "expo", "runner": "appium", "apps": ["com.fixit.app"] }
+    { "surface": "expo", "runner": "appium", "apps": ["com.acme.app"] }
   ],
   "notes": "anything a future run must know (env quirks, seed commands, ports)"
 }

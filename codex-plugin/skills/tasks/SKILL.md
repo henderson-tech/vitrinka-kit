@@ -31,7 +31,20 @@ there is nothing an agent can do that a human cannot see and undo.
 - **Refs** attach a task to the evidence: `add_task_ref {kind, ref, meta}`.
   A `pr` ref is `owner/repo#n`; the GitHub App webhook attaches it for
   branches or PRs carrying `vt-<id>`, and `meta.merged = true` completes the
-  task through a built-in rule.
+  task through a built-in rule. A `file` ref is a URL, never a path: a path
+  on your machine opens nowhere else and the door refuses it (422). Put the
+  file in workspace storage instead — `vitrinka task upload <id> <files…>`
+  streams anything from disk, `upload_task_file {id, filename, content}`
+  takes small text inline (1 MiB, `.md .txt .json .csv .html .yaml .log
+  .diff .patch`) — and the ref lands as
+  `https://…/uploads/tasks/<id>/<rand>.md` with `meta {filename, mime,
+  size, sha256}`, shielded from retention for as long as the task lives.
+  Evidence serves as a download (attachment, never inline HTML) — it opens
+  from any machine, it does not render in the tab.
+- **Every task carries its links**: `url` (the project page with the task
+  panel open) and `shortUrl` (`/t/<id>`, safe to paste in a terminal) come
+  back from `create_task`, `get_task`, `update_task` and every list row —
+  hand the short one back when you file something; never guess a route.
 - **Custom fields** are per-project typed definitions (`list_fields`: key,
   kind, options, `appliesTo`) whose VALUES ride the task as `fields:
   {key: value}` on `get_task`, `create_task` and `update_task` (partial
@@ -69,23 +82,42 @@ there is nothing an agent can do that a human cannot see and undo.
   projected onto the same board as a live task card. The agent-side twin is
   `propose_tasks` + `add_task_ref {kind:"board", ref, meta:{cardId}}`; the
   reverse hand (task → canvas) is the task panel's "Pin on <board>" or
-  `POST /api/v1/boards/{slug}/task-cards {taskId}`.
+  `POST /api/v1/boards/{slug}/task-cards {taskId}`. A whole board belongs
+  to a task through `add_task_ref {kind:"board", ref, meta:{board:true}}`
+  (a bare cardId-less ref counts too; meta merges, so a card-level ref keeps
+  its cardId) — the board's breadcrumb then leads back to it, and `GET
+  /api/v1/boards/{slug}/tasks` lists a board's tasks (explicit links as
+  themselves, card-level ones as their top-most ancestor, `direct` +
+  `linked`); the crumb's "Link task" is the human's twin.
 
 ## Working a task
 
 1. `get_task` for the full row; `list_comments` and `GET /tasks/{id}/refs`
    for the conversation and evidence; `GET /tasks/{id}/events` for history.
+   Materials you produce while working it (a decision log, a handoff, a
+   report) go on the task, not on a board first: `vitrinka task upload`.
 2. Move it with `update_task {state}` (or `status`), assign, date, estimate.
    `bulk_update_tasks {ids, patch}` moves up to 200 in one transaction —
    all or nothing.
 3. Talk on it with `create_comment`; `@name` reaches that person's My work.
 4. Relate it: `create_task_link {rel: blocks|relates|duplicates|custom}`;
    `delete_task_link` by link id.
-5. Bind your run to it: `POST /tasks/{id}/runs {sessionId}` when a backend
-   session works the task (the Eve track's Thread tab reads these).
+5. Bind your run to it: `vitrinka task start <id>` (or `POST /tasks/{id}/runs
+   {sessionId}`) the moment you pick a task up, and `vitrinka task stop <run>
+   --summary …` when you put it down. A live run is how the team SEES you
+   on the plan: the brief's NOW row and the task card say `claude-code · 41m`,
+   the people rail lists you beside the humans with what you hold, and the
+   Thread tab reaches your session. A run left open is ended by the server's
+   sweep after 12 h of silence.
 
 ## Finding work
 
+- `summarize_tasks {project, groupBy, f}` computes exact counts on the server,
+  grouped by canonical `state` key (default), `type`, or `priority`. Use it for
+  counts and status reports instead of listing every task and counting in the
+  model. It uses the same filter document as `list_tasks`, excludes pending
+  intake unless requested, and refuses more than 100 groups instead of silently
+  truncating. Read actual task rows only for the details the report needs.
 - `search_tasks {q}` — FTS5 over titles and bodies, relevance-ranked, with
   snippets. `list_tasks` narrows by status/assignee/sprint/parent and takes
   the **filter document** (`f`: states, groups, types, priorities,
@@ -94,6 +126,19 @@ there is nothing an agent can do that a human cannot see and undo.
   (`list_views`).
 - `my_work` — the caller's assigned · created · mentioned · overdue, across
   projects, 50 each.
+- `get_brief {project}` — **read this before planning anything in a
+  project.** The project home as one bounded document: `now` (overdue ·
+  the caller's in-motion work · blocked, each with a `why` line and its
+  live `runs`), `next` (what to pick up), `blocked` (with blockers),
+  `since` (what changed since the caller last looked — counts + events),
+  `people` (humans AND agents with what each holds), the sprint ledger,
+  Eve's cached `narration` and the pending plan `proposals`. It replaces
+  listing a project and reasoning over the rows.
+- `list_proposals {project}` / `proposal_verdict {id, verdict}` — Eve's
+  plan proposals (`split` · `reorder` · `estimate` · `close` · `merge`) wait
+  as intake drafts with source `eve:plan`; accept applies the change through
+  the engine, decline closes it. Give a verdict only when the user asked you
+  to triage; never accept your own proposals.
 
 ## Sprints
 
@@ -124,23 +169,32 @@ running a sync are admin-only.
 
 ## Moving a project between workspaces
 
-`transfer_project {project, to, dryRun, archiveSource}` / `vitrinka project
-transfer <project> --to <workspace> [--dry-run] [--archive-source]` copies
-everything the project owns (sets, boards, sessions, reports, releases, the
-PM engine, blobs) into a workspace the caller also OWNS — `to` is the
-destination, never the caller's tenant. Dry-run first and show the report;
-the copy is idempotent (re-runs report `skipped`), a colliding board slug or
-set key is a 409 naming it, and nothing is deleted: `archiveSource` only
-stamps the source boards archived. Doctrine: `docs` topic `project-transfer`.
+`transfer_project {project, to, dryRun, archiveSource, merge}` / `vitrinka
+project transfer <project> --to <workspace> [--dry-run] [--archive-source]
+[--merge]` copies everything the project owns (sets, boards, sessions,
+reports, releases, the PM engine, blobs) into a workspace the caller also
+OWNS — `to` is the destination, never the caller's tenant. Dry-run first and
+show the report; the copy is idempotent (re-runs report `skipped`), a
+colliding board slug or set key is a 409 naming it, and nothing is deleted:
+`archiveSource` only stamps the source boards archived. When the destination
+ALREADY has a project of that slug, `merge` reconciles instead of refusing:
+vocabulary (states, labels, fields, sprints, milestones, views, rules) maps
+onto the destination's rows of the same key (`merged` per table), content is
+appended with fresh ids, and a colliding board slug or set is renamed on the
+way in (`<slug>-from-<workspace>`; the report's `renamed` lists each) — show
+the dry-run renames before running it. Doctrine: `docs` topic
+`project-transfer`.
 
 ## CLI
 
 ```text
 vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
 vitrinka task get|create|update|comment|rank|search|delete|mine
+vitrinka task start <id> [--session id] [--summary …] · task stop <run> [--summary …]
+vitrinka brief [--project p]              # now · next · blocked · since · people · Eve suggests
 vitrinka task field get <id> [key] · task field set <id> <key> <value|json>
 vitrinka project fields list|add <key> <label> --kind …|update <key>|remove <key>
-vitrinka project transfer <project> --to <workspace> [--dry-run] [--archive-source]
+vitrinka project transfer <project> --to <workspace> [--dry-run] [--archive-source] [--merge]
 vitrinka sprint list|create|start|complete --carry next|backlog
 vitrinka intake list|accept|decline|merge --into <id>|propose
 ```

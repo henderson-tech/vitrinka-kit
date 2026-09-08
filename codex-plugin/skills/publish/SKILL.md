@@ -150,9 +150,18 @@ the kind index + doctrine — the tool schema carries only the kind index:
   journey/area, a numbered `step` per screen with `status` and
   `image: {project, branch, selector, file}` naming the shot in THIS session's
   set. Do NOT keep a serpentine flow of raw shots next to a steps section
-  (doubles every screen) — skip `board-from-set` or delete the raw flow.
+  (doubles every screen) — skip `board-from-set`, or remove the duplicate
+  row with `update_cards {remove:[…]}`: cards you created go straight to the
+  trash; anyone else's come back as `409 needs_confirm` with a `preview` —
+  read it, then repeat the same ids with `confirm:<token>` and a
+  one-sentence `reason` (≥ 20 chars). Removals are soft and the reason is
+  visible: the operator restores from HISTORY or the drawer's Trash tab.
 - **Live annotate→fix loop on a single screen**: keep that screen a real shot
   card — pixel-space crops and face versioning only exist on shot/media cards.
+- **"Review these screens and annotate what's off"** is the `annotate` tool
+  (findings as native staged annotations with regions on the shots —
+  `get_card_image` per screen first), never a `finding`/document card and
+  never `highlight`; docs topic `annotation`.
   pin: e2e/board-v5.spec.ts#lightbox from the deck: full image, version filmstrip after swap, ⌖ target
 - **Every board ends with a summary card**: one `callout` (tone `success` when
   green) — verdict, counts, links, what was NOT covered. Later passes UPDATE
@@ -160,6 +169,13 @@ the kind index + doctrine — the tool schema carries only the kind index:
 - **Statuses live on the cards**: flip `step.status` via `update_cards`.
 - **Iteration = next pass** (`{"journey":"<name>","pass":"next"}`), never
   mixed takes; `arrange {"mode":"compare"}` against the previous pass.
+- **Report the spend behind every composition**: pass
+  `usage: {tokens, effort}` on `create_board`, `compose_board` and
+  `update_cards` — your own rough estimate of what the call cost you that
+  the server cannot see (thinking + reading the shots and content;
+  `effort` low | medium | high). It is a one-line self-report, never
+  validated, never billed; it lands in the workspace's agent calls ledger,
+  which the `query` tool / `vitrinka query` reads back as SQL.
 
 Then **attach the listener AUTOMATICALLY** — follow the listen skill
 (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`): arm `vitrinka
@@ -229,17 +245,28 @@ A journey board polished for outsiders, published as a share link.
    `callout` per caveat — one `compose_board` call, delegated to
    `vitrinka-publisher` along with the client-voice narrative polish.
 3. Share: board sharing runs on the dedicated public origin
-   (`share.vitrinka.ai` short links — see the share-links machinery). Hand the
-   client the share URL; annotations they leave route back to claude like any
-   board (listener rules apply).
+   (`share.vitrinka.ai` short links — see the share-links machinery). Mint
+   with the `share_board` tool or `vitrinka board share <board> [--mode
+   annotate] [--expires 7d]`. A link shares the WHOLE board — never mint on
+   one that carries drafts the client must not see. Hand the client the
+   share URL bare on its own line; annotations they leave route back to
+   claude like any board (listener rules apply).
 4. Prefer a sandbox/demo org for any shot listing tenant data; mint-then-revoke
    any credential that appears on screen — client docs travel.
 
 ## Gotchas (all intents)
 
-- Vitrinka is **WireGuard-mesh-only**; a failed push writes
+- Vitrinka is **an authenticated service**: `vitrinka auth login` mints your
+  token; `VITRINKA_TOKEN` or the OS keyring is always required (self-hosted
+  deployments set `VITRINKA_URL`). A failed push writes
   `.vitrinka/screenshots/.vitrinka-offline` — warn once, keep capturing; syncs are
   idempotent full-set uploads (`push --root .vitrinka/screenshots` to force).
+- **A board that belongs to a task** (a task, epic or subtask is in context —
+  named by the user, or filed by this session): stamp it once with
+  `add_task_ref {id, kind:"board", ref:"<slug>"}` (no `cardId`) so the
+  board's breadcrumb — and every `/a/<id>` element on it — reads
+  `PRO-12 · title ↗` back to the task; `GET /boards/{slug}/tasks` lists what
+  a board belongs to.
 - Shots transcode to WebP q85 (`brew install webp` if `cwebp` missing).
 - Never commit shots. Write auth: `VITRINKA_TOKEN` env or
   `vitrinka token` — never echo it.

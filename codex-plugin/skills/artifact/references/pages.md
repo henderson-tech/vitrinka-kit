@@ -22,6 +22,11 @@ compose: {"cards":[{"kind":"page","payload":{"md":"# Architecture\n\nThe **eve**
   exactly like editing your own text card. Composing a new `md` marks the
   editor mirror stale (`pmStale`): a human opening the card re-parses your
   markdown, then their block edits round-trip back to markdown you read again.
+- **Remove** a stale page with `update_cards {remove:[id]}`: pages you
+  created go straight to the trash; anyone else's answer `409 needs_confirm`
+  with a `preview` — read it, repeat the same ids with `confirm:<token>` and a
+  `reason` (≥ 20 chars). Soft removal; the operator restores from
+  HISTORY/Trash.
 - **Confluence parity**: humans block-edit the same card. `pmStale` semantics
   mean **the agent's markdown always wins the read face until a human re-edits**
   — so re-composing `md` is safe; you won't stomp uncommitted human blocks
@@ -123,7 +128,7 @@ diagrams use — so `docs/architecture.md` and its board card stay in sync.
   the SHA the current `md` was read at (`git rev-parse --short HEAD`).
 - **Refresh after a repo edit** (repo → board): read the new file contents, then
   `POST /api/v1/cards/{id}/refresh {source:<new md>, rev:<new SHA>}` — the server
-  replaces `payload.md` and bumps `source.rev`. (Public host: `Authorization:
+  replaces `payload.md` and bumps `source.rev`. (Always send the `Authorization:
   Bearer` header via stdin — never inline the token: `printf 'Authorization:
   Bearer %s' "$TOKEN" | curl -H @- …`.)
   pin: internal/web/docs_boards_test.go#TestPageRefresh_ReplacesMarkdown

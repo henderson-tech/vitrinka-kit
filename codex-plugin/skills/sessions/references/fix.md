@@ -21,8 +21,8 @@ modes this skill exists to prevent:
    batch's gates ("the tree is moving under us"), and tempt shared-tree `git
    stash`. Parallel batches get their own worktrees and meet again in a merge.
 
-Input: a session board slug or URL (`/vitrinka:sessions fixit-session-7 fix`,
-or the full `https://…/boards/fixit-session-7` link) or a numeric session id.
+Input: a session board slug or URL (`/vitrinka:sessions acme-session-7 fix`,
+or the full `https://…/boards/acme-session-7` link) or a numeric session id.
 Run FROM THE APP'S REPO — the one the session tested.
 
 ## Phase 0 — one call for the whole session
@@ -55,7 +55,7 @@ here. The digest is the triage input, complete by design.
 All fix work starts in worktrees — never in the user's checkout:
 
 1. If the repo maps its own worktree command (check `.vitrinka/project.json`,
-   the repo's CLAUDE.md, or its `wk:*` scripts — e.g. FixIt's
+   the repo's CLAUDE.md, or its `wk:*` scripts — e.g. a monorepo's
    `wk:create:sim` / `wk:create:full`), use THAT. Pick the full/mobile variant
    when the session's `session.meta.platform` (ios/android — the mobile
    signal; `facets.hosts` only lists real web hosts) shows the mobile app was
@@ -105,7 +105,7 @@ concurrent writer to protect against and no Phase 3½ to apply intents for it.
 Enrichment happens ONCE, batched: if batches contain ambiguous annotations
 ("this", "here"), spawn ONE subagent with all their crop/shot URLs
 (`shotUrl`, annotation `region`) to return TEXT findings — images never enter
-your context. Crop/shot URLs are relative; on the public host add the Bearer
+your context. Crop/shot URLs are relative and always need the Bearer
 token from `$VITRINKA_TOKEN` / `vitrinka token` via stdin
 (`printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- <url>`), never
 inline in argv.
@@ -202,9 +202,9 @@ Everything here runs on the INTEGRATED tree — boot infra/sim there, once.
      branch, then commit. Server stamps alone are NOT an acceptable record.
   2. Stamp the server so /sessions shows progress:
      `PATCH /api/v1/sessions/{id}` body
-     `{"pipeline":{"triaged":"<ISO now>","fixPr":"<url>"}}` (mesh-open; on the
-     public host send the Bearer token from `$VITRINKA_TOKEN` /
-     `vitrinka token` via stdin, never argv).
+     `{"pipeline":{"triaged":"<ISO now>","fixPr":"<url>"}}` (always send the
+     Bearer token from `$VITRINKA_TOKEN` / `vitrinka token` via stdin,
+     never argv).
 - End with: batch map, per-issue outcomes, commits, anything punted to the
   user, and the board URL.
 

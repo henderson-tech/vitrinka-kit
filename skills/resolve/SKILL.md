@@ -87,8 +87,8 @@ TEXT: `id → screen identification (quote visible labels verbatim) → what the
 markup circles → what each ⌖E ref points at`. Images never enter your context;
 the subagent's text findings are all you carry forward.
 
-Crop URLs are relative paths. On the WG mesh host they're auth-free; on the
-public host they 401 — send an `Authorization: Bearer` header with the token
+Crop URLs are relative paths and always need auth (an unauthenticated fetch
+401s) — send an `Authorization: Bearer` header with the token
 from `$VITRINKA_TOKEN` (fallback: the credential `vitrinka token` prints, same
 order the CLI uses). Feed the header via stdin so the token never lands in a
 process list: `printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- <url>`
@@ -146,6 +146,7 @@ not per-edit (noisy) and not all at session end (a crash loses the mapping).
 | `get_annotation` × N up front | `list_work` once; enrich only Phase-1 flagged items |
 | `scrape_board` for context | the prompts + `covered` cards; scrape only per-section on demand |
 | Reading crops in main context | ONE batched subagent returning text findings |
+| Reporting NEW defects you noticed as document/`finding` cards | `get_card_image` per screen → ONE `annotate` batch (keys, regions, `agent`); they wait `staged` for the user's Accept |
 | Fix → verify → reply per item | fix per BLOCK, verify per batch, resolve per block |
 | Re-fetching an item to re-read its prompt | keep the Phase-2 block map in your task tracker |
 | A verifier agent per screenshot | one verifier per batch, PASS/FAIL table back |

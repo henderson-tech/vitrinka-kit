@@ -12,7 +12,7 @@ happened. Don't diagnose the transport — just fetch the work directly over MCP
 and do it. This is a ONE-SHOT drain, not a listener: you do not arm
 `vitrinka watch` here.
 
-Argument: an optional board slug (`/vitrinka:annotations fixit-audit`).
+Argument: an optional board slug (`/vitrinka:annotations acme-audit`).
 Without one, auto-scope to this repo + branch exactly like `/vitrinka:listen`
 does (project = main worktree name, branch = current git branch).
 
@@ -43,6 +43,10 @@ does (project = main worktree name, branch = current git branch).
 - A large backlog (dozens of items, repeated themes) deserves the
   `/vitrinka:resolve` treatment — group into functional blocks instead of
   one-by-one fixes.
+- Defects you notice that nobody annotated are NOT yours to fix here — file
+  them with `annotate` (`get_card_image` per screen, one batch with keys and
+  regions) so they wait `staged` for the user's Accept; docs topic
+  `annotation`.
 
 When the drain comes up `{"idle":true}` on the first call, say so plainly —
 the queue is empty; the dispatch the user expected either never staged or was

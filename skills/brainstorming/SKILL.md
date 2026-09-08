@@ -91,7 +91,7 @@ Start implementing from the decision log in the same session (worktree if a bran
 
 ## Visual surface: vitrinka brainstorm boards
 
-For heavy UI questions, the visual surface is a **vitrinka brainstorm board** — the persistent artifacts app (WireGuard-mesh-only, no auth, default base `https://app.vitrinka.ai`, overridable via `VITRINKA_URL`). No throwaway server: the board outlives the session and the user annotates/answers from any machine on the mesh.
+For heavy UI questions, the visual surface is a **vitrinka brainstorm board** — the persistent artifacts app — an authenticated service: `vitrinka auth login` mints your token, and `VITRINKA_TOKEN` or the OS keyring is always required (default base `https://app.vitrinka.ai`; self-hosted deployments set `VITRINKA_URL`). No throwaway server: the board outlives the session and the user annotates/answers from any signed-in machine.
 
 **When:** for questions where 2-3 *different visual takes* beat prose — full-screen layouts, competing design directions, flows — OR when the user explicitly asks for a board session. Plain preference questions stay in the terminal (`AskUserQuestion`). "Which wizard layout?" → board. "What does personality mean here?" → terminal. When a board session is on **and the board actually exists** (created, composed, URL handed over), the FULL decision map lives on the board (step 2) — every decision is its own CHAPTER section (`<key> · <title>`) holding its entry, per-option diagrams and takes, and the camera follows the operator's active question — and the terminal carries only the numbered map list plus quick clarifications — the terminal map is never skipped, only shortened to its titles. Until the board exists, terminal mode is in force and step 2's written-out map is mandatory.
 
@@ -99,5 +99,7 @@ The full board flow — creation, the decision-map template, ground-truth
 imports, visual takes, the ↻ regenerate flow, the payload cheat sheet, and the fallback
 ladder — lives in `references/board.md`. Read it before composing anything on
 a board; every payload shape there is exact (a drifted shape costs a 400).
+
+**Report the spend behind every composition.** Pass `usage: {tokens, effort}` on `create_board`, `compose_board` and `update_cards` — your own rough estimate of what the call cost you that the server cannot see (thinking + reading the takes you drew from; `effort` low | medium | high). A one-line self-report, never validated, never billed; it lands in the workspace's agent calls ledger, which the `query` tool / `vitrinka query` reads back as SQL.
 
 **Offer just-in-time, never upfront.** The first time a genuinely visual fork appears, offer it as its own message ("I can put the 2-3 takes on a vitrinka board you can click through and answer on — want that?"). On decline, stay text-only and don't offer again unless they raise it. The decision log links the board URL under the relevant decisions.
