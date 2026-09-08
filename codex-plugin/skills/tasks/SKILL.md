@@ -252,7 +252,8 @@ resolve-qa`); the final artifact and revisions close the loop.
   journeys with verdict tone, edges = order + `blocks`) and one section
   per journey named after its title. It answers `{board: {slug, url},
   diagramCardId}`; usertest and session boards attach beneath as refs,
-  never replace it.
+  never replace it. From a terminal: `vitrinka task qa-board <id>` (the
+  board URL on stdout, `--json` for the reply).
 - **Verdicts** live on the journey: `update_task {id, fields: {verdict:
   pass|fail|partial}}`; the qa task's `coverage` checklist and `verdict`
   roll up from its journeys on read — never write them.
@@ -296,7 +297,8 @@ deterministically from the epic's refs; Eve's `pm-final` narration is
 added when a backend is configured (fail-open). The page lands on the
 epic as a versioned `final` ref: re-running bumps the version, never
 replaces. Run it when the epic closes and again after each revision;
-hand back the board URL the door returns.
+hand back the board URL the door returns. From a terminal: `vitrinka
+task final <epic>` (prints the board URL and the final ref version).
 
 ## Finding work
 
@@ -409,6 +411,7 @@ vitrinka task get|create|update|comment|rank|search|delete|mine
 vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
 vitrinka task start <id> [--session id] [--summary …] · task stop <run> [--summary …]
 vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a publish belongs to (exit 4 = none: publish unlinked, say so)
+vitrinka task qa-board <id> · task final <epic>   # the qa task's board · the epic's final artifact (board URL on stdout)
 vitrinka project commits [--subject on|off]      # commit convention: trailer always, subject prefix per project
 vitrinka workspace commit-prefix [bracket|bare|colon]   # the prefix style, workspace-wide (admin+)
 vitrinka task upload <id> <files…>          # any bytes → file ref (new version on the same name)
