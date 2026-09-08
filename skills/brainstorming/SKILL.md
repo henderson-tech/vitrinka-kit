@@ -25,6 +25,8 @@ Read the project's CLAUDE.md, relevant source, docs, and recent commits. For UI 
 
 **Scope check first:** if the request spans multiple independent subsystems, say so immediately and help decompose. Each sub-project gets its own decision map → log → build cycle. Don't burn questions refining details of something that needs splitting.
 
+**The feature epic is the record.** Before the map, find or file the epic this work belongs to — it is where the brainstorm board, the decision log, the PRs, the QA plan and the final artifact will hang (feature lifecycle 2026-09-08). An epic already in context (named by the user, the branch's `vt-<id>`, a `feature:` line from a handoff) is used as is; none → `create_task {type: "epic", title: "<the topic as a sentence>", fields: {outcome: "<one line>"}}` (the feature preset fills in as decisions settle) and quote its `shortUrl` in the map message. When a brainstorm board exists (below), attach it once: `add_task_ref {id: <epic>, kind: "board", ref: "<slug>", meta: {board: true}}`. A trivial map (1–2 questions on a one-file change) files no epic — say so and move on.
+
 ### 2. Decision map — the user sets the agenda
 
 Open with the map, not a question:
@@ -76,6 +78,8 @@ Deferred decisions, if any.
 ```
 
 Commit it. No prose spec, no self-review loop, no reviewer subagent, no formal approval gate — the table IS the user's answers, already approved by giving them.
+
+Then attach it to the epic as its decision record: `upload_task_file {id: <epic>, kind: "decision", filename: "<topic>-decisions.md", content: <the log>, hint: "read before building or revising <topic>"}` — a later pass on the same topic uploads the next VERSION of the same filename, never a second lineage. Tick the epic's `decisions` gate items as the table settles them (`fields.decisions[].done` with the log as `evidence`).
 
 ### 5. Build — directly
 

@@ -254,6 +254,41 @@ A journey board polished for outsiders, published as a share link.
 4. Prefer a sandbox/demo org for any shot listing tenant data; mint-then-revoke
    any credential that appears on screen — client docs travel.
 
+## Linking to the QA plan (every intent — feature lifecycle D4)
+
+A published board belongs to the feature's `qa` task and its sections to
+that task's `journey` children; the link is inferred, overridden
+explicitly, and never guessed:
+
+1. **Resolve the target BEFORE dispatching the publisher** — `vitrinka
+   task resolve-qa [--task <id>] --json`. `--task` accepts a qa task or
+   anything that owns or sits under one (an epic → its open qa child; a
+   story → its epic's); without it the checkout's `vt-<id>` (branch, then
+   `.worktrees/` path) resolves the same way. Exit 4 = no qa task: publish
+   UNLINKED and say so in the hand-back ("not linked — no qa task on this
+   branch; `vitrinka task resolve-qa --task <id>` to link later"). Never
+   create a qa task or a journey from a publish. Pass the answer's `qa.id`
+   and the registry (`.vitrinka/journeys.json`, when present) to the
+   publisher in its brief.
+2. **On publish** (the publisher does this, once per board): `add_task_ref
+   {id: <qa>, kind: "board", ref: <slug>, meta: {board: true}}`; then
+   `get_task {id: <qa>, include: [children]}` and, per board section,
+   match a `journey` child by its `fields.key` = the section's registry
+   key (the section title is the journey id in `.vitrinka/journeys.json`,
+   or the section's `meta.journey`), else by EXACT title →
+   `add_task_ref {id: <journey>, kind: "board", ref: <slug>, meta:
+   {section: "<section title>", journey: <journeyId>}}`. Recorded
+   sessions imported into that section → `add_task_ref {id: <journey>,
+   kind: "session", ref: <session board slug>}`. An unmatched section is
+   listed under `warnings`, never force-matched.
+3. **Verdicts are the tester's**: the summary card's per-section verdict
+   (pass · fail · partial) is written to the journey's `fields.verdict`
+   only when the brief says so; a `fail` expects a bug filed through
+   intake (`propose_tasks {source: {kind: "journey", task: <journeyId>}}`)
+   with `create_task_link {from: <bug>, to: <journey>, rel: "blocks"}` —
+   the usertest skill owns that filing, the publisher only reports what
+   it did not do.
+
 ## Gotchas (all intents)
 
 - Vitrinka is **an authenticated service**: `vitrinka auth login` mints your
@@ -261,12 +296,13 @@ A journey board polished for outsiders, published as a share link.
   deployments set `VITRINKA_URL`). A failed push writes
   `.vitrinka/screenshots/.vitrinka-offline` — warn once, keep capturing; syncs are
   idempotent full-set uploads (`push --root .vitrinka/screenshots` to force).
-- **A board that belongs to a task** (a task, epic or subtask is in context —
-  named by the user, or filed by this session): stamp it once with
-  `add_task_ref {id, kind:"board", ref:"<slug>"}` (no `cardId`) so the
-  board's breadcrumb — and every `/a/<id>` element on it — reads
+- **A board that belongs to a task** — see "Linking to the QA plan" above:
+  the publish resolves its `qa` task and stamps the board once with
+  `add_task_ref {id, kind:"board", ref:"<slug>", meta:{board:true}}` so
+  the board's breadcrumb — and every `/a/<id>` element on it — reads
   `PRO-12 · title ↗` back to the task; `GET /boards/{slug}/tasks` lists what
-  a board belongs to.
+  a board belongs to. A task that is not a qa task (the user named a plain
+  task, a bug) is stamped the same way, without sections.
 - Shots transcode to WebP q85 (`brew install webp` if `cwebp` missing).
 - Never commit shots. Write auth: `VITRINKA_TOKEN` env or
   `vitrinka token` — never echo it.

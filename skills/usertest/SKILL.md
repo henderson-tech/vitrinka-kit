@@ -22,6 +22,8 @@ deliverables, in order of importance:
    skill owns only what goes on the board. The CLI's stored credential
    (`vitrinka auth status`) is the only sign-in the board needs — never
    reach for a browser login to publish.
+   The board belongs to the feature's **qa task** (below) — one section per
+   journey, titled by the journey's registry `key` when the plan has one.
 2. **Written scenarios**: a page card per feature area listing the concrete
    scenarios exercised (role, preconditions, steps, expected), so the run is
    reproducible by a human or a future session.
@@ -30,6 +32,32 @@ deliverables, in order of importance:
    whatever suite — never introduce a second framework; no suite at all →
    board a finding proposing one, don't scaffold it unasked).
 4. **Small fixes**, PR-gated (below).
+
+## The QA plan is the script (feature lifecycle D4/D6)
+
+- **Resolve the target first**: `vitrinka task resolve-qa [--task <id>]
+  --json` (`--task` a qa task, or the epic/story that owns one; else the
+  branch's `vt-<id>`). Exit 4 → there is no plan: explore from the code
+  and the decision log, publish UNLINKED, and say so in the hand-back —
+  never file a qa task from a usertest run (the tasks skill's "QA plan"
+  recipe belongs to the merge).
+- **With a plan**, `get_task {id: <qa>, include: [children]}` lists the
+  `journey` tasks — each with `fields.role`, `route`, `steps`, `expected`.
+  Walk every journey as its role (the role matrix below still applies to
+  the pairings the plan names), one board section per journey titled by
+  its `fields.key`, and only then explore beyond the plan (edge cases,
+  unplanned pairings) in their own sections.
+- **Verdicts go on the journey**: `update_task {id: <journey>, fields:
+  {verdict: pass|fail|partial}}` as each lane closes; the qa task's
+  coverage rolls up on its own. A `fail` files its bug through intake —
+  `propose_tasks {project, source: {kind: "journey", task: <journeyId>},
+  drafts: [{type: "bug", title, body}]}` — and links it:
+  `create_task_link {from: <bug>, to: <journey>, rel: "blocks"}`. The
+  living journey diagram on the qa board paints that edge; refresh it
+  once at the end (`refresh_card {id: <diagramCardId>}` from `qa_board`).
+- **Evidence lands on the journey too**: the publisher stamps the board
+  (`meta.section` per journey) and any recorded session as refs; a shot
+  worth keeping beyond the board is `add_task_ref {kind: "shot"}`.
 
 ## The exploration contract
 
@@ -74,5 +102,8 @@ irreversible waits for the user.
 The board's summary section states: scenarios exercised (count + page-card
 link), findings by severity, fixes made (PR link), blockers left open, and
 what was deliberately NOT covered — silent truncation reads as coverage.
-Hand over the board `url` (as returned by the server) bare on its own line, leave the app running and
-hand-testable, and say which state it's parked in.
+Hand over the board `url` (as returned by the server) bare on its own line
+and, under it, the qa task's `url` with the journey verdicts (`pass 4 ·
+fail 1 · untested 2`) — or "not linked — no qa task" when resolution failed
+— then leave the app running and hand-testable, and say which state it's
+parked in.

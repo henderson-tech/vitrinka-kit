@@ -27,6 +27,12 @@ worktree (repo's own `wk:*` command when mapped, else
    issues, facets. This is the journey source; never read `/events`.
 2. Read `.vitrinka/journeys.json` and `.vitrinka/sessions.json` (schemas in
    `registry.md`, this directory; both may not exist yet — treat as empty).
+   When the feature has a QA plan, read it too: `vitrinka task resolve-qa
+   --json` (the branch's `vt-<id>`, or `--task <epic|qa>`) → `get_task
+   {id: <qa>, include: [children]}` lists the `journey` tasks with their
+   `fields.key` — those keys ARE registry ids (feature lifecycle D2), so a
+   journey the plan already names is never registered under a second id.
+   Exit 4 (no plan) is fine: the registry alone is the truth.
 3. If `sessions.json` already records this session with `testedAt`, say so and
    stop unless the user asked for a regeneration.
 
@@ -96,7 +102,14 @@ existing file, new = the target path).
 
 1. Write `.vitrinka/journeys.json` — every touched journey: tests, blocks,
    routes, `sources` += this session, status (`active`/`draft`/`expectedFail`),
-   `updatedAt`.
+   `updatedAt`, and `task: <journeyId>` when a `journey` task of the same
+   `key` exists in the QA plan (Phase 0).
+1b. Round-trip the key into the plan: for every journey with a `task`,
+   `update_task {id: <journeyId>, fields: {test: "<primary spec path>"}}`
+   and `add_task_ref {id: <journeyId>, kind: "session", ref: "<session
+   board slug>"}`; a journey the plan lacks but the recording proved is
+   NOT created here — list it under "plan gaps" in the close-out so the
+   tasks skill's "Journeys" recipe can add it under the qa task.
 2. Write `.vitrinka/sessions.json` — this session: board, `testedAt`,
    `testBranch`, `journeys` touched (`testPr` once the PR exists — a commit
    can't embed its own hash; the branch is the durable pointer).

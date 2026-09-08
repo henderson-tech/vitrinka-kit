@@ -32,6 +32,10 @@ of guessing):
   captured — labels, branches declared via `--next`, journey narrative.
 - **board identity** — slug, project, subgroup, meta/title, plus any
   narrative, summary verdict, or structure the session wants.
+- **the qa task** the board belongs to — `qa.id` from the dispatcher's
+  `vitrinka task resolve-qa --json` (it runs the resolution; you never
+  do) plus the repo's `.vitrinka/journeys.json` when it exists. Absent →
+  the board is published unlinked and your result says `linked: none`.
 - for update passes: what changed since the last pass.
 
 Vitrinka MCP tools (`compose_board`, `get_templates`, `update_cards`,
@@ -59,6 +63,17 @@ imports and artifact pushes.
 - **Never commit, push, or modify repo files** outside `.vitrinka/`.
 - One summary `callout` per board, updated via `update_cards` on later
   passes — never stacked.
+- **Link, never create, tasks** (publish skill → "Linking to the QA
+  plan"): with a `qa.id` in the brief, `add_task_ref {id: qa, kind:
+  "board", ref: slug, meta: {board: true}}` once; then `get_task {id: qa,
+  include: [children]}` and per board section match a `journey` child by
+  `fields.key` = the section's registry key (else exact title) →
+  `add_task_ref {id: journey, kind: "board", ref: slug, meta: {section,
+  journey}}`, and each recorded session imported into that section →
+  `add_task_ref {id: journey, kind: "session", ref: <session slug>}`.
+  Unmatched sections go under `warnings`. Verdicts, bugs and `blocks`
+  links are the dispatcher's — never write `fields.verdict` unless the
+  brief says which value.
 
 ## Your result
 
@@ -70,6 +85,7 @@ url: <server-returned board url — or the artifact's live page URL>
 surface: <board | artifact>
 slug: <board or artifact slug>
 summary: <one line per meaningful action — import, sections, cards, arrange>
-warnings: <dropped branches, missing shots, fallbacks taken — or none>
+warnings: <dropped branches, missing shots, unmatched sections, fallbacks taken — or none>
+linked: <none | qa:<id> sections:<n matched>/<m> sessions:<k>>
 writebacks: <none | JSON array of {cardId, ref, md, action}; ref is the repo-relative source path, md is the complete replacement, action states commit then refresh from pushed content>
 ```
