@@ -1,6 +1,6 @@
 ---
 name: sessions
-description: "The recorded user-testing pipeline — discover pending sessions, fix their issues, generate journey e2e tests, verify with a run traced onto the session board. Use for processing a recorded session or its backlog; single-stage (fix/test) runs route in the body."
+description: "The recorded user-testing pipeline — discover pending sessions, fix their issues, generate journey e2e tests, verify with a run traced onto the session board — plus archiving and continuing coding-agent sessions behind tasks. Use for processing a recorded session or its backlog (single-stage fix/test runs route in the body), or for `vitrinka session archive|continue`."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
@@ -126,6 +126,60 @@ After the session's tests exist:
 - Per session: PR URL, board URL (with the new pass), fix summary, verdict
   table outcome, e2e run result.
 - Queue summary: processed / skipped (with reasons) / remaining.
+
+## Coding-agent sessions — archive and continue
+
+A different kind of session: YOUR transcript (Claude Code, Codex), kept
+behind the task it worked so a colleague — or you, next week — can pick it
+up. Contract (PM agent surface 2026-09-08, D17–D19):
+
+- **What is archived**: the raw harness JSONL, untouched in shape, as a
+  `transcript` ref on the task with a normalized index in `meta`
+  (`harness · turns · tools · started · ended · tokens`, plus `filename`).
+  Same filename on the same task = a new VERSION, never a replacement.
+- **The gate is hard**: `vitrinka session archive` scans every line before
+  a byte leaves the machine. A credential (JWT, provider API key, bearer
+  header, checksum-verified IBAN, a credential-shaped value under a
+  sensitive JSON key) REFUSES the upload with the findings listed — exit
+  3, no flag past it; fix the source (rotate the secret) and archive
+  again. E-mails, phone numbers and long opaque runs (screenshot bytes,
+  hashes) are masked in place as `▮▮▮ [redacted-<type>]`.
+- **Paths are portable**: every absolute path under a git checkout becomes
+  `//vitrinka:repo:git@github.com:Org/Repo.git/<rel>` (origin, normalized
+  — the full remote disambiguates two repos of one name; a worktree's path
+  resolves through its main checkout's origin) and a path under `$HOME`
+  outside any checkout becomes `//vitrinka:home/<rel>`. The reading CLI
+  maps them back to ITS checkouts: the current repo, then the project's
+  declared `repos` as rename aliases, then a walk of `~/Work` (depth 4);
+  `VITRINKA_RESOLVE_RENAMES=1` also asks `gh api` for a moved repo. An
+  unresolved placeholder stays as-is — it names exactly what is missing.
+- **Automatic at session end**: `vitrinka install` registers a Claude Code
+  `SessionEnd` hook (`vitrinka session archive --auto`, marker
+  `# vitrinka:session-archive` in `~/.claude/settings.json`). It does
+  nothing unless `vitrinka session archive on` was run on this machine AND
+  the transcript named a task — the last `vitrinka task start <id>` wins,
+  else the last `vt-<id>` marker. It never fails a session: exit 0
+  always, outcome in `~/.config/vitrinka/session-archive.log`. Codex and
+  OpenCode have no session-end hook yet: archive after the fact.
+- **Continue**: `vitrinka session continue <task> [--ref <id>]` prints the
+  task's latest `distill` ref as a `/continue`-shaped brief (title, short
+  link, the digest, which transcript version it derives from). Without a
+  distill it prints the transcript index and says so — label the task
+  `eve-distill` or ask through `ask_task`. When the transcript's `harness`
+  is the one this shell runs under, it ALSO downloads the JSONL, resolves
+  the placeholders to this machine, writes it to a temp file and prints
+  the native resume (`cp … && claude --resume <id>` / `codex resume
+  <id>`) as an OFFER — never run for you.
+
+```text
+vitrinka session archive on|off|status
+vitrinka session archive <transcript.jsonl> --task <id> [--hint "load when …"] [--version-of <ref>]
+vitrinka session continue <task-id> [--ref <distill-ref>]
+```
+
+Bind the run first (`vitrinka task start <id>` — the `tasks` skill) so
+the archive knows its task; attach a `hint` so the next reader knows when
+the 48k-token transcript is worth loading.
 
 ## Autonomy contract
 

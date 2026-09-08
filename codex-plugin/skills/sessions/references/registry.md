@@ -52,6 +52,7 @@ new | skip) is computed against this file + a repo test scan.
         { "session": 7, "board": "acme-session-7", "addedAt": "2026-07-25" }
       ],
       "issues": [],
+      "task": 421,
       "updatedAt": "2026-07-25"
     }
   },
@@ -75,6 +76,10 @@ new | skip) is computed against this file + a repo test scan.
   open bug; link it) | `retired` (superseded — keep the entry, drop the file).
 - `sources` accumulates every recording that shaped the journey — the dedup
   signal for `skip` verdicts.
+- `task` (optional) is the `journey` task of the same `key` in the feature's
+  QA plan (feature lifecycle D2): the id is shared both ways — the task's
+  `fields.key` names this entry, this entry names the task, and the task's
+  `fields.test` carries `tests[0]`. Absent when the repo has no plan.
 - `blocks` is the reusable-block index (D6): shared page interactions journeys
   compose. `usedBy` is maintained on every write; a block with an empty
   `usedBy` is flagged by `--audit`, never auto-deleted.
