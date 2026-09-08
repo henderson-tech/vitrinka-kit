@@ -22,7 +22,7 @@ they become reviewable testing boards.
 >
 > Built for testing **your own applications**: sessions upload only to the
 > vitrinka server you configure — no third-party telemetry, no data collection
-> by us. The extension's full source is public: github.com/FixIt-Technologies/vitrinka-kit
+> by us. The extension's full source is public: github.com/henderson-tech/vitrinka-kit
 > — including a plain-language contract of exactly what is captured
 > (docs/PROTOCOL.md).
 >

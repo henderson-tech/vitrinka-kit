@@ -30,15 +30,15 @@ The skills ship through the standard channels — pick yours:
 
 ```bash
 # Claude Code
-claude plugin marketplace add FixIt-Technologies/vitrinka-kit
+claude plugin marketplace add henderson-tech/vitrinka-kit
 claude plugin install vitrinka@kit
 
 # Codex
-codex plugin marketplace add FixIt-Technologies/vitrinka-kit
+codex plugin marketplace add henderson-tech/vitrinka-kit
 codex plugin add vitrinka
 
 # Any skills-CLI agent (Cursor, Copilot, Windsurf, …)
-npx skills add FixIt-Technologies/vitrinka-kit
+npx skills add henderson-tech/vitrinka-kit
 ```
 
 The `vitrinka` CLI's `vitrinka install` / `vitrinka skills` drive the same

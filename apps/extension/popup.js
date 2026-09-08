@@ -17,7 +17,7 @@ async function config() {
 }
 
 // Server-controlled strings (environment, pattern, project) are rendered via
-// textContent only — never innerHTML — so a hostile mesh peer's settings
+// textContent only — never innerHTML — so a hostile server's settings
 // can't inject markup into the privileged popup.
 function renderSub(env, rest) {
   const sub = $("sub");
@@ -252,7 +252,7 @@ refresh();
 //
 // Without the host (no CLI on this machine) the button degrades to what it was
 // before: a link to the marketplace and the manual download → unzip → ↻ route.
-const MARKET = "https://apps.fixit.app";
+const MARKET = "https://releases.vitrinka.ai";
 const btn = $("update");
 
 function showUpdate(text, onClick, enabled = true) {

@@ -1,13 +1,14 @@
 {
   "name": "vitrinka",
+  "version": "3.8.1",
   "displayName": "Vitrinka",
   "description": "Screenshot journeys, annotation boards, and the AI expression layer — capture UI work as it's built, publish it to live boards, and work the annotation queue from any Claude Code session.",
   "author": {
-    "name": "Lukáš Přibík",
-    "url": "https://github.com/LEFTEQ"
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
   },
   "homepage": "https://vitrinka.ai",
-  "repository": "https://github.com/LEFTEQ/vitrinka",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
   "license": "Elastic-2.0",
   "keywords": [
     "screenshots",
