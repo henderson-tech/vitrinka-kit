@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately via
-[GitHub Security Advisories](https://github.com/FixIt-Technologies/vitrinka-kit/security/advisories/new)
+[GitHub Security Advisories](https://github.com/henderson-tech/vitrinka-kit/security/advisories/new)
 — do not open a public issue for security reports.
 
 You can expect an acknowledgement within 72 hours. Please include reproduction

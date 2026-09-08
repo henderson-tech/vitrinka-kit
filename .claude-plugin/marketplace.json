@@ -1,7 +1,8 @@
 {
   "name": "kit",
   "owner": {
-    "name": "Lukáš Přibík"
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
   },
   "description": "Vitrinka — screenshot journeys, annotation boards, and the AI expression layer.",
   "plugins": [
@@ -9,7 +10,7 @@
       "name": "vitrinka",
       "displayName": "Vitrinka",
       "source": "./",
-      "description": "Screenshot journeys, annotation boards, and the AI expression layer — 13 skills in three modules: core (publish = captured work [session·journey·walkthrough·board], artifact = authored [standalone·pages·diagram·docs board], brainstorming, listen, resolve, answers, annotations), PM (tasks, release) and QA (sessions, pair, usertest, review). Modules are presets over Claude Code's skillOverrides via `vitrinka skills`; the vitrinka MCP server is registered separately by `vitrinka install` (secret-free stdio forwarder).",
+      "description": "Screenshot journeys, annotation boards, and the AI expression layer — 18 skills in four modules: Core (publish = captured work [session·journey·walkthrough·board], artifact = authored [standalone·pages·diagram·docs board], brainstorming, listen, resolve, answers, annotations), PM (tasks, release), QA (sessions, pair, usertest, review) and Me (todo, todo-list, todo-done, todo-milestone, remind). Modules are presets over Claude Code's skillOverrides via `vitrinka skills`; the vitrinka MCP server is registered separately by `vitrinka install` (secret-free stdio forwarder).",
       "category": "productivity",
       "keywords": [
         "screenshots",

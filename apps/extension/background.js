@@ -2,7 +2,9 @@
 //
 // Decisions: journey recorder 2026-07-24 (D1 session event stream, D2
 // chrome.debugger CDP network capture with graceful degrade, D3 rrweb chunks
-// recorded now + rendered later, D7 capture-everything on a mesh-only tool)
+// recorded now + rendered later, D7 capture-everything: bodies are kept up to
+// BODY_CAP because recording is opt-in per session and the tester chooses what
+// to record; nothing leaves the machine except to the configured vitrinka host)
 // and recorder-live 2026-07-25 (D2 Stop shows real drain progress, D4/D5 an
 // honest health signal reconciled against the server, D6 one upload pipeline,
 // D7 IndexedDB queue, D8 never drop, D9 reap only DEAD sessions, D11 poll for
