@@ -41,10 +41,10 @@ there is nothing an agent can do that a human cannot see and undo.
   size, sha256}`, shielded from retention for as long as the task lives.
   Evidence serves as a download (attachment, never inline HTML) — it opens
   from any machine, it does not render in the tab.
-- **Every task carries its links**: `url` (the project page with the task
-  panel open) and `shortUrl` (`/t/<id>`, safe to paste in a terminal) come
-  back from `create_task`, `get_task`, `update_task` and every list row —
-  hand the short one back when you file something; never guess a route.
+- **Every task carries its ONE link**: `url` (the project page with the task
+  panel open, workspace-scoped) comes back from `create_task`, `get_task`,
+  `update_task` and every list row — hand it back exactly as returned when
+  you file something; never guess, shorten or compose a route.
 - **Custom fields** are per-project typed definitions (`list_fields`: key,
   kind, options, `appliesTo`) whose VALUES ride the task as `fields:
   {key: value}` on `get_task`, `create_task` and `update_task` (partial

@@ -12,9 +12,16 @@ way real users will — not by reading the code and declaring it plausible. The
 deliverables, in order of importance:
 
 1. **A live board** (one per run) that narrates the exploration: what was
-   tried, what broke, what's ambiguous. Board mechanics — creation, journey
-   sections, step cards, staged questions — follow the **publish** skill;
-   this skill owns only what to put on it.
+   tried, what broke, what's ambiguous. **Create it before the first
+   scenario** and narrate into it as the run proceeds — a board assembled at
+   the end is the deliverable that falls off a long session. Invoke the
+   **publish** skill for every board mechanic (creation, journey sections,
+   step cards, staged questions, the summary pass) and dispatch its
+   `vitrinka-publisher` agent (Agent tool, `subagent_type:
+   "vitrinka-publisher"`, background) for each compose-shaped pass; this
+   skill owns only what goes on the board. The CLI's stored credential
+   (`vitrinka auth status`) is the only sign-in the board needs — never
+   reach for a browser login to publish.
 2. **Written scenarios**: a page card per feature area listing the concrete
    scenarios exercised (role, preconditions, steps, expected), so the run is
    reproducible by a human or a future session.
@@ -67,5 +74,5 @@ irreversible waits for the user.
 The board's summary section states: scenarios exercised (count + page-card
 link), findings by severity, fixes made (PR link), blockers left open, and
 what was deliberately NOT covered — silent truncation reads as coverage.
-Hand over the board shortUrl bare on its own line, leave the app running and
+Hand over the board `url` (as returned by the server) bare on its own line, leave the app running and
 hand-testable, and say which state it's parked in.
