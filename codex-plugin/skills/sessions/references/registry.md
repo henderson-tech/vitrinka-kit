@@ -49,7 +49,7 @@ new | skip) is computed against this file + a repo test scan.
       "routes": ["/orders", "/orders/new"],
       "status": "active",
       "sources": [
-        { "session": 7, "board": "fixit-session-7", "addedAt": "2026-07-25" }
+        { "session": 7, "board": "acme-session-7", "addedAt": "2026-07-25" }
       ],
       "issues": [],
       "updatedAt": "2026-07-25"
@@ -89,13 +89,13 @@ them. Keyed by server session id (string, JSON keys).
   "version": 1,
   "sessions": {
     "7": {
-      "board": "fixit-session-7",
+      "board": "acme-session-7",
       "triagedAt": "2026-07-25T10:12:00Z",
       "fixBranch": "fix/session-7",
-      "fixPr": "https://github.com/LEFTEQ/FixIt/pull/412",
+      "fixPr": "https://github.com/acme/shop/pull/412",
       "testedAt": "2026-07-25T14:03:00Z",
       "testBranch": "test/session-7",
-      "testPr": "https://github.com/LEFTEQ/FixIt/pull/413",
+      "testPr": "https://github.com/acme/shop/pull/413",
       "journeys": ["orders-create", "orders-cancel"],
       "notes": "2 issues punted to user (other-repo)"
     }

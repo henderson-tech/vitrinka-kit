@@ -41,11 +41,32 @@ Routing when the ask is ambiguous:
   vocabulary, it owns the end-to-end flow).
 - UI work in progress, flows, "screenshot as I go" → not here; **publish**.
 
+Sharing a finished artifact with outside people: `share_board` with
+`cardId` (the id in the element's `/a/<id>` URL) or `vitrinka board share
+<board> --card <id>` mints a link that OPENS on that element as a document
+on the public share origin; the human twin is the ⇗ share action in the
+solo view's head. The link still grants the whole board the element sits on
+(the recipient can switch to the canvas), so an artifact meant for outside
+eyes lives on a board with nothing private beside it. Hand the URL over bare
+on its own line.
+
 ## Shared core (all surfaces)
 
-- Vitrinka is **WireGuard-mesh-only** (default base `https://app.vitrinka.ai`,
-  override `VITRINKA_URL`). Write auth: `VITRINKA_TOKEN` env or `vitrinka
-  token` — never echo it; on the public host feed Bearer headers via stdin
+- **Edit existing elements by reference.** `read_element {id}` returns a
+  paginated outline with content revision and payload-relative JSON Pointer
+  paths. Retrieve only the needed values with `{id,paths:[...]}`; previews
+  are not full source. For an AI-layer canonical element, `edit_element
+  {id,revision,edits:[{op:"replace",path:"/elements/2/payload/md",value:"…"}]}`
+  retains all other content and runs the normal validator/layout. `add`
+  inserts an array item (`-` appends), `remove` omits value. Edits are ordered;
+  indexes are safe only for the revision read. A 409 means re-read affected
+  content and reconcile, never blindly retry. The receipt carries the next
+  revision. Outline pagination must stay on one revision or restart.
+
+- Vitrinka is **an authenticated service** (default base `https://app.vitrinka.ai`;
+  self-hosted deployments set `VITRINKA_URL`). `vitrinka auth login` mints
+  your token; `VITRINKA_TOKEN` or the OS keyring is always required — never
+  echo it; feed Bearer headers via stdin
   (`printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- …`), never argv.
 - **The deploy documents itself.** Element payload contracts, component
   props, doc.json block shapes, chart forms and the runtime shelf are served
@@ -56,6 +77,18 @@ Routing when the ask is ambiguous:
   collisions) — generated from the validator and kit the
   deploy actually runs, so it never drifts. Look up, don't recall; the
   references here carry workflow and laws, never prop tables.
+- **Report the spend behind every composition**: pass `usage: {tokens,
+  effort}` on `create_board`, `compose_board` and `update_cards` — your own
+  rough estimate of what the call cost you that the server cannot see
+  (thinking + reading the source material; `effort` low | medium | high).
+  A one-line self-report, never validated, never billed; it lands in the
+  workspace's agent calls ledger, which the `query` tool / `vitrinka query`
+  reads back as SQL.
+- **A board that belongs to a task** (a task, epic or subtask is in context):
+  stamp it once with `add_task_ref {id, kind:"board", ref:"<slug>"}` (no
+  `cardId`) so the board's breadcrumb — and every `/a/<id>` element on it —
+  reads `PRO-12 · title ↗` back to the task; `GET /boards/{slug}/tasks` lists
+  what a board belongs to.
 - **Hand back only server-returned URLs**: a board's `url` field carries
   `/w/<workspace>` — never hand-compose `{base}/boards/<slug>`; a standalone
   artifact hands back the URL `vitrinka push` prints. The link goes in your

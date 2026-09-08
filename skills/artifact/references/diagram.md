@@ -37,7 +37,7 @@ stable ids → relayout → overrides survive.
    vitrinka import docker-compose.yml --board <slug> --kind auto --title "Services"
    ```
    Or the raw endpoint — `POST /api/v1/boards/{slug}/import`
-   `{kind, source, ref, rev?, title?, x?, y?}` (public host needs an
+   `{kind, source, ref, rev?, title?, x?, y?}` (always needs an
    `Authorization: Bearer` header fed via stdin — never inline the token;
    `printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- …`). `x`/`y` omitted
    = free placement. Parse failure is a loud 400 naming the offending
@@ -105,7 +105,7 @@ lone object where an array belongs, an entity column written as one string
 but a slip won't cost you a retry loop. Ambiguity still 400s with the exact fix.
 
 **Trust tones/styles** carry meaning — use them: `public` (edge from the
-internet), `mesh` (WG/private link), `internal` (in-cluster), `outbound`
+internet), `mesh` (private network / VPN link), `internal` (in-cluster), `outbound`
 (third-party), `accent` (highlight a domain group).
 
 ### Worked examples
@@ -133,7 +133,11 @@ response carries:
   re-ran the layout with that edit and quotes the measured delta
   (`set dir:"LR" — verified: aspect 3.40 → 1.80`). A `suppresses` list marks
   the finding as a root cause — fixing it clears those codes too.
-- `render` — the card's SVG export URL. Fetch it and **look** at the diagram.
+- `render` — the card's PNG export URL. Fetch it and **look** at the diagram.
+  The render is content-addressed and cached server-side: an unchanged
+  diagram is never rasterized twice, and a re-fetch with `If-None-Match`
+  (the response `ETag`) answers `304` — so re-checking after a no-op write
+  costs nothing.
 
 The loop (the same "Verify, then iterate" discipline as `standalone.md`):
 after every write, read the diagnostics AND fetch the render; apply at most

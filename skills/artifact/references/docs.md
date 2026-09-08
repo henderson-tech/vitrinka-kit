@@ -44,7 +44,7 @@ decision.
    ```
    The mapping: `compose`→Architecture, `sqlddl`/`pgschema`→Database,
    `openapi`→API. (Raw form — `POST /api/v1/boards/{slug}/import {kind, source,
-   ref, rev, title, section}`, public host `Authorization: Bearer` via stdin,
+   ref, rev, title, section}`, always send `Authorization: Bearer` via stdin,
    never inline the token; explicit `x`/`y` win over `section` so omit them.)
    Imports come back scored like any diagram write — run `diagram.md`'s
    quality loop (read `diagnostics`, eyeball `render`) on each one.

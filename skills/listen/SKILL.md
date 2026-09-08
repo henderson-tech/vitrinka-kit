@@ -18,7 +18,7 @@ per NEW annotation. Each line re-invokes this session; while the queue is idle
 it prints nothing and costs nothing. Silence means "healthy and idle",
 forever — a finished turn still wakes on new work.
 
-Argument: an optional board slug (`/vitrinka:listen fixit-audit`). **Without a
+Argument: an optional board slug (`/vitrinka:listen acme-audit`). **Without a
 board it now AUTO-SCOPES to this repo + branch** — it infers the project from the
 repo (the main worktree's name, the same derivation `vitrinka push` uses) and the
 current git branch, and listens for exactly that project+branch's work. This is
@@ -72,9 +72,14 @@ workspace from your Bearer token, so `wait_for_work`/`list_work` scoping by
 2. The `vitrinka` MCP tools are available (`wait_for_work`, `set_status`,
    `reply`, `attach_after`, `get_capsule`). If not, tell the user to run
    `vitrinka install` in this repo (or the manual form:
-   `claude mcp add --scope user --transport stdio vitrinka -- vitrinka mcp`) —
-   the registration is the secret-free stdio forwarder, which resolves the
-   deployment, workspace and credential at runtime.
+   `claude mcp add --scope project --transport http vitrinka <origin>/w/<workspace>/mcp`,
+   then `/mcp` → vitrinka → authenticate inside Claude Code) — the
+   registration is a secret-free remote HTTP entry with OAuth; the stdio
+   forwarder `vitrinka mcp` remains the fallback for hosts without OAuth.
+   In a bound repo the PROJECT-level entry (`/w/<workspace>/mcp`) must be
+   present — a session riding only the user-level grant may land in the
+   wrong workspace and cannot create projects; `vitrinka install` renders
+   it (Cursor, OpenCode, VS Code and Gemini CLI get their own files too).
 3. The **Monitor tool** is available in this harness. If it is NOT, use the
    FALLBACK loop at the bottom of this file instead.
 
@@ -196,7 +201,15 @@ nothing overnight.
    should eyeball), then `set_status {id, status: "in_review"}`.
 
 Progress notes: at most one `reply` per meaningful moment (plan, pushed vN).
-Never spam the thread; never post "still working".
+Never spam the thread; never post "still working". Pass `agent` on `reply`
+and `attach_after` (`claude-code` / `codex` / …) so the thread shows
+`agent:<runtime>` beside your verified identity.
+
+Something ELSE wrong on the screen (not the annotated ask)? Don't widen the
+fix — file it: `get_card_image {board, cardId}` to measure, then `annotate
+{board, agent, items:[{key, cardId, cardVersion, region, summary, …}]}`. It
+lands `staged`; the user accepts it into the queue. Never a document card,
+never `highlight` for a finding (docs topic `annotation`).
 
 ## Cancels (the user changed their mind)
 
@@ -241,8 +254,8 @@ Do not disarm or re-arm it.
 - If a fix genuinely needs the user's input, `reply` with the question,
   `set_status {status: "open"}` to put it back, and end the turn — any plain
   reply in the thread re-queues the item and the monitor wakes you again
-  (annotation threads route to claude by default; only explicit @eve turns go to
-  eve).
+  (annotation threads route to claude by default; only explicit `@eve` turns go
+  to Eve, vitrinka's AI reviewer).
 - If your context grows unwieldy after many fixes, finish the current item, tell
   the user to restart the listener, and stop.
 

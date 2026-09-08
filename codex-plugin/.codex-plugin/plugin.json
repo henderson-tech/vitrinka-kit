@@ -1,13 +1,13 @@
 {
   "name": "vitrinka",
-  "version": "3.8.0",
+  "version": "3.8.1",
   "description": "Capture UI journeys, publish interactive artifact and annotation boards, and work with Vitrinka through MCP.",
   "author": {
-    "name": "Lukas Pribik",
-    "url": "https://github.com/LEFTEQ"
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
   },
   "homepage": "https://vitrinka.ai",
-  "repository": "https://github.com/LEFTEQ/vitrinka",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
   "license": "Elastic-2.0",
   "keywords": [
     "screenshots",

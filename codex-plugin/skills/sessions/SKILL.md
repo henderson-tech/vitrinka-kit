@@ -31,7 +31,7 @@ every future run and teammate inherits it:
 
 - **project** — the vitrinka project slug (must match the recorder's).
 - **worktree** — the command that creates a work-ready worktree, and the rule
-  for variants (e.g. FixIt: `wk:create:sim` web-only vs `wk:create:full` when
+  for variants (e.g. a monorepo's `wk:create:sim` web-only vs `wk:create:full` when
   the journey includes the mobile app). Fallback: plain `git worktree add`.
 - **run** — how to start the dev stack(s) the tests drive, per surface, and
   the readiness check (URL/port/log line).
@@ -58,7 +58,7 @@ run; thereafter trust the file (re-map on demand when it drifts).
    the stamps.
 4. **Exclude machine-driven runs**: skip any session whose `environment` is
    `sim` or whose tags include `ai` — those are an agent's own dev-loop
-   recordings (FixIt's `bun run rec:start`), not user-testing findings.
+   recordings (the app repo's own `bun run rec:start`), not user-testing findings.
    Pipelining them means opening issues against half-built work and
    generating journey tests from flows that were mid-change. Filter on
    `environment` from the list response rather than fetching
@@ -76,6 +76,10 @@ heavyweight — parallel sessions fight over dev stacks and the registry):
 
 1. **Digest once**: `get_session {id}` — reuse it for both stages below;
    don't let each stage re-fetch.
+   A **fix-only** run can start with `{id,view:"issues"}` and retrieve the
+   necessary evidence steps with `{id,seqs:[...]}`. Recorder notes, issues, vitals,
+   facets and totals remain; `coverage` names omitted steps. Test generation
+   requires the full journey — an issues view is not coverage evidence.
 2. **Worktree**: create via the project.json worktree command; pick the
    variant from the digest's `session.meta.platform` (ios/android ⇒ full).
 3. **Fix**: run the fix stage (`references/fix.md`, its phases 2–4) inside the

@@ -16,11 +16,11 @@ testing-suite management surface.
    reuse **only when the board is already yours**, never suffix-mint a
    duplicate. The 409 body names the incumbent's `project` and `url`: a
    different project's board is a collision, not a reuse — pick another slug
-   and leave that board alone. (Adopting one is how a FixIt PR journey and an
-   eve-ai-layer session ended up sharing the 2026-08-25 canvas.)
+   and leave that board alone. (Adopting one is how an app's PR journey and an
+   AI-review session ended up sharing the same canvas.)
 2. **Create fully-specified** — every field you know at birth goes in the one
    `create_board` call:
-   - `slug` — `<project>-<purpose>` (`fixit-payroll-audit`), stable, and
+   - `slug` — `<project>-<purpose>` (`acme-payroll-audit`), stable, and
      **never a bare date**: slugs are workspace-global, so `2026-08-25` is
      every project's slug at once. A date belongs in a slug only behind a
      project (and usually a branch) that already scopes it — which is exactly
@@ -104,7 +104,7 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
 | Finding suites by scanning all boards | `list_boards {project, board_type:"journeys"}` |
 
 The app-repo side (which journeys exist, anchor-index, affected-journeys from
-a diff) belongs to the app repo's own skill (e.g. FixIt's `fixit-journeys`) —
+a diff) belongs to the app repo's own skill (e.g. its own `acme-journeys`) —
 this skill owns the vitrinka surface those tools write to.
 
 ## Don't rationalize
