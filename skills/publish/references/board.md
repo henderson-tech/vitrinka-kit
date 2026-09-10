@@ -50,7 +50,8 @@ testing-suite management surface.
      when the user asks for a hand-drawn / whiteboard mood.
 3. **Structure template-first**: `get_templates` ONCE, start from the matching
    skeleton (QA session, decision map, dashboard, deck, journey suite …) in
-   ONE `compose_board` call — batch-or-bust, intent not coordinates. Save a
+   one `compose_board` call per coherent unit — intent not coordinates;
+   a single card is a batch of one, anchored by relation. Save a
    recurring structure of your own with `save_template` and instantiate via
    `compose_board {template, params}`.
 4. **Hand over the server's `url` field** from the create/list response — it

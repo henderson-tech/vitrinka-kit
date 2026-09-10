@@ -5,7 +5,7 @@ Payload shapes are NOT in this file. The deploy documents itself: call the
 contract with an example) or `vitrinka docs <kind>`. The tree is generated
 from the validator, so it never drifts — trust it over anything remembered.
 This file keeps only the kind index, routing advice, and cross-cutting
-doctrine. The vocabulary is **canonical-only** (migrate-and-drop, 2026-09-01):
+doctrine. The vocabulary is **canonical-only**:
 the retired `viz`/`wireframe` kind NAMES and their legacy payload shapes are
 both rejected at every door with a 400 naming the canonical kind — compose
 `chart`/`table`/`mockup` per their docs topics. The exact list a deploy
@@ -81,8 +81,10 @@ URL. Highlights the index alone won't tell you:
 
 ## Cross-cutting doctrine
 
-- **Batch-or-bust**: one `compose_board` call per thought; intent
-  (section/anchor/layout), never coordinates — `docs {topic:"board:composing"}`.
+- **One batch per coherent unit** (a section, a readout, a comparison; a
+  single card is a batch of one); intent (section/layout/anchor `{cardId|ref,
+  relation: after|before|under|beside|into}`, batch-level or per card), never
+  coordinates — `docs {topic:"board:composing"}`.
 - Payload mismatches 400 with `{code, index}` naming the bad item and a `see`
   pointer into the docs tree — follow it; composing without a topic page is
   recoverable, just noisier.

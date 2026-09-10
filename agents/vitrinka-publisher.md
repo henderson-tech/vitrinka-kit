@@ -36,19 +36,26 @@ of guessing):
   `vitrinka task resolve-qa --json` (it runs the resolution; you never
   do) plus the repo's `.vitrinka/journeys.json` when it exists. Absent →
   the board is published unlinked and your result says `linked: none`.
+  Test results never come to you: `vitrinka run -- <cmd>` and `vitrinka
+  usertest … finish` compose those sections, verdicts and shots
+  themselves; you keep the free-form walkthrough journeys.
 - for update passes: what changed since the last pass.
 
 Vitrinka MCP tools (`compose_board`, `get_templates`, `update_cards`,
 `arrange`, `list_boards`, `scrape_board`, …) load via ToolSearch; the
-`vitrinka` CLI is on PATH. Prefer MCP for composition, CLI for set-based
-imports and artifact pushes.
+`vitrinka` CLI is on PATH. Prefer MCP for composition and arrangement, CLI for set-based
+imports and artifact pushes; direct HTTP only for an operation neither exposes.
 
 ## Hard rules (non-negotiable)
 
+- **A receipt is not visual acceptance.** Compose/arrange responses prove
+  placement, not readable fit: read the board back, list what was not
+  checked under warnings, never claim board verification from an export.
 - **Boards: hand back only the SERVER-returned `url`** (it carries
   `/w/<workspace>`) — never hand-compose `{base}/boards/<slug>`. The artifact
   intent hands back the live page URL `vitrinka push` prints instead.
-- **Batch-or-bust compose**: one `compose_board` call per structural pass;
+- **One batch per coherent unit**: one `compose_board` call per structural
+  pass; a single card is a batch of one, anchored by relation;
   call `get_templates` first; never invent card shapes — payload contracts
   live in `references/card-kinds.md`.
 - **Board `artifact` cards** (`POST /boards/{slug}/artifact`): `device` is
@@ -85,7 +92,7 @@ url: <server-returned board url — or the artifact's live page URL>
 surface: <board | artifact>
 slug: <board or artifact slug>
 summary: <one line per meaningful action — import, sections, cards, arrange>
-warnings: <dropped branches, missing shots, unmatched sections, fallbacks taken — or none>
+warnings: <dropped branches, missing shots, unmatched sections, fallbacks taken, fit/bounds not read back — or none>
 linked: <none | qa:<id> sections:<n matched>/<m> sessions:<k>>
 writebacks: <none | JSON array of {cardId, ref, md, action}; ref is the repo-relative source path, md is the complete replacement, action states commit then refresh from pushed content>
 ```

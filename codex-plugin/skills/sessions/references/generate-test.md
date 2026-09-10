@@ -30,7 +30,7 @@ worktree (repo's own `wk:*` command when mapped, else
    When the feature has a QA plan, read it too: `vitrinka task resolve-qa
    --json` (the branch's `vt-<id>`, or `--task <epic|qa>`) → `get_task
    {id: <qa>, include: [children]}` lists the `journey` tasks with their
-   `fields.key` — those keys ARE registry ids (feature lifecycle D2), so a
+   `fields.key` — those keys ARE registry ids, so a
    journey the plan already names is never registered under a second id.
    Exit 4 (no plan) is fine: the registry alone is the truth.
 3. If `sessions.json` already records this session with `testedAt`, say so and
@@ -71,7 +71,7 @@ For each mapped journey, against the registry + a repo test scan:
 | **update** | Existing journey's flow changed (routes/selectors moved) | Rewrite the existing test to the new reality |
 | **new** | No registry or repo test covers the intent | Emit a new journey test |
 
-User journeys legitimately differ even on shared functionality (D6): two
+User journeys legitimately differ even on shared functionality: two
 journeys touching the same screens with different intent are BOTH kept — the
 dedup target is the **reusable-block layer**, not the journey list. Extract
 shared page interactions (login, navigation, list filters) into the repo's

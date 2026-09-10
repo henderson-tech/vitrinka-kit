@@ -11,7 +11,7 @@ Everything *authored* lands here; everything *captured* (screenshots,
 journeys, sessions) is the **publish** skill. Pick the surface, read its
 reference, share the core below.
 
-**The element model (2026-09-01):** board and artifact are one thing. Every
+**The element model:** board and artifact are one thing. Every
 authored unit is an **element** (`{kind, payload}` — chart, table, prose,
 diagram, mockup, doc, …), the SAME shape as a board card's content; a
 standalone artifact is the solo view of one element (`/a/<card>`), and a
@@ -52,6 +52,13 @@ on its own line.
 
 ## Shared core (all surfaces)
 
+- **Doors.** MCP for board discovery, composition, edits and arrange; the
+  `vitrinka` CLI for set imports and artifact pushes; direct HTTP only for an
+  operation neither exposes. One workspace/project/board per task — check
+  it on every receipt. A receipt or `render.png` proves placement, not
+  readable fit: read the board back and name what you did not check. A
+  renderer failure keeps its semantic source and is reported as a defect,
+  never replaced by a raster/base64 figure or a hand-grown rectangle.
 - **Edit existing elements by reference.** `read_element {id}` returns a
   paginated outline with content revision and payload-relative JSON Pointer
   paths. Retrieve only the needed values with `{id,paths:[...]}`; previews
@@ -81,7 +88,7 @@ on its own line.
   effort}` on `create_board`, `compose_board` and `update_cards` — your own
   rough estimate of what the call cost you that the server cannot see
   (thinking + reading the source material; `effort` low | medium | high).
-  A one-line self-report, never validated, never billed; it lands in the
+  A schema-validated self-report; estimates are not verified or billed. It lands in the
   workspace's agent calls ledger, which the `query` tool / `vitrinka query`
   reads back as SQL.
 - **A board that belongs to a task** (a task, epic or subtask is in context):

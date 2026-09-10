@@ -7,7 +7,7 @@ CORS-enabled and CSP-compatible (artifact iframes are opaque-origin — /vendor/
 responds with Access-Control-Allow-Origin: *; no cookies or same-origin capabilities). **Verify against the deployed server, not cached
 pin: internal/web/vendor_test.go#TestVendorRoute
 docs: `GET /api/v1/runtime`** returns `{cli, libs: {name: version}, cardKinds}`
-for exactly this deploy (runtime-shelf decisions 2026-07-23 §8).
+for exactly this deploy.
 
 ## Import map names (defined by every artifact scaffold)
 

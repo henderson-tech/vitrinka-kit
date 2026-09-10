@@ -140,8 +140,9 @@ serpentine layout with `--action`-labeled arrows, files under the project's
 **testing** subgroup. Give the user the board URL as soon as it exists.
 
 Structure pass at wrap-up — **delegate it to `vitrinka-publisher`** (see
-Delegation above). The rules the agent follows: ONE `compose_board` call
-(batch-or-bust), fetch `get_templates` first, never invent card shapes. The
+Delegation above). The rules the agent follows: one `compose_board` call per coherent
+unit (a single card is a batch of one, anchored by relation), fetch
+`get_templates` first, never invent card shapes. The
 per-kind payload contracts live in the `docs` MCP tool (canonical element
 vocabulary — chart, table, mockup, doc, …); `references/card-kinds.md` keeps
 the kind index + doctrine — the tool schema carries only the kind index:
@@ -173,8 +174,8 @@ the kind index + doctrine — the tool schema carries only the kind index:
   `usage: {tokens, effort}` on `create_board`, `compose_board` and
   `update_cards` — your own rough estimate of what the call cost you that
   the server cannot see (thinking + reading the shots and content;
-  `effort` low | medium | high). It is a one-line self-report, never
-  validated, never billed; it lands in the workspace's agent calls ledger,
+  `effort` low | medium | high). The self-report is schema-validated;
+  estimates are not verified or billed. It lands in the workspace's agent calls ledger,
   which the `query` tool / `vitrinka query` reads back as SQL.
 
 Then **attach the listener AUTOMATICALLY** — follow the listen skill
@@ -226,6 +227,9 @@ adding screens or wires.
 
 Agents without the CLI: `compose_board` edges accept
 `fromRegion`/`toRegion` `{x,y,w,h}` directly — same image-px space.
+Edges also accept `rel: "subtask" | "blocks" | "refs"`; the canvas shows
+the relationship alongside `label`. Omit `rel` for an ordinary flow arrow.
+These are canvas relationships, not the task engine's `task_links`.
 
 Wrap-up: same structure-pass + summary + listener rules as session (the
 structure pass delegates to `vitrinka-publisher`; the listener stays yours).
@@ -254,23 +258,30 @@ A journey board polished for outsiders, published as a share link.
 4. Prefer a sandbox/demo org for any shot listing tenant data; mint-then-revoke
    any credential that appears on screen — client docs travel.
 
-## Linking to the QA plan (every intent — feature lifecycle D4)
+## Linking to the QA plan (every intent)
 
 A published board belongs to the feature's `qa` task and its sections to
 that task's `journey` children; the link is inferred, overridden
 explicitly, and never guessed:
 
-1. **Resolve the target BEFORE dispatching the publisher** — `vitrinka
+1. **Test results never come through this skill.** A runner's output goes
+   through `vitrinka run -- <test command>`; an exploratory session goes
+   through `vitrinka usertest start · case · snap · verdict · finish`
+   (usertest skill). Both create or extend the qa task, write verdicts,
+   compose the qa board and attach the evidence themselves. The publisher
+   agent keeps only the free-form walkthrough: a client-facing story, a
+   design review, a set of screens with no verdict.
+2. **Resolve the target BEFORE dispatching the publisher** — `vitrinka
    task resolve-qa [--task <id>] --json`. `--task` accepts a qa task or
    anything that owns or sits under one (an epic → its open qa child; a
    story → its epic's); without it the checkout's `vt-<id>` (branch, then
-   `.worktrees/` path) resolves the same way. Exit 4 = no qa task: publish
-   UNLINKED and say so in the hand-back ("not linked — no qa task on this
-   branch; `vitrinka task resolve-qa --task <id>` to link later"). Never
-   create a qa task or a journey from a publish. Pass the answer's `qa.id`
-   and the registry (`.vitrinka/journeys.json`, when present) to the
-   publisher in its brief.
-2. **On publish** (the publisher does this, once per board): `add_task_ref
+   `.worktrees/` path) resolves the same way. Exit 4 = no qa task: the
+   walkthrough publishes UNLINKED and says so in the hand-back ("not
+   linked — no qa task on this branch; `vitrinka task resolve-qa --task
+   <id>` to link later"). Never create a qa task or a journey from a
+   publish. Pass the answer's `qa.id` and the registry
+   (`.vitrinka/journeys.json`, when present) to the publisher in its brief.
+3. **On publish** (the publisher does this, once per board): `add_task_ref
    {id: <qa>, kind: "board", ref: <slug>, meta: {board: true}}`; then
    `get_task {id: <qa>, include: [children]}` and, per board section,
    match a `journey` child by its `fields.key` = the section's registry
@@ -281,13 +292,10 @@ explicitly, and never guessed:
    sessions imported into that section → `add_task_ref {id: <journey>,
    kind: "session", ref: <session board slug>}`. An unmatched section is
    listed under `warnings`, never force-matched.
-3. **Verdicts are the tester's**: the summary card's per-section verdict
-   (pass · fail · partial) is written to the journey's `fields.verdict`
-   only when the brief says so; a `fail` expects a bug filed through
-   intake (`propose_tasks {source: {kind: "journey", task: <journeyId>}}`)
-   with `create_task_link {from: <bug>, to: <journey>, rel: "blocks"}` —
-   the usertest skill owns that filing, the publisher only reports what
-   it did not do.
+4. **Verdicts are never a walkthrough's.** A walkthrough carries no
+   verdict and files no bug; a finding worth a verdict is an exploratory
+   case (`vitrinka usertest case … · verdict fail --note …`), whose
+   `finish` files the bug draft `blocks`-linked to its journey.
 
 ## Gotchas (all intents)
 
@@ -300,7 +308,7 @@ explicitly, and never guessed:
   the publish resolves its `qa` task and stamps the board once with
   `add_task_ref {id, kind:"board", ref:"<slug>", meta:{board:true}}` so
   the board's breadcrumb — and every `/a/<id>` element on it — reads
-  `PRO-12 · title ↗` back to the task; `GET /boards/{slug}/tasks` lists what
+  `ACME-12 · title ↗` back to the task; `GET /boards/{slug}/tasks` lists what
   a board belongs to. A task that is not a qa task (the user named a plain
   task, a bug) is stamped the same way, without sections.
 - Shots transcode to WebP q85 (`brew install webp` if `cwebp` missing).
