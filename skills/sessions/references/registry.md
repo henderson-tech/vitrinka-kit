@@ -1,7 +1,6 @@
 # .vitrinka testing manifests — schemas
 
-Two git-tracked JSON files in the repo's `.vitrinka/` home (pipeline decisions
-D5/D7: the repo manifest is the source of truth; server session stamps are the
+Two git-tracked JSON files in the repo's `.vitrinka/` home (the repo manifest is the source of truth; server session stamps are the
 visibility layer). Both are owned by the fix / generate-test stages (this
 directory); humans review them in PRs like any code.
 
@@ -16,7 +15,7 @@ matches (`!.vitrinka/sessions.json`) for correctly allowlisted files, so
 "any -v output" misreads a healthy repo as broken. Plain `check-ignore`
 prints only genuinely ignored paths (exit 0); silence + exit 1 is the
 healthy state. Any printed path means the repo ignores `.vitrinka/`
-wholesale and the D5/D7 truth rule is inverted (server stamps would exist
+wholesale and the truth rule is inverted (server stamps would exist
 with no git source of truth). Do NOT silently fall back to server-only
 stamps and do NOT `git add -f`. Fix the repo's `.gitignore` first, in the
 same branch: ignore only the scratch contents and allowlist the manifests —
@@ -77,10 +76,10 @@ new | skip) is computed against this file + a repo test scan.
 - `sources` accumulates every recording that shaped the journey — the dedup
   signal for `skip` verdicts.
 - `task` (optional) is the `journey` task of the same `key` in the feature's
-  QA plan (feature lifecycle D2): the id is shared both ways — the task's
+  QA plan: the id is shared both ways — the task's
   `fields.key` names this entry, this entry names the task, and the task's
   `fields.test` carries `tests[0]`. Absent when the repo has no plan.
-- `blocks` is the reusable-block index (D6): shared page interactions journeys
+- `blocks` is the reusable-block index: shared page interactions journeys
   compose. `usedBy` is maintained on every write; a block with an empty
   `usedBy` is flagged by `--audit`, never auto-deleted.
 

@@ -54,8 +54,8 @@ stable ids → relayout → overrides survive.
 
 ## Path (b) — author the semantic v2 payload
 
-`compose_board {cards:[{kind:"diagram", payload:{…}}]}` — ONE card, batch-or-bust,
-intent not coordinates. The full vocabulary:
+`compose_board {cards:[{kind:"diagram", payload:{…}}]}` — one card is a batch of one,
+anchored by relation, intent not coordinates. The full vocabulary:
 
 **Top level**: `kicker?`, `title`, `dir:"TD"|"LR"` (default TD), `legend?:
 [{style,label}]`, and the graph — `lanes?`, `groups?`, `nodes`, `edges`.

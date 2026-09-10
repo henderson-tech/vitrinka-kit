@@ -1,6 +1,6 @@
 # `.vitrinka/project.json` — the project rules map
 
-Committed, per-repo (pipeline decision D8): everything the autopilot needs to
+Committed, per-repo: everything the autopilot needs to
 work THIS project without asking twice. Mapped interactively on the first
 `/vitrinka:sessions` run — derive what the repo answers, ask the user the
 rest, confirm, commit. Re-map on demand when the repo's tooling changes.

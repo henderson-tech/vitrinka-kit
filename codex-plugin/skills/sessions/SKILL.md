@@ -96,7 +96,7 @@ heavyweight — parallel sessions fight over dev stacks and the registry):
    Everything stays committed LOCALLY on the session's branch — shipping
    happens after Phase 3's verification run, never before it.
 
-## Phase 3 — verified run, traced to the board (D9)
+## Phase 3 — verified run, traced to the board
 
 After the session's tests exist:
 
@@ -131,7 +131,7 @@ After the session's tests exist:
 
 A different kind of session: YOUR transcript (Claude Code, Codex), kept
 behind the task it worked so a colleague — or you, next week — can pick it
-up. Contract (PM agent surface 2026-09-08, D17–D19):
+up. Contract:
 
 - **What is archived**: the raw harness JSONL, untouched in shape, as a
   `transcript` ref on the task with a normalized index in `meta`

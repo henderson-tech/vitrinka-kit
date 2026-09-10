@@ -192,7 +192,7 @@ Everything here runs on the INTEGRATED tree — boot infra/sim there, once.
 - Non-annotation issues: the closing summary lists each with its verdict and
   commit. Network issues re-checked live (the failing call now succeeds)
   before claiming fixed.
-- Record the processed state (pipeline D7 — schemas in `registry.md`, this
+- Record the processed state (schemas in `registry.md`, this
   directory):
   1. Write/merge this session's entry in `.vitrinka/sessions.json`
      (`triagedAt`, `fixBranch`, `fixPr`, notes) and commit it with the fixes.

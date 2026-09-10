@@ -7,8 +7,7 @@ metadata:
 
 # /vitrinka:release — sweep, watch, cut
 
-A project's releases live on `releases` boards (releases-board decisions
-2026-08-04): a rolling **next-release** board accumulates everything merged
+A project's releases live on `releases` boards: a rolling **next-release** board accumulates everything merged
 since the last cut, Eve's release-writer turns the PR window into the page
 (hero + ✨/🐛/🔧 sections + stats + linked boards), and **cut** freezes the
 board and opens the next window. The server does all of it — this skill just

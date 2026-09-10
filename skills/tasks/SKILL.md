@@ -7,7 +7,7 @@ metadata:
 
 # /vitrinka:tasks — the task engine, agent side
 
-Tasks are a relational engine (PM overhaul 2026-09-03): configurable states in
+Tasks are a relational engine: configurable states in
 five fixed groups, item types, labels, comments with @mentions, a manual rank,
 multi-assignee, typed attachments (session · shot · board · file · pr · run),
 an **intake** lifecycle for proposals, a durable `task_events` ledger, saved
@@ -15,13 +15,17 @@ filter views, rules, and a per-project Jira mirror. Boards only ever carry a
 projection card of a task. Everything below is one MCP tool or one CLI verb;
 there is nothing an agent can do that a human cannot see and undo.
 
+MCP validates the full advertised input schema before dispatch, including
+types, enums and nested constraints. On `invalid arguments`, correct the
+named field against the tool schema; do not rely on coercion or dropped keys.
+
 ## Vocabulary
 
 - **State groups** are universal: `backlog · unstarted · started · completed ·
   cancelled`. A project's **states** (`list_states`) are keys inside those
   groups; every project starts with the six legacy statuses as states, so
   `status` still works and is derived from the state's group.
-- **Types**: `task · bug · story · epic · todo · qa · journey` — the ONE
+- **Types**: `task · bug · story · epic · todo · qa · journey · meeting` — the ONE
   enum, generated into every MCP schema from `store.TaskTypes` (`type` on
   create/update, `appliesTo` on fields, `types` in the filter). An `epic`
   is a container (children by `parentId`, the feature preset), a `story` a
@@ -29,7 +33,10 @@ there is nothing an agent can do that a human cannot see and undo.
   task rolls its children up. A `qa` task is a feature's TEST PLAN (child
   of the epic, the `qa` preset: `scope · roles · verdict · coverage`), a
   `journey` one user path inside it (child of the qa task, the `journey`
-  preset: `key · role · route · steps · expected · verdict · test`) — see
+  preset: `key · role · route · steps · expected · verdict · test`), a
+  `meeting` a recorded meeting promoted from the diary (the `meeting`
+  preset: `attendees · date`, plus the shared `decisions` checklist —
+  see "Meetings" under Asking Eve) — see
   "The feature lifecycle" below. Each type has a fixed icon + colour (overridable per
   project in Settings → Projects) so the list reads at a glance. A `todo` is a personal reminder with a moment (milestone,
   trigger, clock) — the `me` module's `/vitrinka:todo`, `todo-list`,
@@ -152,7 +159,7 @@ Read `get_brief` first, then build it in this order and read it back:
    hint}`), never only on a board.
 7. Read it back: `get_task {id:<epic>, include:[children, links, refs]}`
    — the children with their state, the link graph and the attachment
-   index in one bounded call — and hand the epic's `shortUrl` back.
+   index in one bounded call — and hand the epic's `url` back.
 
 **Reading attachments progressively**: the index (`include:[refs]`) is
 free — kind, hint, tokens, version, derivedFrom. Load bytes only when the
@@ -187,7 +194,10 @@ the rest.
    on the plan: the brief's NOW row and the task card say `claude-code · 41m`,
    the people rail lists you beside the humans with what you hold, and the
    Thread tab reaches your session. A run left open is ended by the server's
-   sweep after 12 h of silence.
+   sweep after 12 h of silence. On a checkout whose branch, worktree path or
+   HEAD commit trailer names `vt-<id>`, the hooks `vitrinka install`
+   registers do this for you: the session opens as that task's live run and
+   ends it on exit — `task start|stop` stays the manual door.
 
 ## The feature lifecycle
 
@@ -240,8 +250,21 @@ resolve-qa`); the final artifact and revisions close the loop.
    (fail-open — the drafts are usable as filed), and a human accepts from
    the intake queue. A `qa-plan` batch answers only after Eve's pass, so
    the call may block up to 60 s. Never accept your own QA plan.
-3. Hand back the qa task's `shortUrl` and stop there: the qa board is
+3. Hand back the qa task's `url` and stop there: the qa board is
    composed AFTER the human accepted the plan.
+
+The other legal birth of a qa task is a **run**: `vitrinka run -- <test
+command>` (a runner's own JUnit / Playwright / allure / wdio output, folded
+for you), `vitrinka usertest … finish` (an exploratory session), `vitrinka
+run publish <manifest>` (a manifest a runner already wrote) or MCP
+`publish_run {id, manifest}` turn a run into a LIVE qa task (`intake_source
+run:<runId>`) with one `journey` per spec key, verdicts, steps, the qa board
+and the evidence refs — no draft, no acceptance, because the journeys are
+the specs that ran. A run with no task in context lands under the project's
+rolling **Unplanned runs** epic; re-parent its qa task by hand when the
+feature exists. When such a plan already exists, this merge-time recipe ADDS
+journeys to it (`parentId` the existing qa task) and never files a second qa
+task.
 
 ### Journeys (working the plan)
 
@@ -300,6 +323,27 @@ replaces. Run it when the epic closes and again after each revision;
 hand back the board URL the door returns. From a terminal: `vitrinka
 task final <epic>` (prints the board URL and the final ref version).
 
+## References in bodies
+
+The server reads every task body once and hands back `bodyRefs` on the
+single-task read (`get_task` / `GET /tasks/{id}`): the panel turns them into
+links and you get the same resolved targets, so write bodies in this grammar
+and never paste hand-built URLs for things the project already knows:
+
+- a task: its key `<PREFIX>-<id>` (the project's first three letters, e.g.
+  `FIX-409`), `vt-409`, or `#409` (the bare form resolves only when 409 is a
+  live task of this project);
+- a pull request: `owner/repo#123`;
+- a repo path: `docs/specs/x.md`, `apps/client/app`, `internal/web/foo.go:64`
+  (an optional `:line`) — linked over the project's declared repository;
+- an attachment: its filename (`plan.md`, or the path it was uploaded as) —
+  an attachment name wins over a repo path of the same name.
+
+Anything inside a code fence or backticks stays literal. Each ref carries
+`kind` (`task · attachment · pr · repo · path`), the matched `text`, and
+`id` · `refId` · `url` for its kind; `path` means the project has no
+GitHub-shaped repo, so the text stays plain.
+
 ## Finding work
 
 - `summarize_tasks {project, groupBy, f}` computes exact counts on the server,
@@ -314,6 +358,13 @@ task final <epic>` (prints the board URL and the final ref version).
   assignees, labels, sprint, milestone, parent, intake, due/start spans,
   text, order, group/subgroup) — the same document saved views store
   (`list_views`).
+- `search {project, kind, q, limit, task}` — the ONE project search: boards
+  (default), tasks or pages, FTS candidates reranked by title similarity and
+  scoped like the list doors. Hits carry `kind · id · slug · title · subgroup
+  · score · recent · pinned` — `recent` is the project's five most recently
+  updated boards, `pinned` (given `task`) the boards already carrying that
+  task. Use it to find the board to pin a task on or to resolve a board a
+  human named loosely; an empty `q` lists boards most recent first.
 - `my_work` — the caller's assigned · created · mentioned · overdue, across
   projects, 50 each.
 - `get_brief {project}` — **read this before planning anything in a
@@ -354,6 +405,31 @@ task final <epic>` (prints the board URL and the final ref version).
   on …"). The `eve-*` namespace is reserved: a user rule that adds or
   removes one is refused (400). Eve reads and writes refs and comments
   ONLY — never code, never a state change, never a PR comment.
+- **Meetings** — a recording made with Snap lands on the recorder's
+  personal diary as a `meeting` card (audio + timestamped transcript) and
+  stays private until its owner promotes it: `promote_meeting {card,
+  workspace?, project}` (`vitrinka diary promote <card> --project <p>
+  [--workspace <ws>]`) files a `meeting` task (preset `attendees · date ·
+  decisions`) with the recording, `transcript.json` and a readable
+  `transcript.md` (`[mm:ss] text` lines) as `file` refs, and links the
+  card to it — a second promote answers the same task. The diary lives in
+  the recorder's PERSONAL workspace and a team project in another:
+  `workspace` names the destination (member+ there; the CLI defaults to
+  the bound workspace) and the project must already exist there (404
+  otherwise — promote never creates one). The reply is the task with its
+  `refs` and the `workspace` it lives in: address every later task call
+  there (`vitrinka task meeting-notes <id> --workspace <ws>`, an MCP bound
+  to that workspace, or REST with `X-Vitrinka-Workspace`); a 404 from the
+  personal tenant means the wrong workspace, not a missing task. Then
+  `meeting_notes {task, board?}` (`vitrinka task
+  meeting-notes <id> [--board] [--workspace <ws>]`) runs Eve's pm-meeting flow over the
+  transcript: a versioned `notes` ref (`meeting-notes.md` lineage), a
+  `summary.md` distill, the `decisions` checklist, and every action item as
+  a PENDING intake draft with source `eve:meeting` — triage them through
+  the intake door, never accept your own. `board: true` composes the
+  meeting board (Summary · Decisions · Action items · Transcript excerpt)
+  and links it as the task's board ref. 409 means the transcript is still
+  pending on the diary side; 501 means no AI backend — do not retry.
 - `vitrinka session continue <task>` prints the latest distill as a
   `/continue`-shaped brief — the thing to read before picking up someone
   else's session (the `sessions` skill has the archive side).
@@ -410,8 +486,11 @@ vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
 vitrinka task get|create|update|comment|rank|search|delete|mine
 vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
 vitrinka task start <id> [--session id] [--summary …] · task stop <run> [--summary …]
-vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a publish belongs to (exit 4 = none: publish unlinked, say so)
+vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a walkthrough belongs to (exit 4 = none: publish unlinked, say so)
 vitrinka task qa-board <id> · task final <epic>   # the qa task's board · the epic's final artifact (board URL on stdout)
+vitrinka run [--task <id>] [--bugs intake|direct|none] -- <test command>   # run + publish the results (qa task, journeys, verdicts, board, bugs)
+vitrinka usertest start|case|verdict|finish     # an exploratory session over `snap`, published the same way
+vitrinka project setup --runners [--check]      # declare where each runner writes results
 vitrinka project commits [--subject on|off]      # commit convention: trailer always, subject prefix per project
 vitrinka workspace commit-prefix [bracket|bare|colon]   # the prefix style, workspace-wide (admin+)
 vitrinka task upload <id> <files…>          # any bytes → file ref (new version on the same name)
