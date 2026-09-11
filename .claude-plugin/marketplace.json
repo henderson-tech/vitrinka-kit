@@ -10,7 +10,7 @@
       "name": "vitrinka",
       "displayName": "Vitrinka",
       "source": "./",
-      "description": "Screenshot journeys, annotation boards, and the AI expression layer — 18 skills in four modules: Core (publish = captured work [session·journey·walkthrough·board], artifact = authored [standalone·pages·diagram·docs board], brainstorming, listen, resolve, answers, annotations), PM (tasks, release), QA (sessions, pair, usertest, review) and Me (todo, todo-list, todo-done, todo-milestone, remind). Modules are presets over Claude Code's skillOverrides via `vitrinka skills`; the vitrinka MCP server is registered separately by `vitrinka install` (secret-free stdio forwarder).",
+      "description": "Screenshot journeys, annotation boards, and the AI expression layer — 21 skills in four modules: Core (publish = captured work [session·journey·walkthrough·board], artifact = authored [standalone·pages·diagram·docs board], brainstorming, listen, resolve, answers, annotations), PM (tasks, release, pickup, spot, handoff), QA (sessions, pair, usertest, review) and Me (todo, todo-list, todo-done, todo-milestone, remind). Modules are presets over Claude Code's skillOverrides via `vitrinka skills`; the vitrinka MCP server is registered separately by `vitrinka install` (secret-free stdio forwarder).",
       "category": "productivity",
       "keywords": [
         "screenshots",

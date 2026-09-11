@@ -138,6 +138,7 @@ Then close the loop — this is not optional, per item:
 
 Batch these three calls per block, right after the block's verification —
 not per-edit (noisy) and not all at session end (a crash loses the mapping).
+Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Token & API economy — the rules in one table
 

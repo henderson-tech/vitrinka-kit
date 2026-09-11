@@ -94,5 +94,6 @@ slug: <board or artifact slug>
 summary: <one line per meaningful action — import, sections, cards, arrange>
 warnings: <dropped branches, missing shots, unmatched sections, fallbacks taken, fit/bounds not read back — or none>
 linked: <none | qa:<id> sections:<n matched>/<m> sessions:<k>>
+ledger: <one line per task ref you added — task id, kind, ref — so the dispatcher's hand_back can carry them; or none>
 writebacks: <none | JSON array of {cardId, ref, md, action}; ref is the repo-relative source path, md is the complete replacement, action states commit then refresh from pushed content>
 ```

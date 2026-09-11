@@ -59,11 +59,13 @@ testing-suite management surface.
 5. **Arm the listener AUTOMATICALLY** — if this session will service the
    board's annotations (it almost always will), follow the listen skill
    (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`) right after
-   creating: arm the monitor exactly as that skill specifies (the `exec` in its
-   Monitor command is load-bearing — without it the watch outlives the session
-   and holds the board's lease forever), announce
-   `⏳ listening — annotate away`. Never offer or wait to be asked — a board
-   without a live listener silently queues annotations nobody reacts to.
+   creating, on the highest rung its `references/listening.md` ladder offers
+   in this harness: a native Monitor on `exec vitrinka watch` (the `exec` is
+   load-bearing — without it the watch outlives the session and holds the
+   board's lease forever), the `vitrinka listen --harness <name>` host, or
+   holding this turn on `wait_for_work`. Announce the rung's one line. Never
+   offer or wait to be asked — a board without a live listener silently
+   queues annotations nobody reacts to.
 
 ## Testing-journey suites (`board_type: "journeys"`)
 

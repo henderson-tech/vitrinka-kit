@@ -20,7 +20,10 @@
       "description": "The task engine — intake, triage, ranking, automation rules, release boards.",
       "skills": [
         "tasks",
-        "release"
+        "release",
+        "pickup",
+        "spot",
+        "handoff"
       ]
     },
     {

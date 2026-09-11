@@ -83,7 +83,7 @@ Then attach it to the epic as its decision record: `upload_task_file {id: <epic>
 
 ### 5. Build — directly
 
-Start implementing from the decision log in the same session (worktree if a branch is warranted). Do NOT write a separate implementation plan (`docs/plans/*-implementation.md`, `/superpowers:writing-plans`, phased WP documents) — the user has explicitly rejected that step as slow and quality-degrading. In-session task tracking (TaskCreate) is fine; a committed plan document is not. Only write one if the user explicitly asks.
+Start implementing from the decision log in the same session (worktree if a branch is warranted). Do NOT write a separate implementation plan (`docs/plans/*-implementation.md`, `/superpowers:writing-plans`, phased WP documents) — the user has explicitly rejected that step as slow and quality-degrading. In-session task tracking (TaskCreate) is fine; a committed plan document is not. Only write one if the user explicitly asks. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Principles
 
@@ -103,6 +103,15 @@ The full board flow — creation, the decision-map template, ground-truth
 imports, visual takes, the ↻ regenerate flow, the payload cheat sheet, and the fallback
 ladder — lives in `references/board.md`. Read it before composing anything on
 a board; every payload shape there is exact (a drifted shape costs a 400).
+
+**A board session listens.** Answers are released as a batch the session
+must be awake to receive, so once the URL is handed over the session listens
+on the highest rung the listen skill's `references/listening.md` ladder
+offers in this harness — a native background Monitor, the `vitrinka listen
+--harness <name>` host, or, with neither, holding this turn on `wait_for_work
+{board}` until the batch lands (never ending it on your own). Announce the
+rung once; then read each batch carefully — it may ask for clarification,
+changes, or that you not proceed — and follow what it actually says.
 
 **Report the spend behind every composition.** Pass `usage: {tokens, effort}` on `create_board`, `compose_board` and `update_cards` — your own rough estimate of what the call cost you that the server cannot see (thinking + reading the takes you drew from; `effort` low | medium | high). A schema-validated self-report; estimates are not verified or billed. It lands in the workspace's agent calls ledger, which the `query` tool / `vitrinka query` reads back as SQL.
 
