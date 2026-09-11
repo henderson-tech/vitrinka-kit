@@ -101,7 +101,7 @@ topic `annotation`.
 One summary to the user (and to the board as a `callout` card when the session
 is board-first): findings confirmed-and-fixed (with commits), findings you
 believe are wrong (with evidence, for their dismiss click), suggestions left
-for their call, and the new pass's outcome when it lands.
+for their call, and the new pass's outcome when it lands. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Don't rationalize
 

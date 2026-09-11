@@ -1,44 +1,50 @@
 ---
 name: listen
-description: "Tune this session into a vitrinka annotation board and work its queue continuously — a native background monitor (`vitrinka watch`) re-invokes the session per annotation, zero-token idle. Invoke as /vitrinka:listen [board-slug] FROM THE APP'S REPO."
+description: "Tune this session into a vitrinka annotation board and work its queue continuously — `vitrinka watch` wakes the session per annotation through a background monitor, the vitrinka host, or a held turn. Invoke as /vitrinka:listen [board-slug] FROM THE APP'S REPO."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
 
-# /vitrinka:listen — the listening session (native Monitor)
+# /vitrinka:listen — the listening session
 
 You are the **worker half of an audit loop**: the user looks at their app's
 screens on a vitrinka board and annotates what's wrong; you fix each annotation
 in THIS repository, attach visual proof, and go back to listening.
 
-**How the listening works.** You do NOT loop on `wait_for_work` in-model.
-Instead you arm Claude Code's **native background Monitor** on `vitrinka
-watch`: a persistent script that long-polls the work queue and prints ONE line
-per NEW annotation. Each line re-invokes this session; while the queue is idle
-it prints nothing and costs nothing. Silence means "healthy and idle",
-forever — a finished turn still wakes on new work.
+**How the listening works.** `vitrinka watch` is a persistent process that
+long-polls the work queue, leases the scope, and prints ONE line per NEW
+item. What turns that line into a woken session depends on the harness, and
+`references/listening.md` is the ONE ladder every listening skill follows:
+a native background Monitor (the line re-invokes you; idle costs nothing),
+the `vitrinka listen --harness <name>` host (the line arrives as a prompt),
+or — with neither — holding this turn on `wait_for_work`. Read the ladder,
+pick the highest rung this harness offers, announce it once, and the rest of
+this file applies unchanged on every rung. A "monitor line" below means the
+line however it reaches you.
 
 Argument: an optional board slug (`/vitrinka:listen acme-audit`). **Without a
 board it now AUTO-SCOPES to this repo + branch** — it infers the project from the
 repo (the main worktree's name, the same derivation `vitrinka push` uses) and the
 current git branch, and listens for exactly that project+branch's work. This is
-what lets several Claude sessions listen at once without stepping on each other:
+what lets several agent sessions listen at once without stepping on each other:
 each session's listener scopes to its own work.
 
 ## One listener per scope (the multi-session model)
 
-Multiple Claude sessions can work concurrently on different things, and each arms
+Multiple agent sessions can work concurrently on different things, and each arms
 its own scoped listener. The server enforces **at most one live listener per
 scope** — the same board (or the same project+branch) cannot be listened to twice:
 
 - The listener *leases* its scope through the `vitrinka watch` long-poll — that
-  long-poll IS the heartbeat. A clean stop (the Monitor torn down, the session
-  exiting) releases the lease immediately and reverts any work it had claimed;
-  if the process is killed outright the lease lapses on the ~90s TTL instead.
-  The watch also self-terminates if it is ever orphaned — it watches its own
-  parent, so an agent that dies without signalling anything (SIGKILL, crash,
-  closed terminal) still frees the scope within seconds rather than holding it
-  forever. See the `exec` note under "Arm the monitor".
+  long-poll IS the heartbeat. A clean stop (the monitor torn down, the host
+  interrupted, the session exiting) releases the lease immediately and reverts
+  any work it had claimed; if the process is killed outright the lease lapses
+  on the ~90s TTL instead. The watch also self-terminates if it is ever
+  orphaned — it watches its own parent, so an agent that dies without
+  signalling anything (SIGKILL, crash, closed terminal) still frees the scope
+  within seconds rather than holding it forever. See the `exec` note in the
+  ladder's rung 1. The lease records the harness and the rung it was armed
+  on, and the board shows both beside its listening indicator.
 - **Newest wins (same machine):** arming a listener IS the routing decision. If
   another session ON THIS MACHINE holds the scope, your `vitrinka watch` claim
   displaces it automatically — no 409, no question, nothing to surface. The
@@ -80,17 +86,19 @@ workspace from your Bearer token, so `wait_for_work`/`list_work` scoping by
    present — a session riding only the user-level grant may land in the
    wrong workspace and cannot create projects; `vitrinka install` renders
    it (Cursor, OpenCode, VS Code and Gemini CLI get their own files too).
-3. The **Monitor tool** is available in this harness. If it is NOT, use the
-   FALLBACK loop at the bottom of this file instead.
+3. You know your rung: read `references/listening.md` and pick — the
+   `Monitor` tool exists → rung 1; `VITRINKA_LISTEN_HOST` is set → rung 2
+   (the host already leases the scope — arm nothing); otherwise rung 3.
 
-## Arm the monitor, then END THE TURN
+## Arm the listener
 
 Use the `vitrinka` binary on PATH (installed by `vitrinka install` / `npm i -g
 @vitrinka/cli`). If it is not on PATH (a repo-dev machine without the shim),
 fall back to `go run ./cmd/vitrinka watch` from a vitrinka repo checkout.
 
-Arm the monitor (the schema requires `timeout_ms` and `persistent` even though
-`timeout_ms` is ignored when `persistent` is true — pass both):
+**Rung 1 — arm the monitor** exactly as the ladder specifies (the schema
+requires `timeout_ms` and `persistent` even though `timeout_ms` is ignored
+when `persistent` is true — pass both):
 
 ```
 Monitor({
@@ -101,37 +109,31 @@ Monitor({
 })
 ```
 
-**The `exec` is load-bearing — never drop it.** Claude Code runs a monitor
-command inside a wrapper shell and, when the session ends, signals *that shell*.
-`exec` replaces the wrapper, so the watch *is* the process Claude Code signals:
-it releases the lease and exits the instant the session ends. Without `exec` the
-watch is a grandchild — the wrapper dies, the SIGTERM never reaches it, and it
-is adopted by init while still long-polling. Its parent-death guard notices the
-reparenting and shuts it down within 5 seconds, so the lease is not held
-forever; but until that fires, the board's scope belongs to a process whose
-stdout nobody reads, and anything dispatched in the gap disappears. `exec` is
-the immediate, signal-driven release; the guard is only the ≤5s backstop.
+**The `exec` is load-bearing — never drop it** (the ladder explains the
+orphaned-watch failure it prevents). Then, in the SAME turn, announce the
+rung-1 line and **END THE TURN**: do not loop, do not poll, do not sleep.
+Idle costs nothing; the monitor's next line re-invokes you.
+
+**Rung 2 — hosted**: arm nothing; the host already runs the watch. Announce
+the rung-2 line and END THE TURN — the next work item arrives as a prompt.
+
+**Rung 3 — hold the turn**: announce the rung-3 line (it names
+`vitrinka listen --harness <name>` as the lift, once) and enter the ladder's
+`wait_for_work {…scope, timeoutSec: 50}` loop. Never end the turn on your own.
 
 **Default is auto-scope** — no `--board` needed. `vitrinka watch` with no scope
 flag infers project+branch from the repo you are in and leases that scope.
 Arming displaces any same-machine holder automatically (newest wins — see the
-multi-session section above). If the monitor's FIRST output line is a
+multi-session section above). If the watch's FIRST output line is a
 `⚠ listener already active (live, another machine) …` (exit 2), a session on a
-different machine owns the scope: surface which one and stop. If the monitor
-later emits `… taken over by … — standing down`, the listener moved to another
-of the user's sessions: acknowledge in one line and do not re-arm.
+different machine owns the scope: surface which one and stop. If it later
+emits `… taken over by … — standing down`, the listener moved to another of
+the user's sessions: acknowledge in one line and do not re-arm.
 
-Then, in the SAME turn:
-
-1. Announce exactly one line: `⏳ listening on <board|all boards> — annotate away`.
-2. **END THE TURN.** Do not loop, do not poll, do not sleep. Idle costs nothing;
-   the monitor's next line re-invokes you. This is the whole point — a finished
-   turn is fine, the monitor is what wakes you.
-
-## On a monitor notification — drain the queue
+## On a work line — drain the queue
 
 A monitor line looks like `№<id> [<intent>] <board>: <prompt…>` — one per new
-annotation. A `№<id> [choice] <board>: <question> → <answer>` line is an
+annotation. A `№<id> [answer] <board>: <question> → <answer>` line is an
 ANSWERED BOARD QUESTION (a "Send to Claude" dispatch, e.g. from a brainstorm
 decision map) — drain it the same way: `wait_for_work` returns it in the
 `choices[]` array alongside `work[]`; record the decision (answer + any `note`)
@@ -156,15 +158,16 @@ line (or a batch):
 1. **Drain via MCP, SCOPED THE SAME WAY.** Call `wait_for_work({ …scope,
    timeoutSec: 1 })` and loop it until it returns `{"idle":true}`, working each
    returned capsule serially, oldest first, under the per-item rules below. Pass
-   the SAME scope the monitor uses so you only drain your own work: `{ board }`
+   the SAME scope the listener uses so you only drain your own work: `{ board }`
    for a board listener, or `{ project, branch }` for the auto-scoped repo
-   listener. Use `timeoutSec: 1` (NOT 50) — the monitor is what waits; here you're
-   just draining what's ready right now, not blocking.
+   listener. Use `timeoutSec: 1` (NOT 50) — the watch is what waits; here you're
+   just draining what's ready right now, not blocking. (On rung 3 there is no
+   line: the ladder's 50-second loop IS the drain.)
 2. When `wait_for_work` returns idle, the ready queue is empty. **End the turn
-   again.** The monitor stays armed (it's `persistent`) and will re-invoke you on
-   the next annotation. Never disarm it yourself.
+   again** on rungs 1 and 2 — the monitor stays armed (it's `persistent`), the
+   host keeps its loop, and the next item wakes you. Never disarm it yourself.
 
-Do NOT re-arm the monitor on each notification — it is already running for the
+Do NOT re-arm the listener on each notification — it is already running for the
 session's lifetime.
 
 ## Keepalive heartbeats (cache warming)
@@ -224,18 +227,20 @@ withdrew it mid-flight:
 
 ## Degraded / down
 
-If a monitor line reads `⚠ vitrinka unreachable for <n>s — listener degraded`,
+If a work line reads `⚠ vitrinka unreachable for <n>s — listener degraded`,
 tell the user vitrinka looks down and that the listener is retrying — **keep the
-monitor armed** (it self-recovers and will print `✓ vitrinka reachable again`).
-Do not disarm or re-arm it.
+listener armed** (it self-recovers and will print `✓ vitrinka reachable again`).
+Do not disarm or re-arm it. On rung 3 a failing `wait_for_work` is the same
+signal: say so once and keep looping.
 
 ## Stopping the listener
 
-- **The user asks to stop listening** → `TaskStop` the monitor. That is the
-  clean teardown: the watch releases its lease at once and anything it had
-  claimed goes back on the queue. Never just "stop paying attention" — the
-  lease outlives your attention.
-- **The user is exiting Claude Code** and the exit dialog lists the monitor:
+- **The user asks to stop listening** → rung 1: `TaskStop` the monitor; rung
+  2: Ctrl-C in the host's terminal (the host releases the lease); rung 3: the
+  user interrupts the turn. Each is the clean teardown: the watch releases its
+  lease at once and anything it had claimed goes back on the queue. Never just
+  "stop paying attention" — the lease outlives your attention.
+- **The user is exiting the harness** and its exit dialog lists the monitor:
   `Exit anyway` stops it (the lease is released); `Move to background and exit`
   deliberately keeps it running, and it will keep leasing and answering the
   board with no session attached to act on the work. If they ask which to pick,
@@ -252,38 +257,12 @@ Do not disarm or re-arm it.
   after-shot is attached.
 - One item at a time; the queue is FIFO — take the oldest first.
 - If a fix genuinely needs the user's input, `reply` with the question,
-  `set_status {status: "open"}` to put it back, and end the turn — any plain
-  reply in the thread re-queues the item and the monitor wakes you again
-  (annotation threads route to claude by default; only explicit `@eve` turns go
-  to Eve, vitrinka's AI reviewer).
+  `set_status {status: "open"}` to put it back, and go back to listening —
+  any plain reply in the thread re-queues the item and the listener wakes you
+  again (annotation threads route to the listening agent by default; only
+  explicit `@eve` turns go to Eve, vitrinka's AI reviewer).
 - If your context grows unwieldy after many fixes, finish the current item, tell
   the user to restart the listener, and stop.
-
----
-
-## FALLBACK — in-model loop (only if the Monitor tool is unavailable)
-
-If this harness has **no Monitor tool**, you cannot arm a background watcher —
-fall back to the old in-model loop. It works but is inferior: it burns context
-while idle and the *publishing* session can't self-wake once its turn ends, so
-prefer the Monitor path whenever it exists.
-
-1. Announce `⏳ listening on <board|all boards> — annotate away`.
-2. Loop, never exiting on your own:
-
-```
-forever:
-  r = wait_for_work({ board?, timeoutSec: 50 })
-  if r.idle → call wait_for_work again (free; do NOT sleep, do NOT stop)
-  for each capsule in r.work (serially, oldest first):
-    work the item (per "Working one item" above)
-  → wait_for_work again
-```
-
-`{"idle":true}` is the normal heartbeat of an empty queue — loop silently. Never
-conclude "no work, I'm done". The loop only ends when the user interrupts you, or
-when your context grows unwieldy (finish the current item, tell the user to
-restart the listener, and stop — the ONLY self-initiated exit).
 
 ## Update notices
 

@@ -39,8 +39,12 @@ supervisor, the pair worktree, the restart step, and the pace.
    - vitrinka itself: run the dev server with `-static internal/web/static`
      so asset-only fixes (board engine, css, templates' static imports) are
      browser-refresh-fast — restart only for Go changes.
-4. **Arm the watch** (per the listen skill, project scope, from the worktree):
-   Monitor on `exec vitrinka watch`, then END THE TURN.
+4. **Arm the listener** (per the listen skill, project scope, from the
+   worktree) on the highest rung this harness offers — the listen skill's
+   `references/listening.md` ladder: a native Monitor on `exec vitrinka
+   watch` (then END THE TURN), the `vitrinka listen --harness <name>` host
+   (arm nothing, END THE TURN), or holding this turn on `wait_for_work`.
+   Announce the rung's one line and never mix rungs.
 
 You can also land here mid-listen: a `№<id> [session] <project>: testing
 session started — …` watch line (the `sessions[]` lane of `wait_for_work`) is
@@ -110,6 +114,7 @@ so). Then:
    handed back.
 4. **Leave the app running** exactly as supervised — the user will keep
    poking it. Report each stack's URL, the board link, and the PR link.
+5. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 Never `resolved`, never unscoped drains, never a second listener on the same
 scope — the listen skill's laws all hold here.

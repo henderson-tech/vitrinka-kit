@@ -95,13 +95,16 @@ named field against the tool schema; do not rely on coercion or dropped keys.
   {key: value}` on `get_task`, `create_task` and `update_task` (partial
   merge — pass only the keys you change, `null` deletes). Kinds and value
   shapes: `text · longtext · url` string · `select` one of the options ·
-  `multiselect` string[] · `checklist` `[{name, done, evidence?}]` ·
+  `multiselect` string[] · `checklist` `[{name, done, evidence?, kind?: human|action|date, at?: YYYY-MM-DD}]` ·
   `number` · `date` "YYYY-MM-DD" · `relation` a task id. A definition
   applies only to its `appliesTo` type; every project carries the
   **feature preset on epics** — `outcome`, `non_goals`, `gates` and
   `decisions` (checklists: tick `done` WITH `evidence`), `ledger_state`
   (`scheduled` by default · `active · waiting · superseded · closed`),
-  `waiting_on`, `next_action`. The filter document takes `fields:
+  `waiting_on`, `next_action`. A gate's `kind` says who resolves it —
+  `human` waits on a person (it surfaces in their My Work and brief),
+  `action` on work (ticked by evidence), `date` on a calendar date
+  (auto-ticked when `at` is reached). The filter document takes `fields:
   {key: value}` for select/multiselect. Defining fields
   (`create_field · update_field · delete_field`) is admin-only.
 - **Intake drafts** are tasks with `intake = pending`. They never appear in
@@ -199,6 +202,26 @@ the rest.
    registers do this for you: the session opens as that task's live run and
    ends it on exit — `task start|stop` stays the manual door.
 
+## Keeping the tree true
+
+Three verbs, one per moment, so the task stays true without end-of-session
+bookkeeping:
+
+- **Pickup before touching code** — `get_task {id, view: "pickup"}` (the
+  `pickup` skill, `vitrinka task pickup`): last hand-back, branch, read-first
+  refs, open children in rank order, what was not loaded. Never the whole tree.
+- **Spot files a child NOW** — anything you will not do in this change (a
+  defect, a follow-up, a `Decide:` a human owns) is `spot {project, title,
+  parentId?}` the moment you see it (the `spot` skill, `vitrinka task spot`),
+  never a comment; with no task bound it lands under the project's rolling
+  `Found during implementation` epic, `production: true` when a user could
+  hit it.
+- **Hand back through `hand_back`** (the `handoff` skill, `vitrinka task
+  handback`): one call files next as children, versions the summary, lands
+  refs; print its `rendered` block verbatim as the chat hand-back.
+- **Status moves by itself** — run start → in progress, PR open → in review,
+  PR merged → done. `update_task {status}` only to correct or reopen.
+
 ## The feature lifecycle
 
 One epic is the feature's whole record — brainstorm, decisions, PRs, QA
@@ -225,14 +248,14 @@ resolve-qa`); the final artifact and revisions close the loop.
    one exists:
    ```json
    propose_tasks {
-     "project": "fixit",
-     "source": { "kind": "qa-plan", "ref": "FixIt-Technologies/vitrinka#612" },
+     "project": "acme",
+     "source": { "kind": "qa-plan", "ref": "acme/acme-web#612" },
      "drafts": [
        { "key": "plan", "type": "qa", "title": "QA plan — Feature lifecycle", "parentId": 392,
          "fields": { "scope": "commit hook, publisher auto-link, QA plan step", "roles": ["admin", "member"] } },
        { "key": "commit-trailer", "parentKey": "plan", "type": "journey",
          "title": "A commit on a vt- branch carries the trailer",
-         "fields": { "key": "commit-trailer", "role": "member", "route": "/p/fixit?task=401",
+         "fields": { "key": "commit-trailer", "role": "member", "route": "/p/acme/t/401",
                      "steps": [ { "name": "commit on feat/vt-401-x" }, { "name": "open the task's Delivery row" } ],
                      "expected": "the commit appears as a commit ref within a minute", "test": "e2e/commit-hook.spec.ts" } }
      ]
@@ -358,7 +381,23 @@ GitHub-shaped repo, so the text stays plain.
   assignees, labels, sprint, milestone, parent, intake, due/start spans,
   text, order, group/subgroup) — the same document saved views store
   (`list_views`).
-- `search {project, kind, q, limit, task}` — the ONE project search: boards
+- `search {q, groups?, project?, type?, state?, tags?, limit?}` — the
+  workspace-wide search in ONE call: `tasks` (any type, epics included),
+  `pages` (page/doc cards), `boards`, `tags`, `cards`, `sessions`, `shots`,
+  each ranked and bounded on the server, `totals` counting what came back.
+  Reach for it when you do not yet know whether the thing is a task, a page
+  or a board; `search_tasks` stays the task-only door. Every task and page
+  hit carries `url` — print it as returned, never compose a link. An unknown
+  `type` or `state` is an empty group, not an error. CLI: `vitrinka search
+  <text> [--groups tasks,pages] [--project] [--type] [--state] [--json]`.
+- `resolve_url {url}` — a pasted app link (task, project, board or card
+  page, on any origin) resolved to what it names, in ANY workspace the
+  signed-in user belongs to, without switching: `kind`, `workspace` (slug ·
+  name · accent · logoRef), `title`, `subtitle`, the canonical `url` and
+  `foreign` (outside the current workspace). A link the user cannot see is
+  one 404, whatever the reason. Needs a user credential. CLI: `vitrinka
+  resolve <url>`.
+- `search_project {project, kind, q, limit, task}` — the ONE project search: boards
   (default), tasks or pages, FTS candidates reranked by title similarity and
   scoped like the list doors. Hits carry `kind · id · slug · title · subgroup
   · score · recent · pinned` — `recent` is the project's five most recently
@@ -445,9 +484,10 @@ tasks. Sprints are history: no delete, ever.
 Rules are typed documents — `{trigger, conditions, actions}`, vocabulary at
 `GET /api/v1/rules/schema`. Author one from a request in natural language,
 then ALWAYS `dry_run_rule` and show what would have fired over the last
-events before enabling it (`PATCH /rules/{id} {enabled: true}`). Four
+events before enabling it (`PATCH /rules/{id} {enabled: true}`). Five
 built-ins ship enabled and need no AI backend: `stale-nudge`,
-`auto-archive-completed`, `due-tomorrow-reminder`, `merged-pr-completes`.
+`auto-archive-completed`, `due-tomorrow-reminder`, `merged-pr-completes`
+and `gate-date-reached` (ticks a `date` gate once its `at` arrives).
 Rule actions run as `rule:<name>` and never re-trigger rules. Creating or
 enabling a rule is admin-only (a member token gets 403); dry-run is open to
 members inside the rule's own project.
@@ -484,8 +524,12 @@ the dry-run renames before running it. Doctrine: `docs` topic
 ```text
 vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
 vitrinka task get|create|update|comment|rank|search|delete|mine
+vitrinka search <text> · vitrinka resolve <url>
 vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
-vitrinka task start <id> [--session id] [--summary …] · task stop <run> [--summary …]
+vitrinka task start [id] [--session id] [--summary …] · task stop <run> [--summary …]
+vitrinka task pickup <id|url> [--json]        # the bounded pickup view — start here, never from the whole tree
+vitrinka task spot "<title>" [--type bug|task] [--body …] [--priority …] [--parent <id>] [--production] [--ref kind:ref] [--label …]   # file what you will NOT do now; no parent → the rolling "Found during implementation" epic
+vitrinka task handback [id] --summary … [--done …] [--surface …] [--next "type:title"] [--omit "title::why"] [--decide "title::why"] [--prereq …] [--read-first <ref>] [--pr owner/repo#n] [--board <slug>] | - < body.json   # the ONE hand-back door; prints the chat block
 vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a walkthrough belongs to (exit 4 = none: publish unlinked, say so)
 vitrinka task qa-board <id> · task final <epic>   # the qa task's board · the epic's final artifact (board URL on stdout)
 vitrinka run [--task <id>] [--bugs intake|direct|none] -- <test command>   # run + publish the results (qa task, journeys, verdicts, board, bugs)
@@ -517,3 +561,5 @@ vitrinka intake list|accept|decline|merge --into <id>|propose
   bookkeeping — it fires a flow and spends credit.
 - Never overwrite an attachment: upload the new version and let the
   lineage carry the history; never delete a version to "clean up".
+- Never end a bound task's work with a chat-only next-steps list — the
+  hand-back goes through `hand_back` and its `rendered` block is the chat.

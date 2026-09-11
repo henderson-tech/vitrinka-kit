@@ -42,6 +42,12 @@ becomes yours), then finds what it left behind and publishes it:
   failing case `blocks`-linked to its journey (`--bugs direct|none` to
   change that). The same run id republished replaces its cards.
 
+**Any runner, unchanged.** The command runs verbatim and vitrinka only reads
+what it left behind: JUnit XML alone covers Selenium, Cypress, Maestro,
+Detox, TestCafe, Jest, Go and a home-grown harness — no vitrinka reporter,
+plugin or test change is ever required. Playwright JSON, allure-results and
+wdio reports are read natively too.
+
 Screenshots reach the board when the runner writes them: Playwright's
 `screenshot: "on"` (or its JUnit `[[ATTACHMENT|…]]` lines), allure png
 attachments, or a reporter honouring the env `run` sets —

@@ -62,4 +62,4 @@ next-release board.
 ## After any verb
 
 Hand back the board URL bare on its own line (label line above ending with
-":"), exactly like every vitrinka skill.
+":"), exactly like every vitrinka skill. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.

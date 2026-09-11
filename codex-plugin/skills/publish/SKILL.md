@@ -296,6 +296,7 @@ explicitly, and never guessed:
    verdict and files no bug; a finding worth a verdict is an exploratory
    case (`vitrinka usertest case … · verdict fail --note …`), whose
    `finish` files the bug draft `blocks`-linked to its journey.
+5. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Gotchas (all intents)
 

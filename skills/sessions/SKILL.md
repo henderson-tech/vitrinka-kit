@@ -126,6 +126,7 @@ After the session's tests exist:
 - Per session: PR URL, board URL (with the new pass), fix summary, verdict
   table outcome, e2e run result.
 - Queue summary: processed / skipped (with reasons) / remaining.
+- Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Coding-agent sessions — archive and continue
 
