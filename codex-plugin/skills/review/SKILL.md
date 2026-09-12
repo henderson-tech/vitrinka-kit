@@ -48,6 +48,17 @@ command's arguments.
 `{board, journey}` to review a chain's LATEST pass with the previous pass as
 reviewer context (the iteration mode; prefer it whenever a chain exists).
 
+**The brief is the team's rules, not your prose.** A pass requested without
+`instructions` receives the rendered review brief automatically — the
+resolved rules (built-in ▸ workspace ▸ this project) as one prompt block. To
+steer a pass, read that block first — `review_brief {project, persona?}` or
+`vitrinka review brief [--project acme] [--persona "a senior mobile
+designer"]` — tweak the focus, and pass the result as `instructions`
+(≤ 12 000 chars); never retype a rubric by hand. A rule that keeps
+misfiring is fixed at its source: `vitrinka review rules get <id>`, edit,
+`vitrinka review rules lint --fix <file>`, `vitrinka review rules put
+<file>` (admin+; the rule format is docs topic `review`).
+
 - 409 = review toggle off (ask the user to flip it on the board) or a pass
   already running (wait).
 - 422 = no reviewable shot cards in scope — your section/journey choice is
@@ -96,12 +107,20 @@ topic `annotation`.
 4. `request_review {board, journey}` — the reviewer now reviews the new pass with the
    old one attached, so it can confirm fixes and catch regressions.
 
-## Phase 4 — report
+## Phase 4 — report and ask for triage
 
 One summary to the user (and to the board as a `callout` card when the session
 is board-first): findings confirmed-and-fixed (with commits), findings you
 believe are wrong (with evidence, for their dismiss click), suggestions left
 for their call, and the new pass's outcome when it lands. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
+
+End with an explicit board ask to Accept or Dismiss the staged findings
+(the card's Accept all / Dismiss all controls support batches). The human
+owns these verdicts; never invent them to improve metrics. Read
+`vitrinka review stats --since 90d [--project <slug>]` or
+`review_stats {since:"90d", project?}` to show filed, accepted, dismissed
+and still-staged counts per rule and agent/model. `dismissRate:null` means
+nobody decided yet; it is not a zero-percent rejection rate.
 
 ## Don't rationalize
 

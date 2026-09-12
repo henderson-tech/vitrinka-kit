@@ -28,8 +28,9 @@ None of those → say which task you would need; never guess from titles.
 ## Read the pickup
 
 `get_task {id, view: "pickup"}` (CLI: `vitrinka task pickup <id|url>`,
-which also marks whether the branch exists on origin). The answer is the
-pickup JSON plus `rendered`, a dense text block:
+which also marks whether the branch exists on origin; under `--json` the
+pickup is the envelope's `data`). The answer is the pickup JSON plus
+`rendered`, a dense text block:
 
 ```text
 pickup #718 · Checkout as one guided flow · epic · in_progress
