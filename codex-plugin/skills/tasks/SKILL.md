@@ -33,7 +33,7 @@ named field against the tool schema; do not rely on coercion or dropped keys.
   task rolls its children up. A `qa` task is a feature's TEST PLAN (child
   of the epic, the `qa` preset: `scope · roles · verdict · coverage`), a
   `journey` one user path inside it (child of the qa task, the `journey`
-  preset: `key · role · route · steps · expected · verdict · test`), a
+  preset: `key · role · route · flow · steps · expected · verdict · test`), a
   `meeting` a recorded meeting promoted from the diary (the `meeting`
   preset: `attendees · date`, plus the shared `decisions` checklist —
   see "Meetings" under Asking Eve) — see
@@ -244,8 +244,10 @@ resolve-qa`); the final artifact and revisions close the loop.
    path — a journey is what a tester walks (3–12 steps), keyed like the
    sessions registry (`.vitrinka/journeys.json` ids, kebab-case intent),
    with `role` from the qa task's `roles`, the `route` it starts on, the
-   `steps` checklist, the `expected` outcome and the `test` spec path when
-   one exists:
+   `flow` (the walk, below), the `expected` outcome and the `test` spec
+   URL when one exists. `route`, `test` and a step's `at` are url fields:
+   ABSOLUTE URLs only — a relative path is refused with "expects an
+   absolute URL":
    ```json
    propose_tasks {
      "project": "acme",
@@ -255,9 +257,14 @@ resolve-qa`); the final artifact and revisions close the loop.
          "fields": { "scope": "commit hook, publisher auto-link, QA plan step", "roles": ["admin", "member"] } },
        { "key": "commit-trailer", "parentKey": "plan", "type": "journey",
          "title": "A commit on a vt- branch carries the trailer",
-         "fields": { "key": "commit-trailer", "role": "member", "route": "/p/acme/t/401",
-                     "steps": [ { "name": "commit on feat/vt-401-x" }, { "name": "open the task's Delivery row" } ],
-                     "expected": "the commit appears as a commit ref within a minute", "test": "e2e/commit-hook.spec.ts" } }
+         "fields": { "key": "commit-trailer", "role": "member", "route": "https://app.acme.example/w/acme/p/web/t/401",
+                     "flow": [
+                       { "id": "commit", "do": "commit on feat/vt-401-x", "see": "the hook wrote the Vitrinka-Task trailer" },
+                       { "id": "delivery", "do": "open the task's Delivery row", "see": "the commit appears as a commit ref within a minute" },
+                       { "id": "missing", "kind": "verify", "do": "no trailer on the commit", "see": "the Delivery row stays empty", "next": "fix-trailer" }
+                     ],
+                     "expected": "the commit appears as a commit ref within a minute",
+                     "test": "https://github.com/acme/acme-web/blob/main/e2e/commit-hook.spec.ts" } }
      ]
    }
    → { "drafts": [ { "id": 430, "key": "plan", … }, { "id": 431, "key": "commit-trailer", … } ] }
@@ -267,14 +274,25 @@ resolve-qa`); the final artifact and revisions close the loop.
    draft's `parentId` is the epic. `parentId` is always a task id, live or
    a still-pending intake row; never a position. Declining the qa draft
    declines its pending journeys; accepting a journey accepts a pending
-   qa draft first. `steps` are checklist items — `name` only, `done` stays
-   false.) The pipeline dedupes, Eve's `pm-qa-plan` flow refines
-   steps/expected and may ADD journeys when a backend is configured
+   qa draft first.) The pipeline dedupes, Eve's `pm-qa-plan` flow refines
+   flow/expected and may ADD journeys when a backend is configured
    (fail-open — the drafts are usable as filed), and a human accepts from
    the intake queue. A `qa-plan` batch answers only after Eve's pass, so
    the call may block up to 60 s. Never accept your own QA plan.
 3. Hand back the qa task's `url` and stop there: the qa board is
    composed AFTER the human accepted the plan.
+
+**The flow is the walk, one step per node of the plan's picture.** A step
+is `{id?, kind?, do, at?, see?, locator?, next?}`: `do` is ONE action a
+tester performs, `see` the one sentence that proves it, `kind` `act`
+(default) · `verify` (a pure check) · `wait`, `at` only when the step
+happens somewhere other than the journey's `route`, `locator` free text a
+runner-backed test may use. A journey is linear; a branch is ANOTHER
+journey — a step's `next: "<journey-key>[#<step-id>]"` sends the walk
+there, and the LAST step's `next` is where it continues (looping back to a
+start is fine). Write `flow` only, never `steps`: the server derives the
+tick list from it. The server compiles every journey's flow into the qa
+board's living diagram — never hand-author a diagram for a plan.
 
 The other legal birth of a qa task is a **run**: `vitrinka run -- <test
 command>` (a runner's own JUnit / Playwright / allure / wdio output, folded
@@ -294,8 +312,9 @@ task.
 - **The board**: `qa_board {id: <qa task>}` (`POST /tasks/{id}/qa-board`)
   creates or returns the qa task's ONE board in the `testing` subgroup —
   a "Plan" section holding the living journey diagram
-  (`payload.source {kind: "journeys", task}`; lanes = roles, nodes =
-  journeys with verdict tone, edges = order + `blocks`) and one section
+  (`payload.source {kind: "journeys", task}`; lanes = roles, each
+  journey a group of its flow steps with verdict tone, edges = step order,
+  `next` references and `blocks`) and one section
   per journey named after its title. It answers `{board: {slug, url},
   diagramCardId}`; usertest and session boards attach beneath as refs,
   never replace it. From a terminal: `vitrinka task qa-board <id>` (the
@@ -314,9 +333,10 @@ task.
   <bug>, to: <journey>, rel: "blocks"}` — the diagram paints that edge and
   the verdict stays `fail` until the bug closes.
 - **Editing a journey** IS editing the task: `update_task {title, fields:
-  {steps, expected, route}}`; the diagram node's inline edit is the
+  {flow, expected, route}}` (ticking a step is `steps[i].done`; the names
+  stay derived from `flow`); the diagram node's inline edit is the
   human's twin (`PATCH /cards/{id}/journey-node {journey, title?,
-  steps?}`) and writes the same row. After a batch of edits,
+  flow?, steps?}`) and writes the same row. After a batch of edits,
   `refresh_card {id: <diagramCardId>}` redraws the diagram from the
   tasks; positions a human dragged survive.
 - **Adding a journey later** (a PR extends the feature): a further
