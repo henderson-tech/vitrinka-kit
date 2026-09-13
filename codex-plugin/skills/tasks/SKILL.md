@@ -19,6 +19,26 @@ MCP validates the full advertised input schema before dispatch, including
 types, enums and nested constraints. On `invalid arguments`, correct the
 named field against the tool schema; do not rely on coercion or dropped keys.
 
+## Automatic work time
+
+- `get_work_time {from,to,project?,taskId?,scope?,timezone?}` reads the
+  measured ledger without manual timesheet entry. Use RFC3339 period bounds
+  (maximum 93 days), `scope:"mine"|"team"` and an IANA timezone for day groups.
+  Omit project for the current workspace overview; tenant binding remains
+  ambient. A task id rolls up its descendants once and includes forecasts.
+- Human effort, agent active effort, tool subsets, waiting and unknown coverage
+  remain separate. Never add tool seconds to agent seconds or present observed
+  intervals as model compute. Reports omit individual activity rows; inspect
+  a known event with `get_work_evidence {project,event}` only when needed.
+  Evidence requires its owner or an authorised manager, and manager reads
+  are audited. Restricted agent/share credentials do not gain member rights.
+- `get_work_forecasts {project,taskId}` reads immutable optional override
+  history. Effective forecasts are in `get_work_time`: human involvement with
+  agents, the human-only counterfactual and agent effort have distinct ranges
+  in seconds. Null means unknown/automatic; zero is real. Story points stay
+  in their existing units. Automatic capture uses the local collector/CLI
+  REST integration; do not manufacture work intervals through MCP.
+
 ## Vocabulary
 
 - **State groups** are universal: `backlog · unstarted · started · completed ·
