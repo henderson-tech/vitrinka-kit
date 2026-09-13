@@ -319,5 +319,5 @@ explicitly, and never guessed:
   opens boards in-app — test that flag file, never probe /Applications.
 - Local gallery: `.vitrinka/screenshots/index.html`, kept current by snap.
 - Update notices: a `vitrinka` command may print `update available X → Y ·
-  run: vitrinka setup update` on stderr. Relay it to the user once and offer to run
-  `vitrinka setup update`; never update unprompted or repeat the offer.
+  run: vitrinka update` on stderr. Relay it to the user once and offer to run
+  `vitrinka update`; never update unprompted or repeat the offer.
