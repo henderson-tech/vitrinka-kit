@@ -20,7 +20,16 @@ Smallest shape preserving the ask:
 
 - `--milestone <name>` — reusable named moment (`/vitrinka:todo-milestone`
   lists the existing ones; reuse an exact name before inventing one).
-- `--trigger "<text>"` — one-off condition a future session judges.
+- `--when "<condition>"` — a typed condition the SERVER decides, so the todo
+  fires by itself the moment it holds: `pr 472 merged` (or `closed`),
+  `release cut` / `release next`, `deployed prod [<sha>]`,
+  `path internal/billing/**` (fires when a session touches a matching
+  file), `task 423` (the session bound to that task), `after 331` (another
+  todo done). Prefer it whenever the moment is one of these; anything else
+  is kept as prose.
+- `--trigger "<text>"` — a prose condition a future session judges by
+  reading the list. Prose never fires on its own and never rides the
+  session-start cue, so reach for `--when` first.
 - `--due YYYY-MM-DD` — soft deadline; may accompany a milestone or trigger.
 - No moment flags — ordinary backlog.
 - Precise time (`--at`/`--in`, a lead, a recurrence) → `/vitrinka:remind`.
@@ -61,7 +70,7 @@ One command from the repository the todo concerns:
 
 ```bash
 vitrinka me todo add <title words> \
-  [--milestone <name> | --trigger "<text>"] [--due YYYY-MM-DD] \
+  [--milestone <name> | --when "<condition>" | --trigger "<text>"] [--due YYYY-MM-DD] \
   [--priority low|normal|high] [--depends <id,…>] \
   --body "<concise markdown body>" \
   [--context-file <path> | --context "<text>"]
@@ -69,8 +78,9 @@ vitrinka me todo add <title words> \
 
 `--depends` links the todo behind the ids it waits on (`blocks` links).
 Without a shell, the MCP twin is `create_task {project, type: "todo", title,
-body, dueAt, milestoneId, priority, fields: {trigger, context, commit,
-branch}}` plus `create_task_link {rel: "blocks"}` per dependency.
+body, dueAt, milestoneId, priority, fields: {when, trigger, context, commit,
+branch}}` — `when` is the same condition string (`"pr 472 merged"`), parsed
+server-side — plus `create_task_link {rel: "blocks"}` per dependency.
 
 Report the created todo id and title, project, moment, priority, and whether
 a context companion was written.

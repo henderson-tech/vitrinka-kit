@@ -247,8 +247,8 @@ signal: say so once and keep looping.
   the answer is `Exit anyway` unless they specifically want the queue held.
 - **Never disarm and re-arm** to "refresh" it. Re-arming from the same machine
   displaces the old lease (newest wins) and the churn is pointless.
-- Stale leases from an older crash are visible in `vitrinka setup doctor` and cleared
-  by `vitrinka setup doctor --fix` — offer that if a scope seems held by nobody.
+- Stale leases from an older crash are visible in `vitrinka doctor` and cleared
+  by `vitrinka doctor --fix` — offer that if a scope seems held by nobody.
 
 ## Rules
 
@@ -266,8 +266,8 @@ signal: say so once and keep looping.
 
 ## Update notices
 
-Any `vitrinka` command may print `update available X → Y · run: vitrinka setup update`
+Any `vitrinka` command may print `update available X → Y · run: vitrinka update`
 on stderr (the CLI's daily background check — server-first, npm fallback).
-When you see it: relay it to the user ONCE and offer to run `vitrinka setup update`
+When you see it: relay it to the user ONCE and offer to run `vitrinka update`
 for them. Never run the update unprompted, and never repeat the offer in the
 same session.

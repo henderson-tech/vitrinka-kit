@@ -14,14 +14,18 @@ only when structured detail is needed. Without a shell: `list_tasks
 {project, types: ["todo"]}` and `ripe_todos {project?}`.
 
 The compact line is `- #<id> <title> [ctx] [<project>] — <when> (high)`.
-The SessionStart hook already printed the same lines under "Open vitrinka
-todos for this project" — when they are in the transcript, judge them rather
-than listing again.
+The session-start cue prints only the todos that FIRED ("Fired vitrinka
+todos for this project"), never the open list — when a cue is in the
+transcript, work those rows; list only when asked what else is open.
 
-Judge free-text triggers, milestones and due dates against the current work;
-do not claim every open item is ripe merely because it was listed. Ripeness
-by clock or by a reached milestone is computed server-side (`ripe_todos`);
-trigger-only todos are yours to judge.
+Ripeness is decided server-side (`ripe_todos {project, branch?, task?,
+paths?}`): the clock, a reached milestone, and typed `when` conditions — a
+PR merged, a release cut, a deploy marked, another todo done, the bound
+task, a touched path. Pass what you know about the session (branch, task,
+the paths you are editing) so those conditions can fire. Prose triggers
+never fire on their own: judge them against the current work, and do not
+claim every open item is ripe merely because it was listed. A prose todo
+that names one of the typed moments is worth converting with `--when`.
 
 `[ctx]` marks a handoff-grade context companion — before recommending or
 working that item: `vitrinka me todo show <id>` (or `get_task`).
