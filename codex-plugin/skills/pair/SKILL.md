@@ -1,6 +1,6 @@
 ---
 name: pair
-description: "Live pairing during user testing — supervise the app under test (`vitrinka pair`), listen for the recorder's ⌖ snaps, fix each bug while the tester keeps testing, and restart so fixes appear immediately. Invoke as /vitrinka:pair FROM THE APP'S REPO."
+description: "Live pairing during user testing — supervise the app under test (`vitrinka qa pair`), listen for the recorder's ⌖ snaps, fix each bug while the tester keeps testing, and restart so fixes appear immediately. Invoke as /vitrinka:pair FROM THE APP'S REPO."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
@@ -31,7 +31,7 @@ supervisor, the pair worktree, the restart step, and the pace.
    `.worktrees/pair-<yyyy-mm-dd>` from `origin/main`. ALL fixes land here as
    commits on this one rolling branch — one PR reviews the whole pairing run.
 3. **Supervise the app FROM the worktree**: `cd` there and run
-   `vitrinka pair run`. The supervisor resolves the worktree's own
+   `vitrinka qa pair run`. The supervisor resolves the worktree's own
    `.vitrinka/project.json`, so the running app serves the code your fixes
    land in. Hand the user each stack's URL. Reuse-if-healthy: re-running is
    safe. NEVER point a stack at an e2e `DATA_DIR`, and never wipe one — the
@@ -42,7 +42,7 @@ supervisor, the pair worktree, the restart step, and the pace.
 4. **Arm the listener** (per the listen skill, project scope, from the
    worktree) on the highest rung this harness offers — the listen skill's
    `references/listening.md` ladder: a native Monitor on `exec vitrinka
-   watch` (then END THE TURN), the `vitrinka listen --harness <name>` host
+   watch` (then END THE TURN), the `vitrinka work listen --harness <name>` host
    (arm nothing, END THE TURN), or holding this turn on `wait_for_work`.
    Announce the rung's one line and never mix rungs.
 
@@ -65,7 +65,7 @@ note (`[note]`):
 2. **Fix in the pair worktree.** Smallest correct change; commit on the
    rolling branch (conventional message referencing №id).
 3. **Get it into the running app**: hot stack — nothing to do, the save
-   already deployed; otherwise `vitrinka pair restart <stack>`. Wait for
+   already deployed; otherwise `vitrinka qa pair restart <stack>`. Wait for
    ready. State on disk survives; only the page reloads.
 4. `reply {id, text}` — one or two sentences: what was wrong, what changed,
    and "it's live — reload if the page didn't". The thread is the durable
@@ -90,7 +90,7 @@ lands as a dispatched annotation in your queue exactly like a ⌖ snap, and a
 panel reply re-queues the item exactly like a board thread reply (accept ✓
 resolves it, bounce ↺ sends it back open).
 
-Optional richer feed: the user can run `vitrinka pair relay` (a second
+Optional richer feed: the user can run `vitrinka qa pair relay` (a second
 terminal, from your repo) to stream your assistant-text lines to the panel
 live — opt-in only, ephemeral, assistant-visible text only (never thinking or
 tool calls), and it broadcasts your raw prose to whoever watches the panel,

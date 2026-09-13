@@ -30,11 +30,11 @@ stable ids → relayout → overrides survive.
      grouped by tag)
    - `schema.sql` / `*.ddl` / a migrations dir's CREATE TABLE dump → `kind:
      sqlddl` (entity nodes + FK crow's-foot edges; Postgres/SQLite dialects)
-   - a live Postgres you can reach → `kind: pgschema` via `vitrinka schema push`
+   - a live Postgres you can reach → `kind: pgschema` via `vitrinka board diagram schema push`
 2. **Import via the CLI** (handles base-URL + token; kind auto-detected from
    name/content):
    ```bash
-   vitrinka import docker-compose.yml --board <slug> --kind auto --title "Services"
+   vitrinka board diagram import docker-compose.yml --board <slug> --kind auto --title "Services"
    ```
    Or the raw endpoint — `POST /api/v1/boards/{slug}/import`
    `{kind, source, ref, rev?, title?, x?, y?}` (always needs an
@@ -44,7 +44,7 @@ stable ids → relayout → overrides survive.
    line/element — never a partial import.
 3. **Stamp the revision** so refresh is auditable: pass `rev` = the git SHA
    (`git rev-parse --short HEAD`) and `ref` = the filename/url.
-4. **Live Postgres**: `vitrinka schema push --db postgres://… --board <slug>` —
+4. **Live Postgres**: `vitrinka board diagram schema push --db postgres://… --board <slug>` —
    introspects LOCALLY via `psql`; the connection string never leaves the
    machine, only the parsed schema JSON is posted (`kind: pgschema`).
 5. **Refresh** after the source changes: `POST /api/v1/cards/{id}/refresh

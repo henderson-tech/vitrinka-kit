@@ -61,7 +61,7 @@ named field against the tool schema; do not rely on coercion or dropped keys.
   project in Settings → Projects) so the list reads at a glance. A `todo` is a personal reminder with a moment (milestone,
   trigger, clock) — the `me` module's `/vitrinka:todo`, `todo-list`,
   `todo-done`, `todo-milestone` and `remind` skills own that shape
-  (`vitrinka todo|schedule`); file engineering work as `task`.
+  (`vitrinka me todo|schedule`); file engineering work as `task`.
 - **Labels** have three doors, all REST twins: `labels` on `create_task`
   (the initial set) and on `update_task` (REPLACES the set), and
   `label_task {id, add, remove}` for increments — the one to use when
@@ -83,7 +83,7 @@ named field against the tool schema; do not rely on coercion or dropped keys.
   versioned). A `commit` ref is `owner/repo@sha` and is attached by the
   GitHub App's `push` event for every commit whose message names the task
   (`Vitrinka-Task:` trailer or subject prefix — the per-repo hook
-  `vitrinka project setup` installs writes them); never add one by hand. A `pr` ref is `owner/repo#n`; the GitHub
+  `vitrinka setup` installs writes them); never add one by hand. A `pr` ref is `owner/repo#n`; the GitHub
   App webhook attaches it for branches or PRs carrying `vt-<id>`, and
   `meta.merged = true` completes the task through a built-in rule. A
   `file` ref is a URL, never a path: a path on your machine opens nowhere
@@ -218,7 +218,7 @@ the rest.
    the people rail lists you beside the humans with what you hold, and the
    Thread tab reaches your session. A run left open is ended by the server's
    sweep after 12 h of silence. On a checkout whose branch, worktree path or
-   HEAD commit trailer names `vt-<id>`, the hooks `vitrinka install`
+   HEAD commit trailer names `vt-<id>`, the hooks `vitrinka setup`
    registers do this for you: the session opens as that task's live run and
    ends it on exit — `task start|stop` stays the manual door.
 
@@ -314,9 +314,9 @@ start is fine). Write `flow` only, never `steps`: the server derives the
 tick list from it. The server compiles every journey's flow into the qa
 board's living diagram — never hand-author a diagram for a plan.
 
-The other legal birth of a qa task is a **run**: `vitrinka run -- <test
+The other legal birth of a qa task is a **run**: `vitrinka qa run -- <test
 command>` (a runner's own JUnit / Playwright / allure / wdio output, folded
-for you), `vitrinka usertest … finish` (an exploratory session), `vitrinka
+for you), `vitrinka qa usertest … finish` (an exploratory session), `vitrinka
 run publish <manifest>` (a manifest a runner already wrote) or MCP
 `publish_run {id, manifest}` turn a run into a LIVE qa task (`intake_source
 run:<runId>`) with one `journey` per spec key, verdicts, steps, the qa board
@@ -487,7 +487,7 @@ GitHub-shaped repo, so the text stays plain.
 - **Meetings** — a recording made with Snap lands on the recorder's
   personal diary as a `meeting` card (audio + timestamped transcript) and
   stays private until its owner promotes it: `promote_meeting {card,
-  workspace?, project}` (`vitrinka diary promote <card> --project <p>
+  workspace?, project}` (`vitrinka me diary promote <card> --project <p>
   [--workspace <ws>]`) files a `meeting` task (preset `attendees · date ·
   decisions`) with the recording, `transcript.json` and a readable
   `transcript.md` (`[mm:ss] text` lines) as `file` refs, and links the
@@ -509,7 +509,7 @@ GitHub-shaped repo, so the text stays plain.
   meeting board (Summary · Decisions · Action items · Transcript excerpt)
   and links it as the task's board ref. 409 means the transcript is still
   pending on the diary side; 501 means no AI backend — do not retry.
-- `vitrinka session continue <task>` prints the latest distill as a
+- `vitrinka qa session continue <task>` prints the latest distill as a
   `/continue`-shaped brief — the thing to read before picking up someone
   else's session (the `sessions` skill has the archive side).
 
@@ -564,7 +564,7 @@ the dry-run renames before running it. Doctrine: `docs` topic
 ```text
 vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
 vitrinka task get|create|update|comment|rank|search|delete|mine
-vitrinka search <text> · vitrinka resolve <url>
+vitrinka search <text> · vitrinka search resolve <url>
 vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
 vitrinka task start [id] [--session id] [--summary …] · task stop <run> [--summary …]
 vitrinka task pickup <id|url> [--json]        # the bounded pickup view — start here, never from the whole tree
@@ -572,15 +572,15 @@ vitrinka task spot "<title>" [--type bug|task] [--body …] [--priority …] [--
 vitrinka task handback [id] --summary … [--done …] [--surface …] [--next "type:title"] [--omit "title::why"] [--decide "title::why"] [--prereq …] [--read-first <ref>] [--pr owner/repo#n] [--board <slug>] | - < body.json   # the ONE hand-back door; prints the chat block
 vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a walkthrough belongs to (exit 4 = none: publish unlinked, say so)
 vitrinka task qa-board <id> · task final <epic>   # the qa task's board · the epic's final artifact (board URL on stdout)
-vitrinka run [--task <id>] [--bugs intake|direct|none] -- <test command>   # run + publish the results (qa task, journeys, verdicts, board, bugs)
-vitrinka usertest start|case|verdict|finish     # an exploratory session over `snap`, published the same way
-vitrinka project setup --runners [--check]      # declare where each runner writes results
+vitrinka qa run [--task <id>] [--bugs intake|direct|none] -- <test command>   # run + publish the results (qa task, journeys, verdicts, board, bugs)
+vitrinka qa usertest start|case|verdict|finish     # an exploratory session over `snap`, published the same way
+vitrinka setup --runners [--check]      # declare where each runner writes results
 vitrinka project commits [--subject on|off]      # commit convention: trailer always, subject prefix per project
 vitrinka workspace commit-prefix [bracket|bare|colon]   # the prefix style, workspace-wide (admin+)
 vitrinka task upload <id> <files…>          # any bytes → file ref (new version on the same name)
-vitrinka session archive <transcript.jsonl> --task <id> [--hint …]   # redacted, portable paths
-vitrinka session continue <id>              # latest distill as a /continue brief (+ native resume offer)
-vitrinka brief [--project p]              # now · next · blocked · since · people · Eve suggests
+vitrinka qa session archive <transcript.jsonl> --task <id> [--hint …]   # redacted, portable paths
+vitrinka qa session continue <id>              # latest distill as a /continue brief (+ native resume offer)
+vitrinka me brief [--project p]              # now · next · blocked · since · people · Eve suggests
 vitrinka task field get <id> [key] · task field set <id> <key> <value|json>
 vitrinka project fields list|add <key> <label> --kind …|update <key>|remove <key>
 vitrinka project transfer <project> --to <workspace> [--dry-run] [--archive-source] [--merge]

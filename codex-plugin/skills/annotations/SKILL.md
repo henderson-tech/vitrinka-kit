@@ -10,7 +10,7 @@ metadata:
 The user hit "Send to Claude" (or expected you to be woken) and nothing
 happened. Don't diagnose the transport — just fetch the work directly over MCP
 and do it. This is a ONE-SHOT drain, not a listener: you do not arm
-`vitrinka watch` here.
+`vitrinka work watch` here.
 
 Argument: an optional board slug (`/vitrinka:annotations acme-audit`).
 Without one, auto-scope to this repo + branch exactly like `/vitrinka:listen`

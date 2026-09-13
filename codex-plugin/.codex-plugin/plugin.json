@@ -1,6 +1,6 @@
 {
   "name": "vitrinka",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "Capture UI journeys, publish interactive artifact and annotation boards, and work with Vitrinka through MCP.",
   "author": {
     "name": "Henderson Tech",
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Vitrinka",
     "shortDescription": "Capture UI journeys and publish review boards",
-    "longDescription": "Use Vitrinka to capture UI work, publish screenshot journeys and interactive artifacts, compose annotation boards, and process board work through the vitrinka MCP server (registered separately by `vitrinka install`).",
+    "longDescription": "Use Vitrinka to capture UI work, publish screenshot journeys and interactive artifacts, compose annotation boards, and process board work through the vitrinka MCP server (registered separately by `vitrinka setup`).",
     "developerName": "Vitrinka",
     "category": "Developer Tools",
     "capabilities": [

@@ -41,7 +41,7 @@ codex plugin add vitrinka
 npx skills add henderson-tech/vitrinka-kit
 ```
 
-The `vitrinka` CLI's `vitrinka install` / `vitrinka skills` drive the same
+The `vitrinka` CLI's `vitrinka setup` / `vitrinka setup skills` drive the same
 mechanisms with a status table and a picker. This surface is **generated** —
 authored in the product repo and rendered here by its exporter; edits belong
 there, not in these files.

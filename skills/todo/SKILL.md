@@ -1,7 +1,7 @@
 ---
 name: todo
 disable-model-invocation: true
-description: "Capture a personal todo in vitrinka — a task of type todo with its moment (milestone, trigger, due date), optional context companion and dependencies. Invoke as /vitrinka:todo FROM THE APP'S REPO; the CLI is `vitrinka todo add`, the MCP twin `create_task {type:\"todo\"}`."
+description: "Capture a personal todo in vitrinka — a task of type todo with its moment (milestone, trigger, due date), optional context companion and dependencies. Invoke as /vitrinka:todo FROM THE APP'S REPO; the CLI is `vitrinka me todo add`, the MCP twin `create_task {type:\"todo\"}`."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
@@ -60,7 +60,7 @@ todo show <id>` prints it. Format:
 One command from the repository the todo concerns:
 
 ```bash
-vitrinka todo add <title words> \
+vitrinka me todo add <title words> \
   [--milestone <name> | --trigger "<text>"] [--due YYYY-MM-DD] \
   [--priority low|normal|high] [--depends <id,…>] \
   --body "<concise markdown body>" \

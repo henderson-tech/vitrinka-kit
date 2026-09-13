@@ -1,7 +1,7 @@
 ---
 name: remind
 disable-model-invocation: true
-description: "Schedule a vitrinka reminder — a todo with a clock, optionally recurring — and manage the series (list, ripe, move, skip, end). Invoke as /vitrinka:remind FROM THE APP'S REPO; the CLI is `vitrinka schedule`, the MCP twin `create_task {type:\"todo\", dueAt, fields:{lead, every}}`."
+description: "Schedule a vitrinka reminder — a todo with a clock, optionally recurring — and manage the series (list, ripe, move, skip, end). Invoke as /vitrinka:remind FROM THE APP'S REPO; the CLI is `vitrinka me schedule add`, the MCP twin `create_task {type:\"todo\", dueAt, fields:{lead, every}}`."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
@@ -11,14 +11,14 @@ metadata:
 A reminder is an ordinary todo with a clock: `at` (the task's `dueAt`) = the
 actual event/deadline; `lead` = how early it becomes ripe. Untimed capture →
 `/vitrinka:todo`. The skill is `/vitrinka:remind`, not `/schedule` (that name
-is reserved by Claude Code); the CLI verb is `vitrinka schedule`.
+is reserved by Claude Code); the CLI verb is `vitrinka me schedule add`.
 
 ## Create
 
 Prefer relative input when the user phrases the moment relatively:
 
 ```bash
-vitrinka schedule <title words> \
+vitrinka me schedule add <title words> \
   (--in 24h | --at 2026-09-12T09:00:00+02:00) [--lead 4h] \
   [--every 90d] [--priority low|normal|high] \
   --body "<what must happen and where>" \
@@ -36,12 +36,12 @@ vitrinka schedule <title words> \
 ## Manage
 
 ```bash
-vitrinka schedule list [--all]
-vitrinka schedule ripe [--compact] [--all]
-vitrinka schedule move <id> (--in 3d | --at <RFC3339>)
-vitrinka schedule skip <id>
-vitrinka schedule end <id>
-vitrinka todo done <id>
+vitrinka me schedule list [--all]
+vitrinka me schedule ripe [--compact] [--all]
+vitrinka me schedule move <id> (--in 3d | --at <RFC3339>)
+vitrinka me schedule skip <id>
+vitrinka me schedule end <id>
+vitrinka me todo done <id>
 ```
 
 `done` closes a one-off; on a recurrence it records the completion and rolls

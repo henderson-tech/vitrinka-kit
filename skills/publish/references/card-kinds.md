@@ -34,7 +34,7 @@ URL. Highlights the index alone won't tell you:
 - **`mockup`** — frames of primitive trees, the cheap UI sketch; direct
   drag/resize editing on the board.
 - **`doc`** — the fractal composite: `{title?, elements:[…]}` of the kinds
-  above. This is what `vitrinka push` mints from a semantic artifact.
+  above. This is what `vitrinka board push` mints from a semantic artifact.
 - **`html`** — the sandboxed escape hatch when no hard component fits; also
   accepts the `{body, runtime:"tw4"}` markup-only form (server wraps it).
   Sandbox CSP allows only the pinned `/vendor/…` shelf (`runtime.md`, this
@@ -68,7 +68,7 @@ URL. Highlights the index alone won't tell you:
   ≤1 MiB serialized, split longer runs),
   byte-exact whitespace, immutable (replace whole payload to change).
   `references:[cardId]` draws bubble-anchored wires to existing shots — place
-  shots first. **The redaction gate is law**: `vitrinka import chat --eve <id>`
+  shots first. **The redaction gate is law**: `vitrinka board import-chat --eve <id>`
   / `--ndjson <file>` scans EVERY persisted surface (text, tool names/status/
   args recursively, arg KEYS, errors, title) for emails, phones, keys/JWTs,
   high-entropy runs, IBANs — and REFUSES with a masked report unless

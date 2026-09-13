@@ -106,7 +106,7 @@ Enrichment happens ONCE, batched: if batches contain ambiguous annotations
 ("this", "here"), spawn ONE subagent with all their crop/shot URLs
 (`shotUrl`, annotation `region`) to return TEXT findings — images never enter
 your context. Crop/shot URLs are relative and always need the Bearer
-token from `$VITRINKA_TOKEN` / `vitrinka token` via stdin
+token from `$VITRINKA_TOKEN` / `vitrinka auth token` via stdin
 (`printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- <url>`), never
 inline in argv.
 
@@ -203,7 +203,7 @@ Everything here runs on the INTEGRATED tree — boot infra/sim there, once.
   2. Stamp the server so /sessions shows progress:
      `PATCH /api/v1/sessions/{id}` body
      `{"pipeline":{"triaged":"<ISO now>","fixPr":"<url>"}}` (always send the
-     Bearer token from `$VITRINKA_TOKEN` / `vitrinka token` via stdin,
+     Bearer token from `$VITRINKA_TOKEN` / `vitrinka auth token` via stdin,
      never argv).
 - End with: batch map, per-issue outcomes, commits, anything punted to the
   user, and the board URL.

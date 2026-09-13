@@ -60,9 +60,9 @@ testing-suite management surface.
    board's annotations (it almost always will), follow the listen skill
    (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`) right after
    creating, on the highest rung its `references/listening.md` ladder offers
-   in this harness: a native Monitor on `exec vitrinka watch` (the `exec` is
+   in this harness: a native Monitor on `exec vitrinka work watch` (the `exec` is
    load-bearing — without it the watch outlives the session and holds the
-   board's lease forever), the `vitrinka listen --harness <name>` host, or
+   board's lease forever), the `vitrinka work listen --harness <name>` host, or
    holding this turn on `wait_for_work`. Announce the rung's one line. Never
    offer or wait to be asked — a board without a live listener silently
    queues annotations nobody reacts to.

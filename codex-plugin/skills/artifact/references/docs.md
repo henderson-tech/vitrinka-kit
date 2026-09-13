@@ -29,7 +29,7 @@ decision.
    - `docker-compose.yml` / `compose.yaml` → Architecture (`kind: compose`)
    - `openapi.{json,yaml}` / swagger spec → API (`kind: openapi`)
    - `schema.sql` / `*.ddl` / a migrations dir CREATE TABLE dump → Database
-     (`kind: sqlddl`); or a live Postgres → `vitrinka schema push`
+     (`kind: sqlddl`); or a live Postgres → `vitrinka board diagram schema push`
 3. **Import each into its section.** One import per source — `--section` lands it
    inside the named frame — created on demand on docs boards, then grown to fit
    (+ neighbor displacement); `--rev` stamps the git SHA for refreshability.
@@ -38,9 +38,9 @@ decision.
    instead of minting variants.
    ```bash
    REV=$(git rev-parse --short HEAD)
-   vitrinka import docker-compose.yml --board <project>-docs --section Architecture --rev "$REV"
-   vitrinka import openapi.yaml        --board <project>-docs --section API          --rev "$REV"
-   vitrinka import schema.sql          --board <project>-docs --section Database      --rev "$REV"
+   vitrinka board diagram import docker-compose.yml --board <project>-docs --section Architecture --rev "$REV"
+   vitrinka board diagram import openapi.yaml        --board <project>-docs --section API          --rev "$REV"
+   vitrinka board diagram import schema.sql          --board <project>-docs --section Database      --rev "$REV"
    ```
    The mapping: `compose`→Architecture, `sqlddl`/`pgschema`→Database,
    `openapi`→API. (Raw form — `POST /api/v1/boards/{slug}/import {kind, source,

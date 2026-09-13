@@ -36,7 +36,7 @@ of guessing):
   `vitrinka task resolve-qa --json` (it runs the resolution; you never
   do) plus the repo's `.vitrinka/journeys.json` when it exists. Absent →
   the board is published unlinked and your result says `linked: none`.
-  Test results never come to you: `vitrinka run -- <cmd>` and `vitrinka
+  Test results never come to you: `vitrinka qa run -- <cmd>` and `vitrinka
   usertest … finish` compose those sections, verdicts and shots
   themselves; you keep the free-form walkthrough journeys.
 - for update passes: what changed since the last pass.
@@ -53,19 +53,19 @@ imports and artifact pushes; direct HTTP only for an operation neither exposes.
   checked under warnings, never claim board verification from an export.
 - **Boards: hand back only the SERVER-returned `url`** (it carries
   `/w/<workspace>`) — never hand-compose `{base}/boards/<slug>`. The artifact
-  intent hands back the live page URL `vitrinka push` prints instead.
+  intent hands back the live page URL `vitrinka board push` prints instead.
 - **One batch per coherent unit**: one `compose_board` call per structural
   pass; a single card is a batch of one, anchored by relation;
   call `get_templates` first; never invent card shapes — payload contracts
   live in `references/card-kinds.md`.
 - **Board `artifact` cards** (`POST /boards/{slug}/artifact`): `device` is
   mandatory intent; self-contained single-file HTML, no external hosts.
-  Artifact-intent *pages* (`vitrinka push`) instead follow the artifact
+  Artifact-intent *pages* (`vitrinka board push`) instead follow the artifact
   skill's `references/standalone.md` runtime rules — sibling `./data.json`
   and its exact-pinned import escape hatch are supported there.
 - **Never capture screenshots** — if a shot is missing, report it back;
   don't drive the app.
-- **Never arm listeners** (`vitrinka watch` / listen skill) — that is the
+- **Never arm listeners** (`vitrinka work watch` / listen skill) — that is the
   parent session's job.
 - **Never commit, push, or modify repo files** outside `.vitrinka/`.
 - One summary `callout` per board, updated via `update_cards` on later

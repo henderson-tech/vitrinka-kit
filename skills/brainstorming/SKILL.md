@@ -152,12 +152,12 @@ a board; every payload shape there is exact (a drifted shape costs a 400).
 **A board session listens.** Answers are released as a batch the session
 must be awake to receive, so once the URL is handed over the session listens
 on the highest rung the listen skill's `references/listening.md` ladder
-offers in this harness — a native background Monitor, the `vitrinka listen
+offers in this harness — a native background Monitor, the `vitrinka work listen
 --harness <name>` host, or, with neither, holding this turn on `wait_for_work
 {board}` until the batch lands (never ending it on your own). Announce the
 rung once; then read each batch carefully — it may ask for clarification,
 changes, or that you not proceed — and follow what it actually says.
 
-**Report the spend behind every composition.** Pass `usage: {tokens, effort}` on `create_board`, `compose_board` and `update_cards` — your own rough estimate of what the call cost you that the server cannot see (thinking + reading the takes you drew from; `effort` low | medium | high). A schema-validated self-report; estimates are not verified or billed. It lands in the workspace's agent calls ledger, which the `query` tool / `vitrinka query` reads back as SQL.
+**Report the spend behind every composition.** Pass `usage: {tokens, effort}` on `create_board`, `compose_board` and `update_cards` — your own rough estimate of what the call cost you that the server cannot see (thinking + reading the takes you drew from; `effort` low | medium | high). A schema-validated self-report; estimates are not verified or billed. It lands in the workspace's agent calls ledger, which the `query` tool / `vitrinka search query` reads back as SQL.
 
 **Offer just-in-time, never upfront.** The first time a genuinely visual fork appears, offer it as its own message ("I can put the 2-3 takes on a vitrinka board you can click through and answer on — want that?"). On decline, stay text-only and don't offer again unless they raise it. The decision log links the board URL under the relevant decisions.
