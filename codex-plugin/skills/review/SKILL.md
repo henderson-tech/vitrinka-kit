@@ -8,7 +8,7 @@ metadata:
 # /vitrinka:review — the AI-review loop
 
 You are driving the machine half of the audit loop: Eve, vitrinka's AI reviewer, reviews the board's
-screens and files findings; you separate real defects from noise, fix them in
+screens through the server-side judge and independent auditor; you separate real defects from noise, fix them in
 THIS repo, and give the reviewer a next pass that shows what changed. The failure modes
 this skill exists to prevent:
 
@@ -44,9 +44,16 @@ command's arguments.
 
 ## Phase 1 — request the pass
 
-`request_review {board}` — or `{board, section}` for one journey section, or
+`review_judge {board}` — or `{board, section}` for one journey section, or
 `{board, journey}` to review a chain's LATEST pass with the previous pass as
 reviewer context (the iteration mode; prefer it whenever a chain exists).
+The CLI is `vitrinka review judge <board> [--rules a,b] [--model model]`.
+For a published set use `vitrinka review judge <project>/<branchSlug>/<selector> --set`
+or `review_judge {set:"project/branchSlug/selector"}`. The server resolves an
+existing board; never invent one when the set is unowned or ambiguous.
+Immediate processing is the default; `--batch` explicitly opts into waiting.
+`--calibration` audits a sample of passing judgments to measure missed issues.
+The old board reviewer is replaced, including the `request_review` compatibility door.
 
 **The brief is the team's rules, not your prose.** A pass requested without
 `instructions` receives the rendered review brief automatically — the
@@ -64,15 +71,26 @@ misfiring is fixed at its source: `vitrinka review rules get <id>`, edit,
 - 422 = no reviewable shot cards in scope — your section/journey choice is
   wrong, or the screens were never pushed. Fix the scope, don't retry blind.
 
-Findings stream in as the review pass completes. Poll `review-passes` until the pass is
+Judgments arrive as the review pass completes. Poll `review_judgments {board}`
+(CLI `vitrinka review judge <board> --status`) until the pass is
 `completed` (or `failed`) — it takes minutes, not seconds; check in with the
 user rather than spinning hot.
 
 ## Phase 2 — read and triage the findings
 
-`GET /api/v1/boards/{slug}/ai-annotations` — there is deliberately no MCP
-tool for this yet; the raw API is the path. Each finding: `cardId`, `region`,
-`category`, `severity`, `summary`, `detail`, `state`, `kind`.
+`review_judgments {board}` returns jobs, version-pinned judgments, independent
+audit assessments and per-rule triage. `cannot_judge` remains unresolved;
+missing evidence is never a pass. Read bounded evidence crops only as needed.
+Each failed judgment is automatically audited; a supported finding still needs
+explicit selection to file (`POST /api/v1/review/jobs/{id}/file {index}`).
+The board review pane provides that selection and human usefulness feedback.
+Historical `ai-annotations` remain readable but no longer receive old reviewer runs.
+For local triage, `vitrinka review judge export <job>` prints `judgments.json`
+(`--candidates` selects mechanical candidates); MCP `review_job` supports
+`export_judgments` and `export_candidates`. Mark selected rows `keep:true`,
+then use `review file` with the exported `judge/<model>` agent. Preserve
+`jobId`, `judgmentIndex`, card and version fields: they link later fix evidence
+back to the original review and retain idempotency with filing in the UI.
 
 Triage the whole set at once, grouped by root cause exactly like
 `/vitrinka:resolve` Phase 2 — five contrast findings on five screens are ONE
@@ -104,8 +122,12 @@ topic `annotation`.
 3. Compose the iteration as a NEW pass on the chain:
    `compose_board {board, journey, pass: "next", …}` with the fresh screens —
    never overwrite the reviewed section; the chain is the audit trail.
-4. `request_review {board, journey}` — the reviewer now reviews the new pass with the
-   old one attached, so it can confirm fixes and catch regressions.
+4. Link fresh evidence with `POST /api/v1/review/jobs/{id}/verify
+   {cardId, cardVersion}` to enqueue the post-fix audit automatically. A new
+   `review_judge {board, journey}` reviews the wider pass for regressions.
+   Resolution is evidence, never automatic usefulness points. AI dimensions
+   (validity, actionability, impact, novelty, resolution) remain distinct from
+   human feedback. Anchored 1–5 scores display as 1–100; there is no combined score.
 
 ## Phase 4 — report and ask for triage
 
