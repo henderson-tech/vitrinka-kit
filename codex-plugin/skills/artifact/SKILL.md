@@ -89,7 +89,7 @@ on its own line.
   rough estimate of what the call cost you that the server cannot see
   (thinking + reading the source material; `effort` low | medium | high).
   A schema-validated self-report; estimates are not verified or billed. It lands in the
-  workspace's agent calls ledger, which the `query` tool / `vitrinka query`
+  workspace's agent calls ledger, which the `query` tool / `vitrinka search query`
   reads back as SQL.
 - **A board that belongs to a task** (a task, epic or subtask is in context):
   stamp it once with `add_task_ref {id, kind:"board", ref:"<slug>"}` (no
@@ -98,7 +98,7 @@ on its own line.
   what a board belongs to.
 - **Hand back only server-returned URLs**: a board's `url` field carries
   `/w/<workspace>` — never hand-compose `{base}/boards/<slug>`; a standalone
-  artifact hands back the URL `vitrinka push` prints. The link goes in your
+  artifact hands back the URL `vitrinka board push` prints. The link goes in your
   final summary, always.
 - **Delegation**: compose-heavy authoring (standalone doc.json/components, docs-board
   narrative) can run in the `vitrinka-publisher` agent, dispatched in the

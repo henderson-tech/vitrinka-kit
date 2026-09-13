@@ -103,8 +103,8 @@ bound task has no hand-back newer than this session's run, the Stop hook
 blocks with "call hand_back first". This skill is the answer: make the
 call, print `rendered`, stop. Never work around the gate by dropping the
 heading. Codex runs the same hook from `~/.codex/hooks.json` once
-`vitrinka install` has written it and it has been trusted through `/hooks`
-in Codex; `vitrinka doctor` shows the state as `hooks·codex`.
+`vitrinka setup` has written it and it has been trusted through `/hooks`
+in Codex; `vitrinka setup doctor` shows the state as `hooks·codex`.
 
 ## Delegation
 

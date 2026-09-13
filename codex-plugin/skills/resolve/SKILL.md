@@ -89,7 +89,7 @@ the subagent's text findings are all you carry forward.
 
 Crop URLs are relative paths and always need auth (an unauthenticated fetch
 401s) — send an `Authorization: Bearer` header with the token
-from `$VITRINKA_TOKEN` (fallback: the credential `vitrinka token` prints, same
+from `$VITRINKA_TOKEN` (fallback: the credential `vitrinka auth token` prints, same
 order the CLI uses). Feed the header via stdin so the token never lands in a
 process list: `printf 'Authorization: Bearer %s' "$TOKEN" | curl -H @- <url>`
 — never paste the token inline into a command's arguments.

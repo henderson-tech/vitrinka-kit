@@ -118,7 +118,7 @@ existing file, new = the target path).
 4. Stamp the server so /sessions shows progress:
    `PATCH /api/v1/sessions/{id}` body
    `{"pipeline":{"tested":"<ISO now>","journeys":[…],"testPr":"<url|commit>"}}`
-   (always send the Bearer token from `$VITRINKA_TOKEN` / `vitrinka token`
+   (always send the Bearer token from `$VITRINKA_TOKEN` / `vitrinka auth token`
    via stdin, never argv).
 5. End with: the verdict table with outcomes, files written, blocks
    extracted/reused, test run results, and anything left `draft`.

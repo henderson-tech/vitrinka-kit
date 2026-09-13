@@ -57,11 +57,11 @@ carries the result.
 
 All mechanics: `vitrinka <cmd>` (zero-dep TypeScript).
 
-1. Git-ignore `.vitrinka/` (`.gitignore` or `.git/info/exclude`), then `mkdir -p .vitrinka/screenshots && touch .vitrinka/screenshots/.active`. Ad-hoc session output (QA sweeps, audit dumps, one-off shots) goes under `.vitrinka/scratch/<topic>/` — never a root-level `.screenshots-<topic>` dir or loose repo-root files; `vitrinka tidy` sweeps legacy litter in.
-2. `vitrinka remote-init --root .vitrinka/screenshots` — mints the session's set (auto project+branch from git, sticky).
+1. Git-ignore `.vitrinka/` (`.gitignore` or `.git/info/exclude`), then `mkdir -p .vitrinka/screenshots && touch .vitrinka/screenshots/.active`. Ad-hoc session output (QA sweeps, audit dumps, one-off shots) goes under `.vitrinka/scratch/<topic>/` — never a root-level `.screenshots-<topic>` dir or loose repo-root files; `vitrinka project tidy` sweeps legacy litter in.
+2. `vitrinka board init --root .vitrinka/screenshots` — mints the session's set (auto project+branch from git, sticky).
 3. Set the journey header (re-run when your understanding sharpens):
    ```bash
-   vitrinka meta --root .vitrinka/screenshots \
+   vitrinka board meta --root .vitrinka/screenshots \
      --kicker "<MODE · FLOW>" --title "<display title>" --accent "<vivid tail>" \
      --intro "<1–2 sentences>" --chip "Persona=<who>" --chip "Motiv=<light|dark>"
    ```
@@ -74,7 +74,7 @@ All mechanics: `vitrinka <cmd>` (zero-dep TypeScript).
 ### Each capture
 
 ```bash
-vitrinka snap <ios|android|macos|web> \
+vitrinka board capture <ios|android|macos|web> \
   [--file <path>] [--open <deeplink>] [--settle <s>] \
   --route "<url or nav path>" --label "<STAGE, 1-2 uppercase words>" \
   --title "<short state title>" --note "<1-2 lines: what & why>" \
@@ -135,7 +135,7 @@ produces a dead sidebar column. The recipe (Playwright MCP, `--isolated`):
 ## Intent: session — sticky capture → testing board
 
 Today's default loop. After the **first** shot lands (and again when new
-shots landed): `vitrinka board-from-set --root .vitrinka/screenshots` — idempotent,
+shots landed): `vitrinka board create --root .vitrinka/screenshots` — idempotent,
 serpentine layout with `--action`-labeled arrows, files under the project's
 **testing** subgroup. Give the user the board URL as soon as it exists.
 
@@ -176,7 +176,7 @@ the kind index + doctrine — the tool schema carries only the kind index:
   the server cannot see (thinking + reading the shots and content;
   `effort` low | medium | high). The self-report is schema-validated;
   estimates are not verified or billed. It lands in the workspace's agent calls ledger,
-  which the `query` tool / `vitrinka query` reads back as SQL.
+  which the `query` tool / `vitrinka search query` reads back as SQL.
 
 Then **attach the listener AUTOMATICALLY** — follow the listen skill
 (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`): arm `vitrinka
@@ -193,7 +193,7 @@ full-page recipe for overflowing content). The extra work per screen with
 outgoing paths — declare its **branches**:
 
 ```bash
-vitrinka snap web --file dash.png --label "DASHBOARD" --title "Home" \
+vitrinka board capture web --file dash.png --label "DASHBOARD" --title "Home" \
   --next "SETTINGS"  --target '{"x":912,"y":24,"w":40,"h":40}'  --action "Click avatar" \
   --next "NEW-BOARD" --target '{"x":24,"y":88,"w":120,"h":36}' --action "Click + New board"
 ```
@@ -217,7 +217,7 @@ vitrinka snap web --file dash.png --label "DASHBOARD" --title "Home" \
 - One screen may appear once; branches from anywhere point at its label
   (diamonds and back-edges are fine — the layout places every screen once).
 
-Publish: `vitrinka journey-from-set --root .vitrinka/screenshots` — imports the set as
+Publish: `vitrinka board create --journey --root .vitrinka/screenshots` — imports the set as
 a **journey tree** (left-to-right; linear runs stay in a lane; a signpost fans
 its branches vertically in walk order; wires leave from the click-target
 region, outlined on the screen and glowing with wire selection). It is
@@ -265,8 +265,8 @@ that task's `journey` children; the link is inferred, overridden
 explicitly, and never guessed:
 
 1. **Test results never come through this skill.** A runner's output goes
-   through `vitrinka run -- <test command>`; an exploratory session goes
-   through `vitrinka usertest start · case · snap · verdict · finish`
+   through `vitrinka qa run -- <test command>`; an exploratory session goes
+   through `vitrinka qa usertest start · case · snap · verdict · finish`
    (usertest skill). Both create or extend the qa task, write verdicts,
    compose the qa board and attach the evidence themselves. The publisher
    agent keeps only the free-form walkthrough: a client-facing story, a
@@ -294,7 +294,7 @@ explicitly, and never guessed:
    listed under `warnings`, never force-matched.
 4. **Verdicts are never a walkthrough's.** A walkthrough carries no
    verdict and files no bug; a finding worth a verdict is an exploratory
-   case (`vitrinka usertest case … · verdict fail --note …`), whose
+   case (`vitrinka qa usertest case … · verdict fail --note …`), whose
    `finish` files the bug draft `blocks`-linked to its journey.
 5. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
@@ -314,10 +314,10 @@ explicitly, and never guessed:
   task, a bug) is stamped the same way, without sections.
 - Shots transcode to WebP q85 (`brew install webp` if `cwebp` missing).
 - Never commit shots. Write auth: `VITRINKA_TOKEN` env or
-  `vitrinka token` — never echo it.
-- Desktop app: if `~/.config/vitrinka/desktop-app` exists, `vitrinka open`
+  `vitrinka auth token` — never echo it.
+- Desktop app: if `~/.config/vitrinka/desktop-app` exists, `vitrinka board open`
   opens boards in-app — test that flag file, never probe /Applications.
 - Local gallery: `.vitrinka/screenshots/index.html`, kept current by snap.
 - Update notices: a `vitrinka` command may print `update available X → Y ·
-  run: vitrinka update` on stderr. Relay it to the user once and offer to run
-  `vitrinka update`; never update unprompted or repeat the offer.
+  run: vitrinka setup update` on stderr. Relay it to the user once and offer to run
+  `vitrinka setup update`; never update unprompted or repeat the offer.

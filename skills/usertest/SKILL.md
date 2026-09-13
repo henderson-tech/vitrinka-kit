@@ -1,6 +1,6 @@
 ---
 name: usertest
-description: "Test the current repo's app like a user and leave the QA record behind — one verb per lane: `vitrinka run -- <test command>` for runner-backed suites, `vitrinka usertest start · case · snap · verdict · finish` for exploratory sessions. Use for 'user test this', 'explore the new feature', 'QA this like a user', 'run the tests and publish'."
+description: "Test the current repo's app like a user and leave the QA record behind — one verb per lane: `vitrinka qa run -- <test command>` for runner-backed suites, `vitrinka qa usertest start · case · snap · verdict · finish` for exploratory sessions. Use for 'user test this', 'explore the new feature', 'QA this like a user', 'run the tests and publish'."
 metadata:
   vitrinka-contract: "2026-08-30"
 ---
@@ -16,19 +16,19 @@ what to try and what verdict it earned.
 Two lanes, one verb each. Both end in the same QA record, and neither needs
 a manifest, a board, a publisher agent or a task tool from you.
 
-## Lane 1 — runner-backed: `vitrinka run -- <test command>`
+## Lane 1 — runner-backed: `vitrinka qa run -- <test command>`
 
 ```text
-vitrinka run -- bun x playwright test e2e/checkout.spec.ts
-vitrinka run -- bun run appium:smoke
-vitrinka run --task 392 --pr acme/shop#41 -- bun test
+vitrinka qa run -- bun x playwright test e2e/checkout.spec.ts
+vitrinka qa run -- bun run appium:smoke
+vitrinka qa run --task 392 --pr acme/shop#41 -- bun test
 ```
 
 `run` executes the command exactly as given (inherited stdio, its exit code
 becomes yours), then finds what it left behind and publishes it:
 
 - **Results** — the repo's declared runners (`.vitrinka/project.json`
-  `runners[]`, written by `vitrinka project setup --runners`) first, else
+  `runners[]`, written by `vitrinka setup --runners`) first, else
   a scan for anything newer than the start: a `usertest-run-<id>.json`
   manifest, JUnit XML, a Playwright JSON report, an `allure-results/`
   directory, wdio JSON reports. `--results <path>` names one explicitly.
@@ -58,15 +58,15 @@ Never write a manifest by hand, never call `run publish` after `run`,
 never double-write verdicts or file bugs for cases the run covered — the
 door did. `--dry-run` shows the folded manifest without publishing.
 
-## Lane 2 — exploratory: `vitrinka usertest …`
+## Lane 2 — exploratory: `vitrinka qa usertest …`
 
 ```text
-vitrinka usertest start [--task <id>] [--app web] [--platform ios|android|web|macos] [--device "iPhone 17 Pro"]
-vitrinka usertest case "Admin creates a coupon, member sees it"
-vitrinka snap ios --route /coupons --note "the new coupon in the member list"
-vitrinka usertest verdict pass|fail|skip [--note "what happened"]
+vitrinka qa usertest start [--task <id>] [--app web] [--platform ios|android|web|macos] [--device "iPhone 17 Pro"]
+vitrinka qa usertest case "Admin creates a coupon, member sees it"
+vitrinka board capture ios --route /coupons --note "the new coupon in the member list"
+vitrinka qa usertest verdict pass|fail|skip [--note "what happened"]
 … more cases …
-vitrinka usertest finish [--pr owner/repo#n] [--bugs intake|direct|none]
+vitrinka qa usertest finish [--pr owner/repo#n] [--bugs intake|direct|none]
 ```
 
 - `start` opens the session (`.vitrinka/usertest-run.json`); `--task`

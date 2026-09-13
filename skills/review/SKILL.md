@@ -37,7 +37,7 @@ board or ask which section when the board has several.
 
 Vitrinka is an authenticated service: every API call needs an
 `Authorization: Bearer` header (token from `$VITRINKA_TOKEN`, fallback the
-credential `vitrinka token` prints; `vitrinka auth login` mints it). Feed the
+credential `vitrinka auth token` prints; `vitrinka auth login` mints it). Feed the
 header via stdin (`printf 'Authorization:
 Bearer %s' "$TOKEN" | curl -H @- <url>`) — never inline the token into a
 command's arguments.
