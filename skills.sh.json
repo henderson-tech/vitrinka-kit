@@ -10,9 +10,7 @@
         "publish",
         "brainstorming",
         "listen",
-        "resolve",
-        "answers",
-        "annotations"
+        "resolve"
       ]
     },
     {
@@ -40,11 +38,7 @@
       "title": "Me",
       "description": "Personal todos, milestones and scheduled reminders — the moments a session should judge.",
       "skills": [
-        "todo",
-        "todo-list",
-        "todo-done",
-        "todo-milestone",
-        "remind"
+        "me"
       ]
     }
   ]

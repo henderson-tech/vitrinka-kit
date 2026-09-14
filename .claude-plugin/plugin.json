@@ -1,6 +1,6 @@
 {
   "name": "vitrinka",
-  "version": "5.1.0",
+  "version": "5.3.0",
   "displayName": "Vitrinka",
   "description": "Screenshot journeys, annotation boards, and the AI expression layer — capture UI work as it's built, publish it to live boards, and work the annotation queue from any Claude Code session.",
   "author": {

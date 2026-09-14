@@ -4,28 +4,24 @@
 `vitrinka-publisher` agent — see the Delegation section in `../SKILL.md`.
 Brief it with this file's path so it follows these contracts itself.
 
-A board created bare (`create_board {slug}` and nothing else) is homeless: no
-project group in the sidebar, no type, no meta — and retrofitting organization
-later never happens. This skill makes the metadata a first-class part of
-creation, and encodes the journeys grammar that turns vitrinka into the
-testing-suite management surface.
+A board created bare (`create_board {slug}` and nothing else) is homeless:
+no project group in the sidebar, no type, no meta. Metadata is a first-class
+part of creation.
 
 ## Creating any board
 
-1. **Check it doesn't exist**: `list_boards {project}` — a 409 on create means
-   reuse **only when the board is already yours**, never suffix-mint a
+1. **Check it doesn't exist**: `list_boards {project}` — a 409 on create
+   means reuse **only when the board is already yours**, never suffix-mint a
    duplicate. The 409 body names the incumbent's `project` and `url`: a
    different project's board is a collision, not a reuse — pick another slug
-   and leave that board alone. (Adopting one is how an app's PR journey and an
-   AI-review session ended up sharing the same canvas.)
+   and leave that board alone.
 2. **Create fully-specified** — every field you know at birth goes in the one
    `create_board` call:
    - `slug` — `<project>-<purpose>` (`acme-payroll-audit`), stable, and
-     **never a bare date**: slugs are workspace-global, so `2026-08-25` is
-     every project's slug at once. A date belongs in a slug only behind a
-     project (and usually a branch) that already scopes it — which is exactly
-     what `vitrinka board create` defaults to when you pass no `--slug`:
-     `<project>-<branch>-<setkey>`.
+     **never a bare date**: slugs are workspace-global. A date belongs in a
+     slug only behind a project (and usually a branch) — `vitrinka board
+     create` defaults to `<project>-<branch>-<setkey>` when you pass no
+     `--slug`.
    - `board_type` — `board` (annotation canvas, default) | `brainstorm` |
      `journeys` (testing-journey suites, below) | another token when a real
      new family emerges. The type drives the sidebar's type groups for
@@ -43,16 +39,16 @@ testing-suite management surface.
    - `meta` — the JSON bag: `{parentBoard}` for child boards,
      `{commitSha, tracedAt}` for git-tied ones. Stamp later with
      `set_board_meta` (merge-patch — send only the keys that change).
-   - `theme` — the board's look, at birth or later via `set_board_meta
-     {theme}` (`""` = house default; open vocabulary). Known bundles:
-     `sketch` (hand-drawn: rough strokes + Caveat hand type, exports follow),
-     `playful`, `technical`, `diary`, `girlies`, `release`. Pick `sketch`
-     when the user asks for a hand-drawn / whiteboard mood.
+   - `theme` — at birth or later via `set_board_meta {theme}` (`""` = house
+     default; open vocabulary). Known bundles: `sketch` (hand-drawn: rough
+     strokes + Caveat hand type, exports follow), `playful`, `technical`,
+     `diary`, `girlies`, `release`. Pick `sketch` when the user asks for a
+     hand-drawn / whiteboard mood.
 3. **Structure template-first**: `get_templates` ONCE, start from the matching
    skeleton (QA session, decision map, dashboard, deck, journey suite …) in
-   one `compose_board` call per coherent unit — intent not coordinates;
-   a single card is a batch of one, anchored by relation. Save a
-   recurring structure of your own with `save_template` and instantiate via
+   one `compose_board` call per coherent unit — intent not coordinates; a
+   single card is a batch of one, anchored by relation. Save a recurring
+   structure of your own with `save_template` and instantiate via
    `compose_board {template, params}`.
 4. **Hand over the server's `url` field** from the create/list response — it
    carries the `/w/<workspace>` segment; never compose a path yourself.
@@ -60,12 +56,11 @@ testing-suite management surface.
    board's annotations (it almost always will), follow the listen skill
    (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`) right after
    creating, on the highest rung its `references/listening.md` ladder offers
-   in this harness: a native Monitor on `exec vitrinka work watch` (the `exec` is
-   load-bearing — without it the watch outlives the session and holds the
-   board's lease forever), the `vitrinka work listen --harness <name>` host, or
-   holding this turn on `wait_for_work`. Announce the rung's one line. Never
-   offer or wait to be asked — a board without a live listener silently
-   queues annotations nobody reacts to.
+   in this harness: a native Monitor on `exec vitrinka work watch` (the
+   `exec` is load-bearing — without it the watch outlives the session and
+   holds the board's lease forever), the `vitrinka work listen --harness
+   <name>` host, or holding this turn on `wait_for_work`. Announce the rung's
+   one line. Never offer or wait to be asked.
 
 ## Testing-journey suites (`board_type: "journeys"`)
 
@@ -79,10 +74,10 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
   embed the journey's screens (`step {image|cardId}` — reference sets you
   already pushed, never re-upload); a `checklist` per journey for the sweep.
 - **Git tie**: at trace time stamp `meta.{commitSha, tracedAt}` plus the
-  `journeys: {"<journeyId>": {section}}` map — that map is how a refiner (or
-  a later session) resolves journey id → section deterministically. The
-  board's drift badge derives from meta: `driftedBy` set means a PR touched
-  the journey's anchors (`drifted · PR #n`); after refreshing the affected
+  `journeys: {"<journeyId>": {section}}` map — how a refiner (or a later
+  session) resolves journey id → section deterministically. The board's
+  drift badge derives from meta: `driftedBy` set means a PR touched the
+  journey's anchors (`drifted · PR #n`); after refreshing the affected
   sections, clear it and advance `commitSha`/`tracedAt` in one
   `set_board_meta` merge-patch.
 - **Runs are child boards**, never sections on the suite: create with
@@ -95,7 +90,7 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
   (`compose_board {journey, pass:"next"}`, template 2) — the old pass stays
   for comparison and `request_review {journey}` reviews the delta.
 
-### Token economy — vitrinka as the testing central only works if cheap
+### Token economy
 
 | Instead of | Do |
 |---|---|
@@ -107,18 +102,15 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
 | Finding suites by scanning all boards | `list_boards {project, board_type:"journeys"}` |
 
 The app-repo side (which journeys exist, anchor-index, affected-journeys from
-a diff) belongs to the app repo's own skill (e.g. its own `acme-journeys`) —
-this skill owns the vitrinka surface those tools write to.
+a diff) belongs to the app repo's own skill — this skill owns the vitrinka
+surface those tools write to.
 
 ## Don't rationalize
 
 - "I'll create the board now and organize it later" → later is never. The
   create call carries type/project/subgroup/meta or the board is born lost.
 - "A run is small, I'll add it as a section on the suite" → runs are child
-  boards; suite sections are journeys. Mixing them breaks the sidebar
-  nesting, the pass chains, and every future session's mental model.
+  boards; suite sections are journeys.
 - "I'll invent the suite structure, it's simple" → `get_templates` is one
-  call; template 10 is the agreed grammar. Divergent suites can't be managed
-  centrally.
+  call; template 10 is the agreed grammar.
 - "The journey changed, I'll edit the old section in place" → next pass.
-  Non-destructive iteration is what makes drift auditable.

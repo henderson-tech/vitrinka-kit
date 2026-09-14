@@ -18,7 +18,9 @@ of guessing):
   skill) or `artifact` | `docs-board` (the artifact skill's authored surfaces)
 - **skill base directory** — the absolute path of the dispatching skill
   (`publish` for capture intents, `artifact` for authored work). Read the
-  intent's section in its `SKILL.md` FIRST, plus the matching reference
+  intent's laws in its `SKILL.md` FIRST — for capture intents also the
+  procedure page `vitrinka docs guide:publish-capture` (MCP `docs {topic:
+  "guide:publish-capture"}`) — plus the matching reference
   (publish: `references/board.md`, `references/card-kinds.md` for any compose
   work; artifact: `references/standalone.md`; docs-board: `references/docs.md`
   plus `references/diagram.md` / `references/pages.md` for the payload
