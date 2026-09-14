@@ -122,11 +122,11 @@ Without a brief the hand-back is incomplete: a fresh session would have to reloa
 
 ### 6. Closing question — ALWAYS the last `AskUserQuestion`
 
-Every bounded or architectural brainstorm ends with one question, "In which style to implement?", with three exits (a spike ends in its recommendation instead):
+Every bounded or architectural brainstorm ends with one question, "In which style to implement?" (a spike ends in its recommendation instead). The question text opens with how much of the context window this session has already used — tokens and percent, by whatever the harness exposes — because that reading decides between the exits and only the agent can see it; the recommendation follows from the reading and the package count, and a session that is mostly spent never recommends "Build here". Three exits:
 
-- **Build here** — implement from the brief in the feature worktree, this session.
+- **Build here** — implement from the brief in the feature worktree, this session, with the whole remaining budget.
 - **Fresh session** — print `/continue <task url>` and stop; `pickup` surfaces the brief first, the Plan chapter on demand.
-- **Subagent-driven** — dispatch forks on the brief's ordered `Work packages` (disjoint files, one package per fork, ≤ 4 per phase), a context-inheriting fork reviewer after each phase, this session as lead on the same branch.
+- **Subagent-driven** — dispatch forks on the brief's ordered `Work packages` (disjoint files, one package per fork, ≤ 4 per phase), a context-inheriting fork reviewer after each phase, this session as lead on the same branch. Forks inherit the lead's context, so the reading counts against every fork too.
 
 Whatever the exit: do NOT write a separate implementation plan (`docs/plans/*-implementation.md`, `/superpowers:writing-plans`, phased WP documents) — the user has explicitly rejected that step as slow and quality-degrading. The brief's work packages are the plan. In-session task tracking (TaskCreate) is fine; a committed plan document is not. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 

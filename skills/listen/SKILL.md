@@ -77,17 +77,17 @@ workspace from your Bearer token, so `wait_for_work`/`list_work` scoping by
    will reference). If the cwd is clearly not an app repo, say so and stop.
 2. The `vitrinka` MCP tools are available (`wait_for_work`, `set_status`,
    `reply`, `attach_after`, `get_capsule`). If not, tell the user to run
-   `vitrinka setup` in this repo (or the manual form:
-   `claude mcp add --scope project --transport http vitrinka <origin>/mcp --header "X-Vitrinka-Workspace: <workspace>"`,
+   `vitrinka setup` (or the manual form:
+   `claude mcp add --scope user --transport http vitrinka <origin>/mcp`,
    then `/mcp` → vitrinka → authenticate inside Claude Code) — the
-   registration is a secret-free remote HTTP entry with OAuth; one sign-in
-   covers every workspace of your organisation. In a bound repo the
-   PROJECT-level entry (root `/mcp` plus the workspace header) must be
-   present — a session riding only the user-level grant lands in the
-   grant's home workspace and cannot create projects; `vitrinka setup`
-   renders it (Cursor, OpenCode, VS Code and Gemini CLI get their own
-   files too). To act in ANOTHER workspace of the organisation, spell the
-   project `<workspace>/<project>` (a board `<workspace>/<slug>`).
+   registration is ONE secret-free user-scope HTTP entry with OAuth; one
+   sign-in covers every repo and every workspace of your organisation, and
+   a call naming a project lands in the workspace that knows it. A
+   project-scope `.mcp.json` entry is a leftover (it costs a sign-in per
+   repo) — `vitrinka setup` removes it; Cursor, OpenCode, VS Code and
+   Gemini CLI keep their own project files. To act in ANOTHER workspace of
+   the organisation, or on a workspace-level tool, spell the project
+   `<workspace>/<project>` (a board `<workspace>/<slug>`).
 3. You know your rung: read `references/listening.md` and pick — the
    `Monitor` tool exists → rung 1; `VITRINKA_LISTEN_HOST` is set → rung 2
    (the host already leases the scope — arm nothing); otherwise rung 3.
