@@ -18,16 +18,16 @@ traced back to the board.
 Arguments: optional — a session board slug/URL or id to process just that
 one; without it, process every pending session for this project, oldest
 first. A trailing `fix` or `test` runs ONLY that stage on the named session
-(read that stage's reference and follow it end to end — its own worktree,
-ledger, and stamp rules apply; skip the pipeline's other phases).
+(read that stage's reference and follow it end to end — its own worktree
+and stamp rules apply; skip the pipeline's other phases).
 Run FROM THE APP'S REPO.
 
 ## Phase 0 — project rules (first run maps them)
 
-Read `.vitrinka/project.json` (schema: `references/project.md`). If it is
-missing or incomplete, STOP and map it WITH the user before any pipeline work
-— one interactive round (AskUserQuestion or terminal), then commit the file so
-every future run and teammate inherits it:
+Read the repo-root `vitrinka.config.json` (schema: `references/project.md`).
+If it is missing or incomplete, STOP and map it WITH the user before any
+pipeline work — one interactive round (AskUserQuestion or terminal), then
+commit the file so every future run and teammate inherits it:
 
 - **project** — the vitrinka project slug (must match the recorder's).
 - **worktree** — the command that creates a work-ready worktree, and the rule
@@ -50,12 +50,12 @@ run; thereafter trust the file (re-map on demand when it drifts).
 
 1. `GET /api/v1/sessions?project=<project>&limit=200` — every recorded
    session with its `meta.pipeline` stamps.
-2. Read `.vitrinka/sessions.json` — the repo ledger (TRUTH; schemas in
-   `references/registry.md`).
-3. Pending = status `done`, projected (`boardSlug` set), and not `testedAt`
-   in the ledger. A session with `triagedAt` but no `testedAt` resumes at the
-   test stage. Disagreement between stamps and ledger → trust the ledger, fix
-   the stamps.
+2. The stamps ARE the ledger (TRUTH; shape in `references/registry.md`) —
+   no repo file mirrors them; a `.vitrinka/sessions.json` left by an older
+   run is a local cache, never consulted over the server.
+3. Pending = status `done`, projected (`boardSlug` set), and no `tested`
+   stamp. A session with `triaged` but no `tested` resumes at the test
+   stage.
 4. **Exclude machine-driven runs**: skip any session whose `environment` is
    `sim` or whose tags include `ai` — those are an agent's own dev-loop
    recordings (the app repo's own `bun run rec:start`), not user-testing findings.
@@ -67,7 +67,7 @@ run; thereafter trust the file (re-map on demand when it drifts).
    it as the argument.
 5. Report the queue (id, title, board, age, state) before working it. Skip
    `recording`/`stalled` sessions — they're still being captured; note
-   deleted ones only if the ledger references them.
+   deleted ones only if a journey task still references them.
 
 ## Phase 2 — per session: prepare, fix, test
 
@@ -84,7 +84,7 @@ heavyweight — parallel sessions fight over dev stacks and the registry):
    variant from the digest's `session.meta.platform` (ios/android ⇒ full).
 3. **Fix**: run the fix stage (`references/fix.md`, its phases 2–4) inside the
    worktree with the digest in hand. It batches issues (5–10 per subagent,
-   ≤4), fixes, closes annotations, writes `triagedAt` + stamps.
+   ≤4), fixes, closes annotations, stamps `triaged` on the session.
    No open issues ⇒ skip cleanly.
    Sweeping MANY sessions into one shared fix round (one PR for a backlog)?
    The batch map spans sessions, but the fix stage's isolation law is
@@ -92,7 +92,7 @@ heavyweight — parallel sessions fight over dev stacks and the registry):
    worktree above is the INTEGRATION tree (hotspot intents, add-only locale
    merge, reconciliation, gates) — never four agents in one tree.
 4. **Tests**: run the generate-test stage (`references/generate-test.md`, its
-   phases 1–5) in the same worktree — verdicts, blocks, emission, manifests, `testedAt` stamp.
+   phases 1–5) in the same worktree — verdicts, blocks, emission, journey tasks updated, `tested` stamp.
    Everything stays committed LOCALLY on the session's branch — shipping
    happens after Phase 3's verification run, never before it.
 
@@ -117,12 +117,13 @@ After the session's tests exist:
    a failing EXISTING test after your fixes is a regression YOU introduced —
    fix it before shipping. Loop run→fix→run until green or explained.
 5. **Ship**: only now — one branch per session, push and open the PR per the
-   repo's conventions (fixes + tests + manifests + a green run tell the
-   session's story); backfill `testPr` per the registry schema.
+   repo's conventions (fixes + tests + a green run tell the session's
+   story); backfill the `testPr` stamp once the PR exists.
 
 ## Phase 4 — close out
 
-- Ledger + stamps final (`triagedAt`, `testedAt`, PRs, journeys).
+- Stamps final (`triaged`, `tested`, PRs, journeys) and every touched
+  journey task carries its `fields.test` + session ref.
 - Per session: PR URL, board URL (with the new pass), fix summary, verdict
   table outcome, e2e run result.
 - Queue summary: processed / skipped (with reasons) / remaining.
@@ -190,15 +191,15 @@ the 48k-token transcript is worth loading.
   rather than stalling mid-queue — move to the next session.
 - Respect the engines' economy rules (they cap subagents at ≤4 per phase);
   this skill adds NO subagents of its own beyond what they specify.
-- Never process a `recording` session; never regenerate a `testedAt` session
+- Never process a `recording` session; never regenerate a `tested` session
   without an explicit ask.
 
 ## Red flags — STOP
 
-- You are about to start pipeline work with no `.vitrinka/project.json` and
+- You are about to start pipeline work with no `vitrinka.config.json` and
   no user confirmation of the derived map.
 - Two sessions being worked in parallel, or work happening outside the
   session's worktree.
 - Tests launched before the readiness check passed.
 - A verification pass composed onto a DIFFERENT board than the session's.
-- The ledger says tested but you're regenerating anyway.
+- The session's `tested` stamp is set but you're regenerating anyway.

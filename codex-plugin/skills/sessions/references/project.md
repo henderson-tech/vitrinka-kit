@@ -1,14 +1,20 @@
-# `.vitrinka/project.json` — the project rules map
+# `vitrinka.config.json` — the project rules map
 
-Committed, per-repo: everything the autopilot needs to
-work THIS project without asking twice. Mapped interactively on the first
-`/vitrinka:sessions` run — derive what the repo answers, ask the user the
-rest, confirm, commit. Re-map on demand when the repo's tooling changes.
+The repo's ONE committed vitrinka file, at the repo root: the binding
+(`origins`, `project`), the runners, the run/e2e map and the `index` policy
+side by side. Everything the autopilot needs to work THIS project without
+asking twice. Mapped interactively on the first `/vitrinka:sessions` run —
+derive what the repo answers, ask the user the rest, confirm, commit. Re-map
+on demand when the repo's tooling changes. (An older `.vitrinka/project.json`
+is still read as a fallback for one release; `vitrinka setup` folds it into
+the root file. `.vitrinka/` itself is machine-local and never committed.)
 
 ```json
 {
   "version": 1,
+  "origins": { "github.com/acme/shop": "acme" },
   "project": "acme",
+  "index": { … },
   "worktree": {
     "commands": {
       "sim": "bun wk:create:sim {name}",
@@ -67,5 +73,7 @@ Field rules:
 - `frameworks[].hosts`/`apps` mirror the server-side project domain/app rules
   (project settings) — the mapping between what a session recorded and which
   runner tests it.
+- `index` is the project-index policy (owned by `vitrinka project index`);
+  elided above, leave it untouched when editing the other keys.
 - Unknown extra keys are allowed (projects are unique); skills must ignore
   what they don't understand and never delete keys they didn't write.

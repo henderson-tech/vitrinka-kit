@@ -115,15 +115,17 @@ named field against the tool schema; do not rely on coercion or dropped keys.
   {key: value}` on `get_task`, `create_task` and `update_task` (partial
   merge — pass only the keys you change, `null` deletes). Kinds and value
   shapes: `text · longtext · url` string · `select` one of the options ·
-  `multiselect` string[] · `checklist` `[{name, done, evidence?, kind?: human|action|date, at?: YYYY-MM-DD}]` ·
+  `multiselect` string[] · `checklist` `[{name, done, evidence?, kind?: human|action|date, at?: YYYY-MM-DD, who?: actor name}]` ·
   `number` · `date` "YYYY-MM-DD" · `relation` a task id. A definition
   applies only to its `appliesTo` type; every project carries the
   **feature preset on epics** — `outcome`, `non_goals`, `gates` and
   `decisions` (checklists: tick `done` WITH `evidence`), `ledger_state`
   (`scheduled` by default · `active · waiting · superseded · closed`),
   `waiting_on`, `next_action`. A gate's `kind` says who resolves it —
-  `human` waits on a person (it surfaces in their My Work and brief),
-  `action` on work (ticked by evidence), `date` on a calendar date
+  `human` waits on a person (it surfaces in their My Work and brief —
+  `who` names that person the way `assignee` does, else the task's
+  assignee, else its reporter), `action` on work (ticked by evidence),
+  `date` on a calendar date
   (auto-ticked when `at` is reached). The filter document takes `fields:
   {key: value}` for select/multiselect. Defining fields
   (`create_field · update_field · delete_field`) is admin-only.
@@ -261,8 +263,10 @@ resolve-qa`); the final artifact and revisions close the loop.
 2. Draft from three sources you already hold: the decision log
    (`docs/specs/*-decisions.md`), the merged diff, the e2e specs the PR
    added or changed. ONE `qa` draft + one `journey` draft per user-visible
-   path — a journey is what a tester walks (3–12 steps), keyed like the
-   sessions registry (`.vitrinka/journeys.json` ids, kebab-case intent),
+   path — a journey is what a tester walks (3–12 steps), keyed by
+   kebab-case user intent (`fields.key` — the journey registry IS the
+   project's `journey` tasks; check `list_tasks {f: {types: ["journey"]}}`
+   before minting a key twice),
    with `role` from the qa task's `roles`, the `route` it starts on, the
    `flow` (the walk, below), the `expected` outcome and the `test` spec
    URL when one exists. `route`, `test` and a step's `at` are url fields:
@@ -446,6 +450,24 @@ GitHub-shaped repo, so the text stays plain.
   human named loosely; an empty `q` lists boards most recent first.
 - `my_work` — the caller's assigned · created · mentioned · overdue, across
   projects, 50 each.
+- `my_favorites {scope?, folder?}` — the caller's bookmark tree, what the
+  operator keeps close: two roots, `personal` and `workspace` (shared by
+  every member), folders nested, loose stars as `rows`. A row is `kind`
+  (board · card · session · task · project), `id`, `key`, `title`, `url`
+  (print as returned) and `project` — no thumbnails, no timestamps. Read
+  it at pickup to see what the person is working around; `scope` narrows
+  to one root, `folder` (an id) to one subtree. CLI: `vitrinka fav list
+  [--scope personal|workspace] [--json]`.
+- `favorite {entityType, entityId? | entityKey?, scope?, folder?}` /
+  `unfavorite {entityType, entityId? | entityKey?, scope?}` — star or
+  unstar through the same door the ★ button uses. Id-keyed kinds go by
+  `entityId`, a project by `entityKey` (its slug, e.g. `acme`); `scope`
+  defaults to the workspace's default star scope (a workspace star needs
+  member access); `folder` is a folder id or a NAME — an unknown name is
+  created under that scope's root. Starring again re-files, never
+  duplicates; unstarring what is not there is a no-op. Star only what the
+  user asked to keep close — a bookmark is theirs, not a way to leave
+  notes. CLI: `vitrinka fav add|rm <kind> <id|slug> [--scope] [--folder]`.
 - `get_brief {project}` — **read this before planning anything in a
   project.** The project home as one bounded document: `now` (overdue ·
   the caller's in-motion work · blocked, each with a `why` line and its
@@ -565,6 +587,8 @@ the dry-run renames before running it. Doctrine: `docs` topic
 vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
 vitrinka task get|create|update|comment|rank|search|delete|mine
 vitrinka search <text> · vitrinka search resolve <url>
+vitrinka fav list [--scope personal|workspace] [--json]   # the bookmark tree, as the server minted it
+vitrinka fav add <kind> <id|slug> [--scope personal|workspace] [--folder <id|name>] · fav rm <kind> <id|slug> [--scope]   # kind: board · card · session · task · project
 vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
 vitrinka task start [id] [--session id] [--summary …] · task stop <run> [--summary …]
 vitrinka task pickup <id|url> [--json]        # the bounded pickup view — start here, never from the whole tree

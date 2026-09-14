@@ -21,7 +21,7 @@ supervisor, the pair worktree, the restart step, and the pace.
 
 ## Preflight — before the user starts testing
 
-1. **Project map.** Read `.vitrinka/project.json` (schema:
+1. **Project map.** Read the repo-root `vitrinka.config.json` (schema:
    `../sessions/references/project.md`). Pair needs the `run` section; map it
    interactively and commit it if missing — exactly like the sessions skill's
    Phase 0. Mark HMR/Metro stacks `"hot": true`: for those the file save IS
@@ -32,7 +32,7 @@ supervisor, the pair worktree, the restart step, and the pace.
    commits on this one rolling branch — one PR reviews the whole pairing run.
 3. **Supervise the app FROM the worktree**: `cd` there and run
    `vitrinka qa pair run`. The supervisor resolves the worktree's own
-   `.vitrinka/project.json`, so the running app serves the code your fixes
+   `vitrinka.config.json`, so the running app serves the code your fixes
    land in. Hand the user each stack's URL. Reuse-if-healthy: re-running is
    safe. NEVER point a stack at an e2e `DATA_DIR`, and never wipe one — the
    user's boards, prefs and logins live there and must survive every restart.
