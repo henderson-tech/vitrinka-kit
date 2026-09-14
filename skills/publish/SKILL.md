@@ -57,7 +57,7 @@ carries the result.
 
 All mechanics: `vitrinka <cmd>` (zero-dep TypeScript).
 
-1. Git-ignore `.vitrinka/` (`.gitignore` or `.git/info/exclude`), then `mkdir -p .vitrinka/screenshots && touch .vitrinka/screenshots/.active`. Ad-hoc session output (QA sweeps, audit dumps, one-off shots) goes under `.vitrinka/scratch/<topic>/` — never a root-level `.screenshots-<topic>` dir or loose repo-root files; `vitrinka project tidy` sweeps legacy litter in.
+1. `mkdir -p .vitrinka/screenshots && touch .vitrinka/screenshots/.active` (`.vitrinka/` is machine-local and ignores itself through its own `.gitignore`, which the CLI writes on first use — never add vitrinka lines to the repo's `.gitignore`). Ad-hoc session output (QA sweeps, audit dumps, one-off shots) goes under `.vitrinka/scratch/<topic>/` — never a root-level `.screenshots-<topic>` dir or loose repo-root files; `vitrinka project tidy` sweeps legacy litter in.
 2. `vitrinka board init --root .vitrinka/screenshots` — mints the session's set (auto project+branch from git, sticky).
 3. Set the journey header (re-run when your understanding sharpens):
    ```bash
@@ -279,14 +279,15 @@ explicitly, and never guessed:
    walkthrough publishes UNLINKED and says so in the hand-back ("not
    linked — no qa task on this branch; `vitrinka task resolve-qa --task
    <id>` to link later"). Never create a qa task or a journey from a
-   publish. Pass the answer's `qa.id` and the registry
-   (`.vitrinka/journeys.json`, when present) to the publisher in its brief.
+   publish. Pass the answer's `qa.id` and its `journey` children (from
+   `get_task {id: <qa>, include: [children]}` — key = `fields.key`) to the
+   publisher in its brief.
 3. **On publish** (the publisher does this, once per board): `add_task_ref
    {id: <qa>, kind: "board", ref: <slug>, meta: {board: true}}`; then
    `get_task {id: <qa>, include: [children]}` and, per board section,
    match a `journey` child by its `fields.key` = the section's registry
-   key (the section title is the journey id in `.vitrinka/journeys.json`,
-   or the section's `meta.journey`), else by EXACT title →
+   key (the section title is the journey key, or the section's
+   `meta.journey`), else by EXACT title →
    `add_task_ref {id: <journey>, kind: "board", ref: <slug>, meta:
    {section: "<section title>", journey: <journeyId>}}`. Recorded
    sessions imported into that section → `add_task_ref {id: <journey>,

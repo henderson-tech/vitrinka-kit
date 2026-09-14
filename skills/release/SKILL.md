@@ -17,8 +17,8 @@ Base URL: `VITRINKA_URL` (self-hosted deployments) or `https://app.vitrinka.ai`.
 Vitrinka is an authenticated service: all calls are the raw API with the
 workspace token (`vitrinka auth login` mints it; `VITRINKA_TOKEN` or the OS
 keyring is always required — the same auth the publish skill uses).
-Resolve the project the way the publish skill does: the repo's `.vitrinka/`
-config or the directory name — ask only when genuinely ambiguous.
+Resolve the project the way the publish skill does: the repo-root
+`vitrinka.config.json` or the directory name — ask only when genuinely ambiguous.
 
 ## status (default verb)
 

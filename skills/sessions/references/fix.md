@@ -54,7 +54,7 @@ here. The digest is the triage input, complete by design.
 
 All fix work starts in worktrees — never in the user's checkout:
 
-1. If the repo maps its own worktree command (check `.vitrinka/project.json`,
+1. If the repo maps its own worktree command (check `vitrinka.config.json`,
    the repo's CLAUDE.md, or its `wk:*` scripts — e.g. a monorepo's
    `wk:create:sim` / `wk:create:full`), use THAT. Pick the full/mobile variant
    when the session's `session.meta.platform` (ios/android — the mobile
@@ -192,19 +192,13 @@ Everything here runs on the INTEGRATED tree — boot infra/sim there, once.
 - Non-annotation issues: the closing summary lists each with its verdict and
   commit. Network issues re-checked live (the failing call now succeeds)
   before claiming fixed.
-- Record the processed state (schemas in `registry.md`, this
-  directory):
-  1. Write/merge this session's entry in `.vitrinka/sessions.json`
-     (`triagedAt`, `fixBranch`, `fixPr`, notes) and commit it with the fixes.
-     If `git check-ignore` hits the manifest, the repo ignores `.vitrinka/`
-     wholesale — STOP, fix the `.gitignore` to an allowlist (scratch ignored,
-     manifests tracked; exact pattern in the registry doc) in the same
-     branch, then commit. Server stamps alone are NOT an acceptable record.
-  2. Stamp the server so /sessions shows progress:
-     `PATCH /api/v1/sessions/{id}` body
-     `{"pipeline":{"triaged":"<ISO now>","fixPr":"<url>"}}` (always send the
-     Bearer token from `$VITRINKA_TOKEN` / `vitrinka auth token` via stdin,
-     never argv).
+- Record the processed state (shape in `registry.md`, this directory) —
+  the server IS the record; no repo file is written or committed:
+  `PATCH /api/v1/sessions/{id}` body
+  `{"pipeline":{"triaged":"<ISO now>","fixBranch":"<branch>","fixPr":"<url>"}}`
+  (always send the Bearer token from `$VITRINKA_TOKEN` / `vitrinka auth
+  token` via stdin, never argv). A stamp that did not land is a blocker,
+  not a note.
 - End with: batch map, per-issue outcomes, commits, anything punted to the
   user, and the board URL.
 

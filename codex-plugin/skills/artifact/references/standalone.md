@@ -32,7 +32,7 @@ Capturing UI work in progress belongs to the **publish** skill; delegation to `v
   pin: e2e/artifact-design.spec.ts#stamped DESIGN tokens apply as defaults: direction, density, accent
   pin: e2e/artifact-design.spec.ts#explicit doc.json meta beats the DESIGN layer
 - **Never drive Playwright/Chrome to "check it renders"** — the viewer is login-gated and the push's own render already saw the page. Where no screenshot came back, fall back to a token curl (Bearer header via stdin, never argv). **The link goes in your final summary, always.**
-- The artifact appears on its project's home under the **Artifacts** tab (and on the project's artifacts board), labeled by title — pick a real `--title`. The project slug comes from the committed `.vitrinka/project.json`; `--project` only overrides.
+- The artifact appears on its project's home under the **Artifacts** tab (and on the project's artifacts board), labeled by title — pick a real `--title`. The project slug comes from the committed repo-root `vitrinka.config.json`; `--project` only overrides.
   pin: e2e/artifact-theme.spec.ts#artifacts list under the project's Artifacts tab, apart from the journey versions
 - **A semantic push also mints/updates a `doc` card** on the project's artifacts board (keyed by project/branch/slug, versioned — the ⌥ fan recovers old pushes) and the response carries its solo `element:` URL (`/a/<card>`) beside the set URL. Hand back what the push prints (field names: `../../publish/references/wire-fields.md`). Blocks with no canonical element yet skip the card with an advisory diagnostic — the set + raw view stay authoritative for those.
   pin: e2e/render-audit.spec.ts#a fully canonical document mints its doc card and the solo view paints every block, nested diagram included

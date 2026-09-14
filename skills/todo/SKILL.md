@@ -36,7 +36,7 @@ Smallest shape preserving the ask:
 
 Milestone and trigger are exclusive; `--at`/`--in` are exclusive with
 milestone, trigger and due; `--lead`/`--every` need a date. The project comes
-from the repo's mapping (`.vitrinka/project.json`, then the local registry);
+from the repo's mapping (`vitrinka.config.json`, then the local registry);
 run from the repository the todo concerns. Genuinely ambiguous timing,
 priority or outcome → one concise batched question.
 

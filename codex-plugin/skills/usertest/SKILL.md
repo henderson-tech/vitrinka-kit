@@ -27,7 +27,7 @@ vitrinka qa run --task 392 --pr acme/shop#41 -- bun test
 `run` executes the command exactly as given (inherited stdio, its exit code
 becomes yours), then finds what it left behind and publishes it:
 
-- **Results** — the repo's declared runners (`.vitrinka/project.json`
+- **Results** — the repo's declared runners (`vitrinka.config.json`
   `runners[]`, written by `vitrinka setup --runners`) first, else
   a scan for anything newer than the start: a `usertest-run-<id>.json`
   manifest, JUnit XML, a Playwright JSON report, an `allure-results/`
