@@ -2,628 +2,116 @@
 name: tasks
 description: "Work a project's task engine from the repo — file and triage intake drafts, plan an epic, comment, label, rank, link, bulk-move, search, attach and read versioned files, ask Eve about a task, sprint start/complete, and author automation rules (dry-run first). Invoke as /vitrinka:tasks [list|intake|file|epic|rule] FROM THE APP'S REPO; the same verbs exist as MCP tools and `vitrinka task|sprint|intake`."
 metadata:
-  vitrinka-contract: "2026-08-30"
+  vitrinka-contract: "2026-09-14"
 ---
 
 # /vitrinka:tasks — the task engine, agent side
 
-Tasks are a relational engine: configurable states in
-five fixed groups, item types, labels, comments with @mentions, a manual rank,
-multi-assignee, typed attachments (session · shot · board · file · pr · run),
-an **intake** lifecycle for proposals, a durable `task_events` ledger, saved
-filter views, rules, and a per-project Jira mirror. Boards only ever carry a
-projection card of a task. Everything below is one MCP tool or one CLI verb;
-there is nothing an agent can do that a human cannot see and undo.
+The verbs are the CLI (`vitrinka task|sprint|intake|project --help`) and
+the MCP generic verbs (`list · get · create · update · delete · search
+{kind}`; `docs {topic: "kind:task"}` is the per-kind contract). This skill
+carries only the laws the verbs do not print.
 
-MCP validates the full advertised input schema before dispatch, including
-types, enums and nested constraints. On `invalid arguments`, correct the
-named field against the tool schema; do not rely on coercion or dropped keys.
+## Vocabulary laws
 
-## Automatic work time
+- **State groups** `backlog · unstarted · started · completed · cancelled`
+  are universal; a project's states (`list_states`) are keys inside them and
+  `status` derives from the group. `list_states` before writing `state`;
+  `list_fields` before writing `fields`.
+- **Types** `task · bug · story · epic · todo · qa · journey · meeting` are
+  ONE generated enum. An `epic` is the feature's whole record (children by
+  `parentId`, the feature preset `outcome · non_goals · gates · decisions ·
+  ledger_state · waiting_on · next_action`); a `qa` task is its test plan
+  (`scope · roles · verdict · coverage`), a `journey` one user path inside it
+  (`key · role · route · flow · steps · expected · verdict · test` — author
+  `flow`, never `steps`); a `meeting` is promoted from the diary; a `todo` is
+  the `me` skill's shape. Engineering work is a `task`.
+- **Gates** (`gates`, `decisions` checklists) are ticked `done` WITH
+  `evidence`, never bare; `kind` says who resolves one — `human` (waits on
+  `who`, else the assignee, else the reporter), `action`, `date` (auto-ticked
+  at `at`).
+- **Labels**: `create_task.labels` sets, `update_task.labels` REPLACES,
+  `label_task {add, remove}` increments (use it when another agent may be
+  labelling). `eve-*` is a reserved namespace: those labels fire Eve flows
+  and spend credit — never for bookkeeping.
+- **Refs** are the evidence: `session · shot · board · file · pr · run ·
+  commit`, the typed documents `transcript · conversation · brainstorm ·
+  plan · handoff · decision · distill`, and `final`. `commit` and `pr` refs
+  are attached by the GitHub App (`Vitrinka-Task:` trailer, `vt-<id>`
+  branches; `meta.merged` completes the task) — never by hand. A `file`
+  ref is a URL, never a path: `vitrinka task upload <id> <files…>` streams
+  disk, `upload_task_file` takes inline text.
+- **Attachments are versioned, never replaced**: the same filename is the
+  next version, `versionOf` names the lineage, a `distill` carries
+  `derivedFrom`. Write a `hint` on everything you attach; `meta.tokens`
+  tells the next reader the price. Never delete a version to clean up.
+- **Every task's `url` is its ONE link** — print it as returned, never
+  compose, shorten or guess a route. Bodies reference by grammar, not URL:
+  `<PREFIX>-<id>` / `vt-<id>` / `#<id>` for tasks, `owner/repo#123` for
+  PRs, a repo path (`internal/web/foo.go:64`), an attachment's filename.
+- **Unknown arguments are a 400** naming the key and the accepted set —
+  read the error, fix the call, never retry the same shape.
 
-- `get_work_time {from,to,project?,taskId?,scope?,timezone?}` reads the
-  measured ledger without manual timesheet entry. Use RFC3339 period bounds
-  (maximum 93 days), `scope:"mine"|"team"` and an IANA timezone for day groups.
-  Omit project for the current workspace overview; tenant binding remains
-  ambient. A task id rolls up its descendants once and includes forecasts.
-- Human effort, agent active effort, tool subsets, waiting and unknown coverage
-  remain separate. Never add tool seconds to agent seconds or present observed
-  intervals as model compute. Reports omit individual activity rows; inspect
-  a known event with `get_work_evidence {project,event}` only when needed.
-  Evidence requires its owner or an authorised manager, and manager reads
-  are audited. Restricted agent/share credentials do not gain member rights.
-- `get_work_forecasts {project,taskId}` reads immutable optional override
-  history. Effective forecasts are in `get_work_time`: human involvement with
-  agents, the human-only counterfactual and agent effort have distinct ranges
-  in seconds. Null means unknown/automatic; zero is real. Story points stay
-  in their existing units. Automatic capture uses the local collector/CLI
-  REST integration; do not manufacture work intervals through MCP.
+## The doors
 
-## Vocabulary
-
-- **State groups** are universal: `backlog · unstarted · started · completed ·
-  cancelled`. A project's **states** (`list_states`) are keys inside those
-  groups; every project starts with the six legacy statuses as states, so
-  `status` still works and is derived from the state's group.
-- **Types**: `task · bug · story · epic · todo · qa · journey · meeting` — the ONE
-  enum, generated into every MCP schema from `store.TaskTypes` (`type` on
-  create/update, `appliesTo` on fields, `types` in the filter). An `epic`
-  is a container (children by `parentId`, the feature preset), a `story` a
-  user-facing slice, a `bug` a defect, a `task` engineering work; a parent
-  task rolls its children up. A `qa` task is a feature's TEST PLAN (child
-  of the epic, the `qa` preset: `scope · roles · verdict · coverage`), a
-  `journey` one user path inside it (child of the qa task, the `journey`
-  preset: `key · role · route · flow · steps · expected · verdict · test`), a
-  `meeting` a recorded meeting promoted from the diary (the `meeting`
-  preset: `attendees · date`, plus the shared `decisions` checklist —
-  see "Meetings" under Asking Eve) — see
-  "The feature lifecycle" below. Each type has a fixed icon + colour (overridable per
-  project in Settings → Projects) so the list reads at a glance. A `todo` is a personal reminder with a moment (milestone,
-  trigger, clock) — the `me` module's `/vitrinka:todo`, `todo-list`,
-  `todo-done`, `todo-milestone` and `remind` skills own that shape
-  (`vitrinka me todo|schedule`); file engineering work as `task`.
-- **Labels** have three doors, all REST twins: `labels` on `create_task`
-  (the initial set) and on `update_task` (REPLACES the set), and
-  `label_task {id, add, remove}` for increments — the one to use when
-  another agent may be labelling too. Labels are created on demand by
-  name (`list_labels` to see them). **`eve-*` is a reserved namespace**:
-  those labels are Eve triggers wired to built-in rules (`eve-distill`,
-  `eve-summarize` — see "Asking Eve"); never invent an `eve-*` label for
-  your own bookkeeping.
-- **Unknown arguments are a 400**, not a silent drop: the MCP checks every
-  top-level key against the tool's schema before dispatch and names the
-  key and the accepted set; the `agent_calls` row records the rejection.
-  Read the error, fix the call — never retry the same shape.
-- **Rank** is a string; `rank_task {before, after}` moves, `list_tasks` with
-  the filter document `{order: "rank"}` reads it.
-- **Refs** attach a task to the evidence: `add_task_ref {kind, ref, meta}`.
-  Kinds: `session · shot · board · file · pr · run · commit` for evidence,
-  the typed attachments `transcript · conversation · brainstorm · plan ·
-  handoff · decision · distill`, and `final` (the composed feature page,
-  versioned). A `commit` ref is `owner/repo@sha` and is attached by the
-  GitHub App's `push` event for every commit whose message names the task
-  (`Vitrinka-Task:` trailer or subject prefix — the per-repo hook
-  `vitrinka setup` installs writes them); never add one by hand. A `pr` ref is `owner/repo#n`; the GitHub
-  App webhook attaches it for branches or PRs carrying `vt-<id>`, and
-  `meta.merged = true` completes the task through a built-in rule. A
-  `file` ref is a URL, never a path: a path on your machine opens nowhere
-  else and the door refuses it (422). Put the file in workspace storage
-  instead — `vitrinka task upload <id> <files…>` streams anything from
-  disk, `upload_task_file {id, filename, content, kind?, hint?,
-  versionOf?}` takes small text inline (1 MiB, `.md .txt .json .csv .html
-  .yaml .log .diff .patch`) — and the ref lands as
-  `https://…/uploads/tasks/<id>/<rand>.md` with `meta {filename, mime,
-  size, sha256, hint?, tokens, harness?}`, shielded from retention for as
-  long as the task lives. Evidence serves as a download (attachment, never
-  inline HTML) — it opens from any machine, it does not render in the tab.
-- **Attachments are a versioned document store** — nothing is ever
-  replaced. The same task + kind + `meta.filename` uploads as a new
-  `version` (1…n); `versionOf: <refId>` names the lineage explicitly.
-  `get_task {include:[refs]}` and `GET /tasks/{id}/refs` list the LATEST
-  per lineage (`?history=1` for every version). A `distill` carries
-  `derivedFrom {id, version}` — the exact source version it digests, so
-  staleness is visible: a distill derived from transcript v2 when v3 exists
-  is out of date. Write a `hint` on everything you attach ("load when
-  resuming the auth work", "read before touching the migration"): the
-  index is what the next agent reads, and `tokens` tells it the price.
-- **Every task carries its ONE link**: `url` (the project page with the task
-  panel open, workspace-scoped) comes back from `create_task`, `get_task`,
-  `update_task` and every list row — hand it back exactly as returned when
-  you file something; never guess, shorten or compose a route.
-- **Custom fields** are per-project typed definitions (`list_fields`: key,
-  kind, options, `appliesTo`) whose VALUES ride the task as `fields:
-  {key: value}` on `get_task`, `create_task` and `update_task` (partial
-  merge — pass only the keys you change, `null` deletes). Kinds and value
-  shapes: `text · longtext · url` string · `select` one of the options ·
-  `multiselect` string[] · `checklist` `[{name, done, evidence?, kind?: human|action|date, at?: YYYY-MM-DD, who?: actor name}]` ·
-  `number` · `date` "YYYY-MM-DD" · `relation` a task id. A definition
-  applies only to its `appliesTo` type; every project carries the
-  **feature preset on epics** — `outcome`, `non_goals`, `gates` and
-  `decisions` (checklists: tick `done` WITH `evidence`), `ledger_state`
-  (`scheduled` by default · `active · waiting · superseded · closed`),
-  `waiting_on`, `next_action`. A gate's `kind` says who resolves it —
-  `human` waits on a person (it surfaces in their My Work and brief —
-  `who` names that person the way `assignee` does, else the task's
-  assignee, else its reporter), `action` on work (ticked by evidence),
-  `date` on a calendar date
-  (auto-ticked when `at` is reached). The filter document takes `fields:
-  {key: value}` for select/multiselect. Defining fields
-  (`create_field · update_field · delete_field`) is admin-only.
-- **Intake drafts** are tasks with `intake = pending`. They never appear in
-  normal lists; `list_intake` shows them with a dedupe verdict
-  (`new | likely-duplicate` + candidate tasks and trigram scores).
-
-## Filing work
-
-- **You are sure it is a task** → `create_task` (or `vitrinka task create`).
-  Attribution rides your token; never pass `reporter` unless you replay
-  history with an admin token.
-- **You are proposing** — a session distilled into findings, a "file these"
-  from a chat, an annotation → `propose_tasks {project, source, drafts}`.
-  The pipeline dedupes each draft against open tasks and stores the verdict;
-  a human (or an agent token) accepts, declines or merges with
-  `intake_verdict`. Say which drafts came back `likely-duplicate` and of what.
-- **Filing from a bug report** happens on approve without you: the report
-  becomes an accepted `bug` task, then the tracker ticket mirrors it.
-- **Filing from a board card** is the human's door — the card's context
-  menu "File a task from this card" (`POST /api/v1/cards/{id}/task`): the
-  draft carries a board ref pinned to the card (`meta.cardId`, the panel's
-  Evidence row links back), and an accepting reviewer gets the task
-  projected onto the same board as a live task card. The agent-side twin is
-  `propose_tasks` + `add_task_ref {kind:"board", ref, meta:{cardId}}`; the
-  reverse hand (task → canvas) is the task panel's "Pin on <board>" or
-  `POST /api/v1/boards/{slug}/task-cards {taskId}`. A whole board belongs
-  to a task through `add_task_ref {kind:"board", ref, meta:{board:true}}`
-  (a bare cardId-less ref counts too; meta merges, so a card-level ref keeps
-  its cardId) — the board's breadcrumb then leads back to it, and `GET
-  /api/v1/boards/{slug}/tasks` lists a board's tasks (explicit links as
-  themselves, card-level ones as their top-most ancestor, `direct` +
-  `linked`); the crumb's "Link task" is the human's twin.
-
-## Planning an epic
-
-An epic is a tree the engine holds, not a document you keep in your head.
-Read `get_brief` first, then build it in this order and read it back:
-
-1. `create_task {type:"epic", title, body, labels, fields}` — the title
-   is a sentence, never an id prefix or a kebab slug (`create_task` lints
-   that and says so); fill the feature preset (`outcome`, `non_goals`,
-   `gates`, `decisions`) instead of restating it in the body.
-2. Children: `create_task {parentId: <epic>, type: task|story|bug,
-   title, labels}` per slice — one task per deliverable, sized for one
-   session. `todo`s are personal; they are not planning.
-3. Order and dependencies: `create_task_link {from, to, rel:"blocks"}`
-   for hard ordering, `relates` for context; `rank_task` for the working
-   order inside a state.
-4. Labels: the initial set on create, increments with `label_task {id,
-   add:[…]}`; `eve-*` only when you WANT Eve to act.
-5. Schedule: `update_task {sprintId | milestoneId}` on the children (an
-   epic itself is rarely in a sprint).
-6. Materials: the brainstorm log, the decision log and the plan go on the
-   EPIC as attachments (`upload_task_file {kind: brainstorm|decision|plan,
-   hint}`), never only on a board.
-7. Read it back: `get_task {id:<epic>, include:[children, links, refs]}`
-   — the children with their state, the link graph and the attachment
-   index in one bounded call — and hand the epic's `url` back.
-
-**Reading attachments progressively**: the index (`include:[refs]`) is
-free — kind, hint, tokens, version, derivedFrom. Load bytes only when the
-hint says the work needs them and `tokens` fits the budget:
-`read_task_ref {id, ref, budget}` returns raw content under the budget;
-over it, or with a `question` ("what did we decide about retries?"), Eve
-distills that ONE version — the reply is `{distilled: true, content,
-citations: [{ref, version, at, quote}]}` and nothing is stored (file it
-yourself with `upload_task_file {kind: "distill"}` when it should stay).
-Without an AI backend the door returns the head and `truncated: true` (a
-question answers 501 carrying that head) — say so rather than guessing
-the rest.
-
-## Working a task
-
-1. `get_task {id, include:[refs, comments, events, links]}` for the row
-   plus each bounded page you actually need (the bare row by default);
-   `list_comments` pages the conversation further, `GET /tasks/{id}/events`
-   the history. Materials you produce while working it (a decision log, a
-   handoff, a report) go on the task, not on a board first: `vitrinka task
-   upload` or `upload_task_file` with the right `kind` and a `hint`.
-2. Move it with `update_task {state}` (or `status`), assign, date, estimate.
-   `bulk_update_tasks {ids, patch}` moves up to 200 in one transaction —
-   all or nothing.
-3. Talk on it with `create_comment`; `@name` reaches that person's My work.
-4. Relate it: `create_task_link {rel: blocks|relates|duplicates|supersedes|custom}`;
-   `delete_task_link` by link id. `supersedes` is the revision rel (a
-   story that revises an earlier story — "The feature lifecycle").
-5. Bind your run to it: `vitrinka task start <id>` (or `POST /tasks/{id}/runs
-   {sessionId}`) the moment you pick a task up, and `vitrinka task stop <run>
-   --summary …` when you put it down. A live run is how the team SEES you
-   on the plan: the brief's NOW row and the task card say `claude-code · 41m`,
-   the people rail lists you beside the humans with what you hold, and the
-   Thread tab reaches your session. A run left open is ended by the server's
-   sweep after 12 h of silence. On a checkout whose branch, worktree path or
-   HEAD commit trailer names `vt-<id>`, the hooks `vitrinka setup`
-   registers do this for you: the session opens as that task's live run and
-   ends it on exit — `task start|stop` stays the manual door.
-
-## Keeping the tree true
-
-Three verbs, one per moment, so the task stays true without end-of-session
-bookkeeping:
-
-- **Pickup before touching code** — `get_task {id, view: "pickup"}` (the
-  `pickup` skill, `vitrinka task pickup`): last hand-back, branch, read-first
-  refs, open children in rank order, what was not loaded. Never the whole tree.
-- **Spot files a child NOW** — anything you will not do in this change (a
-  defect, a follow-up, a `Decide:` a human owns) is `spot {project, title,
-  parentId?}` the moment you see it (the `spot` skill, `vitrinka task spot`),
-  never a comment; with no task bound it lands under the project's rolling
-  `Found during implementation` epic, `production: true` when a user could
-  hit it.
-- **Hand back through `hand_back`** (the `handoff` skill, `vitrinka task
-  handback`): one call files next as children, versions the summary, lands
-  refs; print its `rendered` block verbatim as the chat hand-back.
-- **Status moves by itself** — run start → in progress, PR open → in review,
-  PR merged → done. `update_task {status}` only to correct or reopen.
-
-## The feature lifecycle
-
-One epic is the feature's whole record — brainstorm, decisions, PRs, QA
-plan, sessions, commits, final artifact, revisions — and every recipe
-below hangs its output on it. The brainstorming skill files the epic
-(brainstorm board as a `board` ref, decision log as a `decision` ref);
-`/prm` attaches the PR and, at merge, runs **QA plan**; the publisher and
-`usertest` link boards and sessions to the journeys (`vitrinka task
-resolve-qa`); the final artifact and revisions close the loop.
-
-### QA plan (at `/prm` merge — the implementer drafts, Eve refines, a human accepts)
-
-1. Find the epic: the branch's `vt-<id>` → `get_task` → climb `parentId`
-   to the `epic`. An epic with an OPEN `qa` child already has a plan
-   (`vitrinka task resolve-qa --task <epic>` exits 0): add journeys to it
-   (below), never a second qa task.
-2. Draft from three sources you already hold: the decision log
-   (`docs/specs/*-decisions.md`), the merged diff, the e2e specs the PR
-   added or changed. ONE `qa` draft + one `journey` draft per user-visible
-   path — a journey is what a tester walks (3–12 steps), keyed by
-   kebab-case user intent (`fields.key` — the journey registry IS the
-   project's `journey` tasks; check `list_tasks {f: {types: ["journey"]}}`
-   before minting a key twice),
-   with `role` from the qa task's `roles`, the `route` it starts on, the
-   `flow` (the walk, below), the `expected` outcome and the `test` spec
-   URL when one exists. `route`, `test` and a step's `at` are url fields:
-   ABSOLUTE URLs only — a relative path is refused with "expects an
-   absolute URL":
-   ```json
-   propose_tasks {
-     "project": "acme",
-     "source": { "kind": "qa-plan", "ref": "acme/acme-web#612" },
-     "drafts": [
-       { "key": "plan", "type": "qa", "title": "QA plan — Feature lifecycle", "parentId": 392,
-         "fields": { "scope": "commit hook, publisher auto-link, QA plan step", "roles": ["admin", "member"] } },
-       { "key": "commit-trailer", "parentKey": "plan", "type": "journey",
-         "title": "A commit on a vt- branch carries the trailer",
-         "fields": { "key": "commit-trailer", "role": "member", "route": "https://app.acme.example/w/acme/p/web/t/401",
-                     "flow": [
-                       { "id": "commit", "do": "commit on feat/vt-401-x", "see": "the hook wrote the Vitrinka-Task trailer" },
-                       { "id": "delivery", "do": "open the task's Delivery row", "see": "the commit appears as a commit ref within a minute" },
-                       { "id": "missing", "kind": "verify", "do": "no trailer on the commit", "see": "the Delivery row stays empty", "next": "fix-trailer" }
-                     ],
-                     "expected": "the commit appears as a commit ref within a minute",
-                     "test": "https://github.com/acme/acme-web/blob/main/e2e/commit-hook.spec.ts" } }
-     ]
-   }
-   → { "drafts": [ { "id": 430, "key": "plan", … }, { "id": 431, "key": "commit-trailer", … } ] }
-   ```
-   (ONE call: every draft may carry a `key`; a journey names its qa draft
-   with `parentKey` — an earlier draft of the same batch — while the qa
-   draft's `parentId` is the epic. `parentId` is always a task id, live or
-   a still-pending intake row; never a position. Declining the qa draft
-   declines its pending journeys; accepting a journey accepts a pending
-   qa draft first.) The pipeline dedupes, Eve's `pm-qa-plan` flow refines
-   flow/expected and may ADD journeys when a backend is configured
-   (fail-open — the drafts are usable as filed), and a human accepts from
-   the intake queue. A `qa-plan` batch answers only after Eve's pass, so
-   the call may block up to 60 s. Never accept your own QA plan.
-3. Hand back the qa task's `url` and stop there: the qa board is
-   composed AFTER the human accepted the plan.
-
-**The flow is the walk, one step per node of the plan's picture.** A step
-is `{id?, kind?, do, at?, see?, locator?, next?}`: `do` is ONE action a
-tester performs, `see` the one sentence that proves it, `kind` `act`
-(default) · `verify` (a pure check) · `wait`, `at` only when the step
-happens somewhere other than the journey's `route`, `locator` free text a
-runner-backed test may use. A journey is linear; a branch is ANOTHER
-journey — a step's `next: "<journey-key>[#<step-id>]"` sends the walk
-there, and the LAST step's `next` is where it continues (looping back to a
-start is fine). Write `flow` only, never `steps`: the server derives the
-tick list from it. The server compiles every journey's flow into the qa
-board's living diagram — never hand-author a diagram for a plan.
-
-The other legal birth of a qa task is a **run**: `vitrinka qa run -- <test
-command>` (a runner's own JUnit / Playwright / allure / wdio output, folded
-for you), `vitrinka qa usertest … finish` (an exploratory session), `vitrinka
-run publish <manifest>` (a manifest a runner already wrote) or MCP
-`publish_run {id, manifest}` turn a run into a LIVE qa task (`intake_source
-run:<runId>`) with one `journey` per spec key, verdicts, steps, the qa board
-and the evidence refs — no draft, no acceptance, because the journeys are
-the specs that ran. A run with no task in context lands under the project's
-rolling **Unplanned runs** epic; re-parent its qa task by hand when the
-feature exists. When such a plan already exists, this merge-time recipe ADDS
-journeys to it (`parentId` the existing qa task) and never files a second qa
-task.
-
-### Journeys (working the plan)
-
-- **The board**: `qa_board {id: <qa task>}` (`POST /tasks/{id}/qa-board`)
-  creates or returns the qa task's ONE board in the `testing` subgroup —
-  a "Plan" section holding the living journey diagram
-  (`payload.source {kind: "journeys", task}`; lanes = roles, each
-  journey a group of its flow steps with verdict tone, edges = step order,
-  `next` references and `blocks`) and one section
-  per journey named after its title. It answers `{board: {slug, url},
-  diagramCardId}`; usertest and session boards attach beneath as refs,
-  never replace it. From a terminal: `vitrinka task qa-board <id>` (the
-  board URL on stdout, `--json` for the reply).
-- **Verdicts** live on the journey: `update_task {id, fields: {verdict:
-  pass|fail|partial}}`; the qa task's `coverage` checklist and `verdict`
-  roll up from its journeys on read — never write them.
-- **Evidence**: a recorded session → `add_task_ref {id: <journey>, kind:
-  "session", ref: <session board slug>}`; a board section →
-  `add_task_ref {kind: "board", ref: <slug>, meta: {section: "<title>",
-  journey: <journeyId>}}` (the publisher does both when it can resolve
-  the journey by registry `key`, else exact title).
-- **A failing journey files its bug**: `propose_tasks {source: {kind:
-  "journey", task: <journeyId>}, drafts: [{type: "bug", …}]}` (or
-  `create_task` when the user is sure), then `create_task_link {from:
-  <bug>, to: <journey>, rel: "blocks"}` — the diagram paints that edge and
-  the verdict stays `fail` until the bug closes.
-- **Editing a journey** IS editing the task: `update_task {title, fields:
-  {flow, expected, route}}` (ticking a step is `steps[i].done`; the names
-  stay derived from `flow`); the diagram node's inline edit is the
-  human's twin (`PATCH /cards/{id}/journey-node {journey, title?,
-  flow?, steps?}`) and writes the same row. After a batch of edits,
-  `refresh_card {id: <diagramCardId>}` redraws the diagram from the
-  tasks; positions a human dragged survive.
-- **Adding a journey later** (a PR extends the feature): a further
-  `journey` draft under the existing qa task through the same
-  `propose_tasks {source: {kind: "qa-plan", ref}}` door — never a second
-  qa task for the same feature.
-
-### Revisions (months later)
-
-A revision is a `story` under the SAME epic, `create_task_link {from:
-<new story>, to: <old story>, rel: "supersedes"}`, with its own `qa`
-child (the QA plan recipe, `parentId` the story) — the feature's history
-stays in one record. `ask_task {id: <epic>, question}` reads the epic's
-descendants by default (`scope: "tree"`, bounded, newest first); pass
-`scope: "task"` for the row alone.
-
-### Final (the feature record)
-
-`compose_final {epic}` (`POST /tasks/{epic}/final`) composes the
-`feature` board — Outcome · Decisions (log + brainstorm board portals) ·
-Architecture (diagrams refreshed) · Journeys (diagram + verdicts) ·
-Delivery (PRs, commits, releases) · Revisions — and the readable `page`,
-deterministically from the epic's refs; Eve's `pm-final` narration is
-added when a backend is configured (fail-open). The page lands on the
-epic as a versioned `final` ref: re-running bumps the version, never
-replaces. Run it when the epic closes and again after each revision;
-hand back the board URL the door returns. From a terminal: `vitrinka
-task final <epic>` (prints the board URL and the final ref version).
-
-## References in bodies
-
-The server reads every task body once and hands back `bodyRefs` on the
-single-task read (`get_task` / `GET /tasks/{id}`): the panel turns them into
-links and you get the same resolved targets, so write bodies in this grammar
-and never paste hand-built URLs for things the project already knows:
-
-- a task: its key `<PREFIX>-<id>` (the project's first three letters, e.g.
-  `FIX-409`), `vt-409`, or `#409` (the bare form resolves only when 409 is a
-  live task of this project);
-- a pull request: `owner/repo#123`;
-- a repo path: `docs/specs/x.md`, `apps/client/app`, `internal/web/foo.go:64`
-  (an optional `:line`) — linked over the project's declared repository;
-- an attachment: its filename (`plan.md`, or the path it was uploaded as) —
-  an attachment name wins over a repo path of the same name.
-
-Anything inside a code fence or backticks stays literal. Each ref carries
-`kind` (`task · attachment · pr · repo · path`), the matched `text`, and
-`id` · `refId` · `url` for its kind; `path` means the project has no
-GitHub-shaped repo, so the text stays plain.
-
-## Finding work
-
-- `summarize_tasks {project, groupBy, f}` computes exact counts on the server,
-  grouped by canonical `state` key (default), `type`, or `priority`. Use it for
-  counts and status reports instead of listing every task and counting in the
-  model. It uses the same filter document as `list_tasks`, excludes pending
-  intake unless requested, and refuses more than 100 groups instead of silently
-  truncating. Read actual task rows only for the details the report needs.
-- `search_tasks {q}` — FTS5 over titles and bodies, relevance-ranked, with
-  snippets. `list_tasks` narrows by status/assignee/sprint/parent and takes
-  the **filter document** (`f`: states, groups, types, priorities,
-  assignees, labels, sprint, milestone, parent, intake, due/start spans,
-  text, order, group/subgroup) — the same document saved views store
-  (`list_views`).
-- `search {q, groups?, project?, type?, state?, tags?, limit?}` — the
-  workspace-wide search in ONE call: `tasks` (any type, epics included),
-  `pages` (page/doc cards), `boards`, `tags`, `cards`, `sessions`, `shots`,
-  each ranked and bounded on the server, `totals` counting what came back.
-  Reach for it when you do not yet know whether the thing is a task, a page
-  or a board; `search_tasks` stays the task-only door. Every task and page
-  hit carries `url` — print it as returned, never compose a link. An unknown
-  `type` or `state` is an empty group, not an error. CLI: `vitrinka search
-  <text> [--groups tasks,pages] [--project] [--type] [--state] [--json]`.
-- `resolve_url {url}` — a pasted app link (task, project, board or card
-  page, on any origin) resolved to what it names, in ANY workspace the
-  signed-in user belongs to, without switching: `kind`, `workspace` (slug ·
-  name · accent · logoRef), `title`, `subtitle`, the canonical `url` and
-  `foreign` (outside the current workspace). A link the user cannot see is
-  one 404, whatever the reason. Needs a user credential. CLI: `vitrinka
-  resolve <url>`.
-- `search_project {project, kind, q, limit, task}` — the ONE project search: boards
-  (default), tasks or pages, FTS candidates reranked by title similarity and
-  scoped like the list doors. Hits carry `kind · id · slug · title · subgroup
-  · score · recent · pinned` — `recent` is the project's five most recently
-  updated boards, `pinned` (given `task`) the boards already carrying that
-  task. Use it to find the board to pin a task on or to resolve a board a
-  human named loosely; an empty `q` lists boards most recent first.
-- `my_work` — the caller's assigned · created · mentioned · overdue, across
-  projects, 50 each.
-- `my_favorites {scope?, folder?}` — the caller's bookmark tree, what the
-  operator keeps close: two roots, `personal` and `workspace` (shared by
-  every member), folders nested, loose stars as `rows`. A row is `kind`
-  (board · card · session · task · project), `id`, `key`, `title`, `url`
-  (print as returned) and `project` — no thumbnails, no timestamps. Read
-  it at pickup to see what the person is working around; `scope` narrows
-  to one root, `folder` (an id) to one subtree. CLI: `vitrinka fav list
-  [--scope personal|workspace] [--json]`.
-- `favorite {entityType, entityId? | entityKey?, scope?, folder?}` /
-  `unfavorite {entityType, entityId? | entityKey?, scope?}` — star or
-  unstar through the same door the ★ button uses. Id-keyed kinds go by
-  `entityId`, a project by `entityKey` (its slug, e.g. `acme`); `scope`
-  defaults to the workspace's default star scope (a workspace star needs
-  member access); `folder` is a folder id or a NAME — an unknown name is
-  created under that scope's root. Starring again re-files, never
-  duplicates; unstarring what is not there is a no-op. Star only what the
-  user asked to keep close — a bookmark is theirs, not a way to leave
-  notes. CLI: `vitrinka fav add|rm <kind> <id|slug> [--scope] [--folder]`.
-- `get_brief {project}` — **read this before planning anything in a
-  project.** The project home as one bounded document: `now` (overdue ·
-  the caller's in-motion work · blocked, each with a `why` line and its
-  live `runs`), `next` (what to pick up), `blocked` (with blockers),
-  `since` (what changed since the caller last looked — counts + events),
-  `people` (humans AND agents with what each holds), the sprint ledger,
-  Eve's cached `narration` and the pending plan `proposals`. It replaces
-  listing a project and reasoning over the rows.
-- `list_proposals {project}` / `proposal_verdict {id, verdict}` — Eve's
-  plan proposals (`split` · `reorder` · `estimate` · `close` · `merge`) wait
-  as intake drafts with source `eve:plan`; accept applies the change through
-  the engine, decline closes it. Give a verdict only when the user asked you
-  to triage; never accept your own proposals.
-
-## Asking Eve
-
-- `ask_task {id, question, intent?}` — the one question door over a
-  task's WHOLE corpus: row, fields, comments, events, every attachment
-  version, linked boards and the PR through the connector. The answer
-  carries citations `[{ref, version, at, quote}]`; relay the citation, not
-  just the prose, when the user asks "why". `intent` is optional free text
-  (default `developer`; suggested `developer · product · qa · reviewer ·
-  onboarding`) — it shapes the answer and lands in the ledger beside your
-  actor. Inert without an AI backend (the door says so; do not loop).
-- **Trigger labels** are rules, not a second automation engine — put them
-  on through `label_task {add: ["eve-distill"]}`: `eve-distill` runs once
-  per label add and writes a `distill` ref (`distill.md` lineage, derived
-  from the latest transcript/PR version, hint and tokens stamped) plus ONE
-  eve comment with the run link — a re-add is the next VERSION, never a
-  replacement; `eve-summarize` keeps a live summary (`summary.md` lineage,
-  `meta.mode = summary`) while the label is on: every task event re-fires
-  it, coalesced per task in a 5-minute quiet window, capped at 20 runs per
-  project per UTC day — one "✦ Eve summarize paused: daily budget reached"
-  comment when the cap hits; remove the label when the task settles. While
-  a flow runs the task carries a live run by actor `eve` ("Eve is working
-  on …"). The `eve-*` namespace is reserved: a user rule that adds or
-  removes one is refused (400). Eve reads and writes refs and comments
-  ONLY — never code, never a state change, never a PR comment.
-- **Meetings** — a recording made with Snap lands on the recorder's
-  personal diary as a `meeting` card (audio + timestamped transcript) and
-  stays private until its owner promotes it: `promote_meeting {card,
-  workspace?, project}` (`vitrinka me diary promote <card> --project <p>
-  [--workspace <ws>]`) files a `meeting` task (preset `attendees · date ·
-  decisions`) with the recording, `transcript.json` and a readable
-  `transcript.md` (`[mm:ss] text` lines) as `file` refs, and links the
-  card to it — a second promote answers the same task. The diary lives in
-  the recorder's PERSONAL workspace and a team project in another:
-  `workspace` names the destination (member+ there; the CLI defaults to
-  the bound workspace) and the project must already exist there (404
-  otherwise — promote never creates one). The reply is the task with its
-  `refs` and the `workspace` it lives in: address every later task call
-  there (`vitrinka task meeting-notes <id> --workspace <ws>`, an MCP bound
-  to that workspace, or REST with `X-Vitrinka-Workspace`); a 404 from the
-  personal tenant means the wrong workspace, not a missing task. Then
-  `meeting_notes {task, board?}` (`vitrinka task
-  meeting-notes <id> [--board] [--workspace <ws>]`) runs Eve's pm-meeting flow over the
-  transcript: a versioned `notes` ref (`meeting-notes.md` lineage), a
-  `summary.md` distill, the `decisions` checklist, and every action item as
-  a PENDING intake draft with source `eve:meeting` — triage them through
-  the intake door, never accept your own. `board: true` composes the
-  meeting board (Summary · Decisions · Action items · Transcript excerpt)
-  and links it as the task's board ref. 409 means the transcript is still
-  pending on the diary side; 501 means no AI backend — do not retry.
-- `vitrinka qa session continue <task>` prints the latest distill as a
-  `/continue`-shaped brief — the thing to read before picking up someone
-  else's session (the `sessions` skill has the archive side).
-
-## Sprints
-
-`create_sprint`, then `POST /projects/{p}/sprints/{id}/start`;
-`…/complete {carry: next|backlog, next?}` closes it and carries unfinished
-tasks. Sprints are history: no delete, ever.
-
-## Automation
-
-Rules are typed documents — `{trigger, conditions, actions}`, vocabulary at
-`GET /api/v1/rules/schema`. Author one from a request in natural language,
-then ALWAYS `dry_run_rule` and show what would have fired over the last
-events before enabling it (`PATCH /rules/{id} {enabled: true}`). Five
-built-ins ship enabled and need no AI backend: `stale-nudge`,
-`auto-archive-completed`, `due-tomorrow-reminder`, `merged-pr-completes`
-and `gate-date-reached` (ticks a `date` gate once its `at` arrives).
-Rule actions run as `rule:<name>` and never re-trigger rules. Creating or
-enabling a rule is admin-only (a member token gets 403); dry-run is open to
-members inside the rule's own project.
-
-## Mirror
-
-A project may mirror into Jira (`GET|PUT /projects/{p}/mirror {connector,
-truth: local|remote, config.stateMap}`, `POST …/mirror/sync`). The truth
-side wins every conflict; the ledger records what was overwritten as a
-`mirrored` event. Do not "fix" a conflict by editing the losing side — say
-which side is truth and let the next sync settle it. Binding the mirror and
-running a sync are admin-only.
-
-## Moving a project between workspaces
-
-`transfer_project {project, to, dryRun, archiveSource, merge}` / `vitrinka
-project transfer <project> --to <workspace> [--dry-run] [--archive-source]
-[--merge]` copies everything the project owns (sets, boards, sessions,
-reports, releases, the PM engine, blobs) into a workspace the caller also
-OWNS — `to` is the destination, never the caller's tenant. Dry-run first and
-show the report; the copy is idempotent (re-runs report `skipped`), a
-colliding board slug or set key is a 409 naming it, and nothing is deleted:
-`archiveSource` only stamps the source boards archived. When the destination
-ALREADY has a project of that slug, `merge` reconciles instead of refusing:
-vocabulary (states, labels, fields, sprints, milestones, views, rules) maps
-onto the destination's rows of the same key (`merged` per table), content is
-appended with fresh ids, and a colliding board slug or set is renamed on the
-way in (`<slug>-from-<workspace>`; the report's `renamed` lists each) — show
-the dry-run renames before running it. Doctrine: `docs` topic
-`project-transfer`.
-
-## CLI
-
-```text
-vitrinka task list [--state a,b] [--group started] [--order rank] [--text …]
-vitrinka task get|create|update|comment|rank|search|delete|mine
-vitrinka search <text> · vitrinka search resolve <url>
-vitrinka fav list [--scope personal|workspace] [--json]   # the bookmark tree, as the server minted it
-vitrinka fav add <kind> <id|slug> [--scope personal|workspace] [--folder <id|name>] · fav rm <kind> <id|slug> [--scope]   # kind: board · card · session · task · project
-vitrinka task label <id> --add a,b --remove c · task link <from> <to> --rel blocks
-vitrinka task start [id] [--session id] [--summary …] · task stop <run> [--summary …]
-vitrinka task pickup <id|url> [--json]        # the bounded pickup view — start here, never from the whole tree
-vitrinka task spot "<title>" [--type bug|task] [--body …] [--priority …] [--parent <id>] [--production] [--ref kind:ref] [--label …]   # file what you will NOT do now; no parent → the rolling "Found during implementation" epic
-vitrinka task handback [id] --summary … [--done …] [--surface …] [--next "type:title"] [--omit "title::why"] [--decide "title::why"] [--prereq …] [--read-first <ref>] [--pr owner/repo#n] [--board <slug>] | - < body.json   # the ONE hand-back door; prints the chat block
-vitrinka task resolve-qa [--task <id>] [--json]   # the qa task a walkthrough belongs to (exit 4 = none: publish unlinked, say so)
-vitrinka task qa-board <id> · task final <epic>   # the qa task's board · the epic's final artifact (board URL on stdout)
-vitrinka qa run [--task <id>] [--bugs intake|direct|none] -- <test command>   # run + publish the results (qa task, journeys, verdicts, board, bugs)
-vitrinka qa usertest start|case|verdict|finish     # an exploratory session over `snap`, published the same way
-vitrinka setup --runners [--check]      # declare where each runner writes results
-vitrinka project commits [--subject on|off]      # commit convention: trailer always, subject prefix per project
-vitrinka workspace commit-prefix [bracket|bare|colon]   # the prefix style, workspace-wide (admin+)
-vitrinka task upload <id> <files…>          # any bytes → file ref (new version on the same name)
-vitrinka qa session archive <transcript.jsonl> --task <id> [--hint …]   # redacted, portable paths
-vitrinka qa session continue <id>              # latest distill as a /continue brief (+ native resume offer)
-vitrinka me brief [--project p]              # now · next · blocked · since · people · Eve suggests
-vitrinka task field get <id> [key] · task field set <id> <key> <value|json>
-vitrinka project fields list|add <key> <label> --kind …|update <key>|remove <key>
-vitrinka project transfer <project> --to <workspace> [--dry-run] [--archive-source] [--merge]
-vitrinka sprint list|create|start|complete --carry next|backlog
-vitrinka intake list|accept|decline|merge --into <id>|propose
-```
-
-## Never
-
-- Never file a task and a draft for the same finding — one door per item.
-- Never accept your own intake drafts unless the user asked you to triage.
-- Never enable a rule without a dry-run in the transcript.
-- Never bypass `status`/`state` validation by inventing keys; `list_states`
-  first. Same for custom fields: `list_fields` before writing `fields`, and
-  never tick a gate `done` without its `evidence`.
-- Never load a transcript blind: read the index, then `read_task_ref` under
-  a budget or with a `question`. Never put an `eve-*` label on a task for
-  bookkeeping — it fires a flow and spends credit.
-- Never overwrite an attachment: upload the new version and let the
-  lineage carry the history; never delete a version to "clean up".
-- Never end a bound task's work with a chat-only next-steps list — the
-  hand-back goes through `hand_back` and its `rendered` block is the chat.
+- **Intake is the ONLY way a draft becomes a task**: `propose_tasks`
+  (deduped, `list_intake` shows the verdict) → a human's `intake_verdict`.
+  Never file a task and a draft for the same finding; never accept your own
+  drafts unless the user asked you to triage. Eve's plan proposals
+  (`list_proposals` / `proposal_verdict`) follow the same rule.
+- **Pickup · spot · hand back** keep the tree true without end-of-session
+  bookkeeping: `get_task {view: "pickup"}` before touching code (pickup
+  skill), `spot` the moment you will not do something (spot skill),
+  `hand_back` to end (handoff skill — its `rendered` block IS the chat
+  hand-back). Status moves by itself (run → in progress, PR → in review,
+  merge → done); `update_task {status}` only to correct.
+- **Reading**: `summarize_tasks` for counts; `list_tasks {f}` with the
+  filter document (states, groups, types, priorities, assignees, labels,
+  sprint, milestone, parent, intake, spans, text, order) for rows;
+  `search_tasks` / `search` / `search_project` to find; `get_brief` before
+  planning anything in a project; `read_task_ref` under a `budget` or with
+  a `question` — never a transcript blind; `ask_task` for a cited answer
+  over the whole corpus (relay the citation).
+- **The feature lifecycle** hangs on the epic: the brainstorming skill files
+  it (board + decision refs); `/prm` attaches the PR and at merge drafts the
+  QA plan (a `qa` child with one `journey` per user path — `vitrinka task
+  qa-board` for its board, `vitrinka task resolve-qa` to find it from a
+  publish); `usertest` and `publish_run` write journey verdicts; `vitrinka
+  task final <epic>` composes the final artifact; a later `story` that
+  revises another links `supersedes`.
+- **Sprints** are history: `create_sprint` → start → `complete {carry}`; no
+  delete, ever.
+- **Rules** are typed documents (`GET /api/v1/rules/schema`): ALWAYS
+  `dry_run_rule` and show what would have fired before enabling; admin-only
+  to create or enable.
+- **Mirror** (Jira): the truth side wins every conflict; never "fix" a
+  conflict by editing the losing side.
+- **Transfer** (`transfer_project`): dry-run first, show the report and the
+  `merge` renames; doctrine `docs` topic `project-transfer`.
+- **Moving tasks between projects**: never recreate a task elsewhere (it
+  loses history, comments, attachments). `update_task {id, project}` moves
+  one, `bulk_update_tasks {ids, patch: {project}}` up to 200 in one
+  transaction; the target must exist (unknown slug → 422); a task moves WITH
+  its subtree; state, labels, fields, sprint and milestone remap by key
+  (missing keys are created in the target, the source vocabulary untouched);
+  `project` applies first, so a `state` or `fields` in the same patch
+  resolves against the target.
+- **Merging a whole project**: `merge_project {project, into}` folds one
+  project INTO another of the SAME workspace (tasks with history, boards,
+  sets, sessions, reports, releases, memory; the source becomes an alias so
+  old links keep working; a clashing custom field is renamed
+  `<key>_from_<source>`). A missing `dryRun` IS a dry run — read the report
+  first; the apply is an owner-person's call (agent token → 403): hand the
+  human `vitrinka project merge <old> --into <new> --apply`. Another
+  workspace is `transfer_project`.
+- **Favorites**: `my_favorites {scope?, folder?}` is the caller's bookmark
+  tree (roots `personal` and `workspace`, folders nested, rows {kind, id,
+  key, title, url, project}) — read it at pickup to see what the person
+  keeps close. `favorite` / `unfavorite {entityType, entityId | entityKey,
+  scope?, folder?}` star through the ★ button's door; starring again
+  re-files, never duplicates. Star only what the user asked to keep close —
+  a bookmark is theirs, never a note. CLI: `vitrinka fav list|add|rm`.
+- **Comments**: `create_comment` talks on a task; `@name` reaches that
+  person's My work, `@eve` asks Eve and her answer lands as a reply under
+  your comment; `parentId` replies inside a comment's thread (any depth);
+  `list_comments {root}` reads one thread whole.

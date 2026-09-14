@@ -1,17 +1,13 @@
 # Feature brief — template and caps
 
-The brief is the ONE document an implementing session (or a subagent) reads
-instead of the brainstorm. `compose_brief {id: <epic>}` returns it with the
-deterministic sections filled from the board's picks and every prose section
-holding a `<!-- skill -->` placeholder; the skill replaces each placeholder
-under the cap beside it. A brief that still carries a placeholder is visibly
-incomplete — that is the point of the marker; never delete one without
-filling it.
+`compose_brief {id: <epic>}` returns the brief with the deterministic
+sections filled from the board's picks and every prose section holding a
+`<!-- skill -->` placeholder; the skill replaces each placeholder under the
+cap beside it. Never delete a placeholder without filling it.
 
-**Trim, never append.** A cap is a hard ceiling: when a section would exceed
-it, cut the weakest lines until it fits. Do not add a "continued" section, an
-appendix, or a link to a longer version. If the feature genuinely needs more,
-it needs splitting into two epics, not a longer brief.
+**Trim, never append.** A cap is a hard ceiling: cut the weakest lines until
+it fits. No "continued" section, appendix, or link to a longer version — a
+feature that needs more needs splitting into two epics.
 
 Filename: `<topic>-brief.md`; a later pass uploads the next VERSION of the
 same filename (`upload_task_file` keeps the lineage), never a second file.
@@ -19,7 +15,7 @@ same filename (`upload_task_file` keeps the lineage), never a second file.
 ```markdown
 # <Topic> — Brief
 
-Epic: <url> · brainstorm <board url> (Plan chapter: scrape_board {section: "Plan"}) · log: docs/specs/<date>-<topic>-decisions.md
+Epic: <url> · brainstorm <board url> (Plan chapter: scrape_board {section: "Plan"}) · log: <date>-<topic>-decisions.md
 
 ## Intent
 <!-- skill --> 3 sentences: the problem, the outcome, who it is for.

@@ -2,135 +2,81 @@
 name: usertest
 description: "Test the current repo's app like a user and leave the QA record behind — one verb per lane: `vitrinka qa run -- <test command>` for runner-backed suites, `vitrinka qa usertest start · case · snap · verdict · finish` for exploratory sessions. Use for 'user test this', 'explore the new feature', 'QA this like a user', 'run the tests and publish'."
 metadata:
-  vitrinka-contract: "2026-08-30"
+  vitrinka-contract: "2026-09-14"
 ---
 
 # usertest — test like a user, let vitrinka keep the record
 
-Test the new functionality of the app in the CURRENT repo by driving it the
-way real users will — not by reading the code and declaring it plausible.
-Vitrinka owns everything after the test: attribution, linking, the qa task
-and its journeys, the board, the screenshots, the bug drafts. You own only
-what to try and what verdict it earned.
-
-Two lanes, one verb each. Both end in the same QA record, and neither needs
-a manifest, a board, a publisher agent or a task tool from you.
+Drive the app the way real users will; vitrinka owns everything after the
+test (the qa task and its journeys, the board, the screenshots, the bug
+drafts, the links). You own what to try and the verdict. Two lanes, one verb
+each; `vitrinka qa run --help` and `vitrinka qa usertest --help` carry the
+flags.
 
 ## Lane 1 — runner-backed: `vitrinka qa run -- <test command>`
 
-```text
-vitrinka qa run -- bun x playwright test e2e/checkout.spec.ts
-vitrinka qa run -- bun run appium:smoke
-vitrinka qa run --task 392 --pr acme/shop#41 -- bun test
-```
+The command runs verbatim (inherited stdio, its exit code is yours); vitrinka
+reads what it left behind — the repo's declared runners, else anything newer
+than the start: a `usertest-run-<id>.json` manifest, JUnit XML, Playwright
+JSON, `allure-results/`, wdio reports — and publishes it as the family's QA
+record: one journey per spec with verdicts and steps, the qa board, refs and
+one bug draft per failing case. Target: `--task <id>`, else the checkout's
+`vt-<id>`, else the project's rolling **Unplanned runs** epic. The same run
+id republished replaces its cards.
 
-`run` executes the command exactly as given (inherited stdio, its exit code
-becomes yours), then finds what it left behind and publishes it:
-
-- **Results** — the repo's declared runners (`vitrinka.config.json`
-  `runners[]`, written by `vitrinka setup --runners`) first, else
-  a scan for anything newer than the start: a `usertest-run-<id>.json`
-  manifest, JUnit XML, a Playwright JSON report, an `allure-results/`
-  directory, wdio JSON reports. `--results <path>` names one explicitly.
-- **Target** — `--task <id>` (a qa task, story or epic), else the
-  checkout's `vt-<id>` (branch, worktree path, commit trailer), else the
-  project's rolling **Unplanned runs** epic — a run never ends unlinked.
-- **The record** — the family's open qa task or a LIVE one created from
-  the run, one `journey` per spec, verdicts and steps written, the qa
-  board's journey sections with a run callout, the case checklist and the
-  screenshots, `run`/`board`/`shot`/log/`pr` refs, and one bug draft per
-  failing case `blocks`-linked to its journey (`--bugs direct|none` to
-  change that). The same run id republished replaces its cards.
-
-**Any runner, unchanged.** The command runs verbatim and vitrinka only reads
-what it left behind: JUnit XML alone covers Selenium, Cypress, Maestro,
-Detox, TestCafe, Jest, Go and a home-grown harness — no vitrinka reporter,
-plugin or test change is ever required. Playwright JSON, allure-results and
-wdio reports are read natively too.
-
-Screenshots reach the board when the runner writes them: Playwright's
-`screenshot: "on"` (or its JUnit `[[ATTACHMENT|…]]` lines), allure png
-attachments, or a reporter honouring the env `run` sets —
-`VITRINKA_RUN_ID`, `VITRINKA_RUN_DIR` (a scratch directory for this run),
-`VITRINKA_RUN_STARTED_AT`, `VITRINKA_SHOTS=always`.
-
-Never write a manifest by hand, never call `run publish` after `run`,
-never double-write verdicts or file bugs for cases the run covered — the
-door did. `--dry-run` shows the folded manifest without publishing.
+- Any runner, unchanged: JUnit alone covers Selenium, Cypress, Maestro,
+  Detox, Jest, Go and a home-grown harness. No reporter, plugin or test
+  change is ever required.
+- Screenshots reach the board when the runner writes them (Playwright
+  `screenshot: "on"`, allure png attachments) or through the env `run`
+  sets: `VITRINKA_RUN_ID`, `VITRINKA_RUN_DIR`, `VITRINKA_RUN_STARTED_AT`,
+  `VITRINKA_SHOTS=always`.
+- Never write a manifest by hand, never call `run publish` after `run`,
+  never double-write verdicts or file bugs the run covered.
 
 ## Lane 2 — exploratory: `vitrinka qa usertest …`
 
-```text
-vitrinka qa usertest start [--task <id>] [--app web] [--platform ios|android|web|macos] [--device "iPhone 17 Pro"]
-vitrinka qa usertest case "Admin creates a coupon, member sees it"
-vitrinka board capture ios --route /coupons --note "the new coupon in the member list"
-vitrinka qa usertest verdict pass|fail|skip [--note "what happened"]
-… more cases …
-vitrinka qa usertest finish [--pr owner/repo#n] [--bugs intake|direct|none]
-```
+`start [--task <id>] [--app web] [--platform …] [--device …]` opens the
+session; `case "<title>"` opens a case (one journey, keyed by the title's
+slug) and every `vitrinka board capture` until its `verdict pass|fail|skip
+[--note …]` attaches to it; `finish [--pr …] [--bugs intake|direct|none]`
+folds the session into a run and publishes it through lane 1's door. A
+`fail` carries `--note`: it becomes the bug draft's first line.
 
-- `start` opens the session (`.vitrinka/usertest-run.json`); `--task`
-  defaults to the checkout's `vt-<id>`, else `finish` files under
-  **Unplanned runs**.
-- `case "<title>"` opens a case; **every `snap` until its verdict attaches
-  to it** (the capture prints `attached to usertest case …`). One case is
-  one journey on the qa task, keyed by the title's slug (`--key` to pick).
-- `verdict` closes the case. A `fail` should carry `--note`: it becomes
-  the bug draft's first line.
-- `finish` folds the session into a run manifest under `.vitrinka/runs/`,
-  publishes it through the same door as lane 1 and prints the same
-  hand-back. `--dry-run` prints the manifest instead.
+The craft is yours:
 
-What goes into a session is your craft — the record is not:
+- **Build the role matrix first** from the app's own seeds, fixtures or
+  docs. Every multi-role feature gets its cross-role cell as its own case:
+  an entity created as role A appears to role B correctly and only as
+  permitted. A role you cannot seed is a `skip` with a note, never an
+  invented bypass. Never poke at production tenants.
+- **Edge cases are the job**: empty states, zero/maximum quantities,
+  unicode and long strings, concurrent edits, stale tabs, deleted referents,
+  permission revoked mid-flow, reload after every step.
+- **Understand before judging**: read the relevant code first. A contract
+  broken is a `fail` with the note; a silent or unclear contract is a `skip`
+  whose note says so — never guess a verdict.
+- **Snap what proves the verdict** (before, result, failure) and read every
+  image back before moving on.
 
-- **Build the role matrix first.** Enumerate the app's roles from its own
-  seeds, fixtures or docs (admin, member, guest, anonymous, …). Every
-  multi-role feature gets its cross-role cell checked as its own case: an
-  entity created as role A must appear correctly — and only as permitted —
-  to role B. Identities come from the app's own dev seeds; a role you
-  cannot seed is a `skip` case with a note, never an invented bypass.
-  NEVER poke at production tenants.
-- **Edge cases are the job, not the garnish.** Empty states, maximum/zero
-  quantities, unicode + long strings, concurrent edits, stale tabs,
-  deleted referents, permission revocation mid-flow, reload after every
-  step. A feature that only passed its happy path is untested.
-- **Understand before judging.** When behavior surprises, read the
-  relevant code before the verdict: a *bug* (contract broken) is a `fail`
-  with the note; a *gap* (contract silent) or a *question* (contract
-  unclear) is a `skip` whose note says so — never guess a verdict.
-- **Snap what proves the verdict** — the state before the action, the
-  result, the failure — and read every image back before moving on.
+## Tests worth keeping
 
-## Writing tests worth keeping
+Scenarios that proved something go into the repo's OWN test framework and
+conventions — never a second framework; no suite → a `skip` case noting the
+proposal, not an unasked scaffold. Then run them through lane 1.
 
-Scenarios that proved something belong in the target repo's OWN test
-framework and conventions (its Playwright/Appium/whatever suite — never a
-second framework; no suite at all → a `skip` case noting the proposal, not
-an unasked scaffold). Once written, run them through lane 1 so the record
-carries them as journeys with verdicts.
+## Fixes and blockers
 
-## Fix and blocker rules
-
-Small issues found mid-run get fixed in the run's worktree and noted in the
-case's `--note`; everything reaches main only through the normal PR flow —
-this skill never merges. Blockers resolve by taxonomy, and a blocked case
-never stops the others:
-
-| Blocker | Action |
-|---|---|
-| code bug in the target app | fix in the worktree, the case note links the commit |
-| missing seed/fixture data | create via the app's own dev seeding path |
-| env/infra/config | `skip` with the note, route around, continue |
-| destructive or migration-shaped | STOP that case (`skip`), continue others |
-
-"Safely resumable" is the test for any automatic resolution: if re-running
-the step after your intervention can't make things worse, proceed; anything
-irreversible waits for the user.
+Small issues found mid-run are fixed in the run's worktree and noted in the
+case; everything reaches main through the normal PR flow — this skill never
+merges. A blocked case never stops the others: a code bug → fix and link the
+commit; missing seed data → the app's own seeding path; env/infra → `skip`
+and route around; destructive or migration-shaped → STOP that case. Proceed
+on your own only when re-running the step cannot make things worse.
 
 ## Finishing
 
-Paste the hand-back block `run` / `finish` printed — the qa task `url`, the
-board `url`, one line per journey with its verdict, the bugs filed — exactly
-as returned; never compose or shorten a link. Add what was deliberately NOT
-covered (silent truncation reads as coverage), then leave the app running
-and hand-testable, and say which state it's parked in.
+Paste the hand-back block `run` / `finish` printed exactly as returned (the
+qa task url, the board url, one line per journey, the bugs filed); never
+compose or shorten a link. Add what was deliberately NOT covered, then leave
+the app running and hand-testable and say which state it is parked in.
