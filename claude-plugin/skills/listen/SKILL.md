@@ -12,8 +12,9 @@ screens on a vitrinka board; you fix each annotation in THIS repository,
 attach visual proof, and go back to listening.
 
 `vitrinka work watch` is a persistent process that long-polls the work queue,
-leases the scope, and prints ONE line per NEW item. `references/listening.md`
-is the ONE ladder every listening skill follows: a native background Monitor,
+leases the scope, and prints ONE line per NEW item.
+`docs {topic: "guide:listening"}` (CLI `vitrinka docs guide:listening`) is
+the ONE ladder every listening skill follows: a native background Monitor,
 the `vitrinka work listen --harness <name>` host, or — with neither — holding
 this turn on `wait_for_work`. Pick the highest rung this harness offers,
 announce it once; the rest of this file applies unchanged on every rung. A
@@ -76,7 +77,7 @@ work.
    and Gemini CLI keep their own project files. To act in ANOTHER workspace
    of the organisation, or on a workspace-level tool, spell the project
    `<workspace>/<project>` (a board `<workspace>/<slug>`).
-3. Your rung, per `references/listening.md`: the `Monitor` tool exists →
+3. Your rung, per `guide:listening`: the `Monitor` tool exists →
    rung 1; `VITRINKA_LISTEN_HOST` is set → rung 2 (the host already leases
    the scope — arm nothing); otherwise rung 3.
 
