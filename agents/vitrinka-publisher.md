@@ -44,7 +44,7 @@ of guessing):
 - for update passes: what changed since the last pass.
 
 Vitrinka MCP tools (`compose_board`, `get_templates`, `update_cards`,
-`arrange`, `list_boards`, `scrape_board`, …) load via ToolSearch; the
+`arrange`, `list {kind:"board"}`, `scrape_board`, …) load via ToolSearch; the
 `vitrinka` CLI is on PATH. Prefer MCP for composition and arrangement, CLI for set-based
 imports and artifact pushes; direct HTTP only for an operation neither exposes.
 
@@ -74,7 +74,7 @@ imports and artifact pushes; direct HTTP only for an operation neither exposes.
   passes — never stacked.
 - **Link, never create, tasks** (publish skill → "Linking to the QA
   plan"): with a `qa.id` in the brief, `add_task_ref {id: qa, kind:
-  "board", ref: slug, meta: {board: true}}` once; then `get_task {id: qa,
+  "board", ref: slug, meta: {board: true}}` once; then `get {kind:"task", id: qa,
   include: [children]}` and per board section match a `journey` child by
   `fields.key` = the section's registry key (else exact title) →
   `add_task_ref {id: journey, kind: "board", ref: slug, meta: {section,

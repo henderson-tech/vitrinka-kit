@@ -2,7 +2,7 @@
 name: artifact
 description: Author content on vitrinka — a standalone interactive document (report, analysis, dashboard), a Confluence-grade page card, an architecture diagram, or a whole living-docs board. Use for "artifact", "vitrinka this", "publish this analysis/report", "make this a page/diagram", "document this repo". Capturing UI work is publish.
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # artifact — one skill, four authored surfaces
@@ -79,7 +79,7 @@ line.
   validator and kit the deploy actually runs. Look up, don't recall; the
   references here carry workflow and laws, never prop tables.
 - **Report the spend behind every composition**: pass `usage: {tokens,
-  effort}` on `create_board`, `compose_board` and `update_cards` — your
+  effort}` on `create {kind:"board"}`, `compose_board` and `update_cards` — your
   rough estimate of what the call cost you (thinking + reading the source
   material; `effort` low | medium | high). Not verified or billed; it lands
   in the workspace's agent calls ledger, readable as SQL via the `query`

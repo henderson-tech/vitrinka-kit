@@ -106,7 +106,7 @@ compose: {"cards":[{"kind":"page","payload":{"md":"# Architecture\n\nThe **eve**
 
 A page comment is a normal board annotation anchored to a TEXT RANGE: its
 `selector.quote` (plus a little prefix/suffix) says WHERE in the page it
-points. You see them via `list_work` / `scrape_board` and reply/resolve them
+points. You see them via `list {kind:"work"}` / `scrape_board` and reply/resolve them
 like any annotation. Comment highlights are NOT written into `md`; if you
 re-compose `md` and keep the quoted sentence, the highlight re-anchors
 automatically, and if you remove the sentence the comment stays wire-only

@@ -2,7 +2,7 @@
 name: pair
 description: "Live pairing during user testing — supervise the app under test (`vitrinka qa pair`), listen for the recorder's ⌖ snaps, fix each bug while the tester keeps testing, and restart so fixes appear immediately. Invoke as /vitrinka:pair FROM THE APP'S REPO."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:pair — fix the app while the user tests it
@@ -50,8 +50,8 @@ adds the supervisor, the pair worktree, the restart step, and the pace.
 Landing here mid-listen: a `№<id> [session] <project>: testing session
 started — …` watch line (the `sessions[]` lane of `wait_for_work`) is the
 user starting a recorder session — run this preflight now if you haven't;
-the № is a SESSION id (`get_session {id}` for context, NOT
-`get_annotation`) — then narrate you're in: `board_working` once the
+the № is a SESSION id (`get {kind:"session", id}` for context, NOT
+`get {kind:"annotation"}`) — then narrate you're in: `board_working` once the
 session's board exists, e.g. "◉ paired — watching your session".
 
 ## The pair loop — per drained item
@@ -61,7 +61,9 @@ oldest first). Per ⌖ snap (`[fix]`) or escalated note (`[note]`):
 
 1. `set_status {id, status:"working"}` + narrate: `board_working {board,
    status:"⟳ fixing №<id> — <short cause>"}`. The narration is what the
-   tester sees IN THE APP; keep it under a dozen words.
+   tester sees IN THE APP; keep it under a dozen words. `board_working` is
+   a `rare`-module tool: the registration opts in on its `/mcp` URL with
+   `?modules=core,qa,rare`.
 2. **Fix in the pair worktree.** Smallest correct change; commit on the
    rolling branch (conventional message referencing №id).
 3. **Get it into the running app**: hot stack — nothing to do; otherwise

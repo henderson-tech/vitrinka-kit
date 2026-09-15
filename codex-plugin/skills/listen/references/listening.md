@@ -48,7 +48,7 @@ grammar `vitrinka work watch` prints — `№<id> [answer|ask|session|<intent>]
 <scope>: <summary>` (`answer` = a released question answer, `ask` = an
 Ask-AI request, `session` = a recorder session started, any other tag = an
 annotation's intent such as `fix` or `note`) — drained through
-`wait_for_work {…scope, timeoutSec: 1}` / `get_annotation` exactly as under
+`wait_for_work {…scope, timeoutSec: 1}` / `get {kind:"annotation"}` exactly as under
 rung 1 (the prompt never inlines the capsule). On `{"idle":true}`, **END THE
 TURN** — the host injects the next item. Stopping is Ctrl-C in the host's
 terminal.
@@ -85,8 +85,8 @@ appear in its listening indicator.
 ### 4 · One-shot drain
 
 When the user asks for a single pull rather than a listening session:
-`get_questions {board}` (released question answers — the durable record) or
-`list_work {board | project+branch}` (dispatched annotation work), then work
+`get {kind:"questions", board}` (released question answers — the durable record) or
+`list {kind:"work", board | project+branch}` (dispatched annotation work), then work
 the items. Nothing is armed.
 
 ## Picking the rung
@@ -117,7 +117,7 @@ do not. The line is never skipped and never softened.
 - One item at a time, oldest first; asks first (a ● working popover is open
   on the operator's screen).
 - Choices ride the wire exactly once — the drained `choices[]` is the only
-  copy; `get_questions {board}` is the durable record if it is lost.
+  copy; `get {kind:"questions", board}` is the durable record if it is lost.
 - Never `set_status resolved`; only the user accepts, on the board.
 - A `⚠ … taken over by … — standing down` line (or a `{revoked:true}` wait
   response) means the listener moved to another of the user's sessions:

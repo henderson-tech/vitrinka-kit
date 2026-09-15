@@ -3,7 +3,7 @@ name: me
 disable-model-invocation: true
 description: "Personal todos, reminders and milestones in vitrinka — capture, list and judge ripeness, close, schedule with a clock, reach a milestone. Invoke as /vitrinka:me [add|list|done|drop|remind|milestone] FROM THE APP'S REPO; the CLI is `vitrinka me todo` and `vitrinka me schedule`."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:me — todos, reminders, milestones
@@ -11,9 +11,9 @@ metadata:
 A todo is a task of type `todo` in the current repository's project with the
 `moment` preset (`trigger · lead · every · context · commit · branch`). The CLI
 is the validated writer; `vitrinka me --help` and each verb's `--help` carry
-the flags. Without a shell the MCP twins are `create_task {type: "todo"}`,
-`list_tasks {f: {types: ["todo"]}}`, `ripe_todos`, `complete_todo`,
-`create_milestone`, `update_milestone {reached: true}`, `list_milestones`.
+the flags. Without a shell the MCP twins are `create {kind:"task", type: "todo"}`,
+`list {kind:"task", f: {types: ["todo"]}}`, `ripe_todos`, `complete_todo`,
+`create {kind:"milestone"}`, `update {kind:"milestone", reached: true}`, `list {kind:"milestone"}`.
 
 ## Contracts the verbs do not print
 

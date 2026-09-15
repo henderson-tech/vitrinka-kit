@@ -2,7 +2,7 @@
 name: usertest
 description: "Test the current repo's app like a user and leave the QA record behind — one verb per lane: `vitrinka qa run -- <test command>` for runner-backed suites, `vitrinka qa usertest start · case · snap · verdict · finish` for exploratory sessions. Use for 'user test this', 'explore the new feature', 'QA this like a user', 'run the tests and publish'."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # usertest — test like a user, let vitrinka keep the record

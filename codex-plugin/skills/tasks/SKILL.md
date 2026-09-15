@@ -2,7 +2,7 @@
 name: tasks
 description: "Work a project's task engine from the repo — file and triage intake drafts, plan an epic, comment, label, rank, link, bulk-move, search, attach and read versioned files, ask Eve about a task, sprint start/complete, and author automation rules (dry-run first). Invoke as /vitrinka:tasks [list|intake|file|epic|rule] FROM THE APP'S REPO; the same verbs exist as MCP tools and `vitrinka task|sprint|intake`."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:tasks — the task engine, agent side
@@ -15,9 +15,9 @@ carries only the laws the verbs do not print.
 ## Vocabulary laws
 
 - **State groups** `backlog · unstarted · started · completed · cancelled`
-  are universal; a project's states (`list_states`) are keys inside them and
-  `status` derives from the group. `list_states` before writing `state`;
-  `list_fields` before writing `fields`.
+  are universal; a project's states (`list {kind:"state"}`) are keys inside them and
+  `status` derives from the group. `list {kind:"state"}` before writing `state`;
+  `list {kind:"field"}` before writing `fields`.
 - **Types** `task · bug · story · epic · todo · qa · journey · meeting` are
   ONE generated enum. An `epic` is the feature's whole record (children by
   `parentId`, the feature preset `outcome · non_goals · gates · decisions ·
@@ -30,7 +30,7 @@ carries only the laws the verbs do not print.
   `evidence`, never bare; `kind` says who resolves one — `human` (waits on
   `who`, else the assignee, else the reporter), `action`, `date` (auto-ticked
   at `at`).
-- **Labels**: `create_task.labels` sets, `update_task.labels` REPLACES,
+- **Labels**: `labels` on `create {kind:"task"}` sets, on `update {kind:"task"}` REPLACES,
   `label_task {add, remove}` increments (use it when another agent may be
   labelling). `eve-*` is a reserved namespace: those labels fire Eve flows
   and spend credit — never for bookkeeping.
@@ -55,20 +55,20 @@ carries only the laws the verbs do not print.
 ## The doors
 
 - **Intake is the ONLY way a draft becomes a task**: `propose_tasks`
-  (deduped, `list_intake` shows the verdict) → a human's `intake_verdict`.
+  (deduped, `list {kind:"intake"}` shows the verdict) → a human's `intake_verdict`.
   Never file a task and a draft for the same finding; never accept your own
   drafts unless the user asked you to triage. Eve's plan proposals
-  (`list_proposals` / `proposal_verdict`) follow the same rule.
+  (`list {kind:"proposal"}` / `proposal_verdict`) follow the same rule.
 - **Pickup · spot · hand back** keep the tree true without end-of-session
-  bookkeeping: `get_task {view: "pickup"}` before touching code (pickup
+  bookkeeping: `get {kind:"task", view: "pickup"}` before touching code (pickup
   skill), `spot` the moment you will not do something (spot skill),
   `hand_back` to end (handoff skill — its `rendered` block IS the chat
   hand-back). Status moves by itself (run → in progress, PR → in review,
-  merge → done); `update_task {status}` only to correct.
-- **Reading**: `summarize_tasks` for counts; `list_tasks {f}` with the
+  merge → done); `update {kind:"task", status}` only to correct.
+- **Reading**: `summarize_tasks` for counts; `list {kind:"task", f}` with the
   filter document (states, groups, types, priorities, assignees, labels,
   sprint, milestone, parent, intake, spans, text, order) for rows;
-  `search_tasks` / `search` / `search_project` to find; `get_brief` before
+  `search {kind:"task"}` / `search` / `search {kind:"project"}` to find; `get {kind:"brief"}` before
   planning anything in a project; `read_task_ref` under a `budget` or with
   a `question` — never a transcript blind; `ask_task` for a cited answer
   over the whole corpus (relay the citation).
@@ -79,17 +79,20 @@ carries only the laws the verbs do not print.
   publish); `usertest` and `publish_run` write journey verdicts; `vitrinka
   task final <epic>` composes the final artifact; a later `story` that
   revises another links `supersedes`.
-- **Sprints** are history: `create_sprint` → start → `complete {carry}`; no
+- **Sprints** are history: `create {kind:"sprint"}` → start → `complete {carry}`; no
   delete, ever.
 - **Rules** are typed documents (`GET /api/v1/rules/schema`): ALWAYS
   `dry_run_rule` and show what would have fired before enabling; admin-only
   to create or enable.
+- `dry_run_rule`, `transfer_project`, `merge_project`, `my_favorites`,
+  `favorite` and `unfavorite` live in the `rare` module — never listed by
+  default; the registration opts in on its `/mcp` URL: `?modules=core,pm,rare`.
 - **Mirror** (Jira): the truth side wins every conflict; never "fix" a
   conflict by editing the losing side.
 - **Transfer** (`transfer_project`): dry-run first, show the report and the
   `merge` renames; doctrine `docs` topic `project-transfer`.
 - **Moving tasks between projects**: never recreate a task elsewhere (it
-  loses history, comments, attachments). `update_task {id, project}` moves
+  loses history, comments, attachments). `update {kind:"task", id, project}` moves
   one, `bulk_update_tasks {ids, patch: {project}}` up to 200 in one
   transaction; the target must exist (unknown slug → 422); a task moves WITH
   its subtree; state, labels, fields, sprint and milestone remap by key
@@ -111,7 +114,7 @@ carries only the laws the verbs do not print.
   scope?, folder?}` star through the ★ button's door; starring again
   re-files, never duplicates. Star only what the user asked to keep close —
   a bookmark is theirs, never a note. CLI: `vitrinka fav list|add|rm`.
-- **Comments**: `create_comment` talks on a task; `@name` reaches that
+- **Comments**: `create {kind:"comment"}` talks on a task; `@name` reaches that
   person's My work, `@eve` asks Eve and her answer lands as a reply under
   your comment; `parentId` replies inside a comment's thread (any depth);
-  `list_comments {root}` reads one thread whole.
+  `list {kind:"comment", root}` reads one thread whole.

@@ -2,7 +2,7 @@
 name: review
 description: "Drive the AI-review loop on a board — request a review pass by Eve, vitrinka's AI reviewer, verify and fix the real findings in this repo, push a next-pass iteration, re-review. Invoke as /vitrinka:review [board-slug] [journey] FROM THE APP'S REPO; human annotations are listen (live) / resolve (backlog)."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:review — the AI-review loop
@@ -28,7 +28,7 @@ which section when the board has several.
 
 ## Phase 0 — orient, one call each
 
-1. `list_sections {board}` — `journeys[]` is the map: each chain's key, pass
+1. `list {kind:"section", board}` — `journeys[]` is the map: each chain's key, pass
    count, latest pass. Pick the scope here.
 2. `GET /api/v1/boards/{slug}/review-passes` — pass history with per-state
    finding tallies. A pass already `running` means STOP and wait (a second
@@ -53,6 +53,9 @@ never invent one when the set is unowned or ambiguous. Immediate processing
 is the default; `--batch` explicitly opts into waiting. `--calibration`
 audits a sample of passing judgments to measure missed issues. The old board
 reviewer is replaced, including the `request_review` compatibility door.
+`review_judge`, `review_job`, `review_stats` and `request_review` live in
+the `rare` module — never listed by default; the registration opts in on
+its `/mcp` URL: `?modules=core,qa,rare`.
 
 **The brief is the team's rules, not your prose.** A pass requested without
 `instructions` receives the rendered review brief automatically — the

@@ -2,7 +2,7 @@
 name: handoff
 description: "Hand a vitrinka task back at the end of a session through ONE door — `hand_back` (CLI `vitrinka task handback`) files next steps as children, attaches the summary as the task's versioned hand-back and returns the chat block to print verbatim. Use for `/vitrinka:handoff`, when the Stop gate asks for a hand-back, or whenever work on a bound task ends; starting is the pickup skill."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:handoff — the hand-back is a projection of the task

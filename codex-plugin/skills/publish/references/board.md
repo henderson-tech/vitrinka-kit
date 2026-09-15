@@ -4,19 +4,19 @@
 `vitrinka-publisher` agent — see the Delegation section in `../SKILL.md`.
 Brief it with this file's path so it follows these contracts itself.
 
-A board created bare (`create_board {slug}` and nothing else) is homeless:
+A board created bare (`create {kind:"board", slug}` and nothing else) is homeless:
 no project group in the sidebar, no type, no meta. Metadata is a first-class
 part of creation.
 
 ## Creating any board
 
-1. **Check it doesn't exist**: `list_boards {project}` — a 409 on create
+1. **Check it doesn't exist**: `list {kind:"board", project}` — a 409 on create
    means reuse **only when the board is already yours**, never suffix-mint a
    duplicate. The 409 body names the incumbent's `project` and `url`: a
    different project's board is a collision, not a reuse — pick another slug
    and leave that board alone.
 2. **Create fully-specified** — every field you know at birth goes in the one
-   `create_board` call:
+   `create {kind:"board"}` call:
    - `slug` — `<project>-<purpose>` (`acme-payroll-audit`), stable, and
      **never a bare date**: slugs are workspace-global. A date belongs in a
      slug only behind a project (and usually a branch) — `vitrinka board
@@ -49,7 +49,9 @@ part of creation.
    one `compose_board` call per coherent unit — intent not coordinates; a
    single card is a batch of one, anchored by relation. Save a recurring
    structure of your own with `save_template` and instantiate via
-   `compose_board {template, params}`.
+   `compose_board {template, params}` (`save_template` and `request_review`
+   are `rare`-module tools: opt in on the registration's `/mcp` URL with
+   `?modules=core,qa,rare`).
 4. **Hand over the server's `url` field** from the create/list response — it
    carries the `/w/<workspace>` segment; never compose a path yourself.
 5. **Arm the listener AUTOMATICALLY** — if this session will service the
@@ -94,12 +96,12 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
 
 | Instead of | Do |
 |---|---|
-| Scraping the suite board for state | `list_sections` — journeys[], passes, latest, per-section counts |
+| Scraping the suite board for state | `list {kind:"section"}` — journeys[], passes, latest, per-section counts |
 | Re-uploading screens per run | `step {image}` referencing the pushed set, or `cardId` for a live face |
 | A new board per test execution idea | one suite per AREA; runs as children; passes for iterations |
 | Rebuilding structure per session | the `meta.journeys` map + template 10; `save_template` for house variants |
 | N compose calls | one compose per suite/run/pass |
-| Finding suites by scanning all boards | `list_boards {project, board_type:"journeys"}` |
+| Finding suites by scanning all boards | `list {kind:"board", project, board_type:"journeys"}` |
 
 The app-repo side (which journeys exist, anchor-index, affected-journeys from
 a diff) belongs to the app repo's own skill — this skill owns the vitrinka

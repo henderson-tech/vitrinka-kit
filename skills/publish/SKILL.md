@@ -2,7 +2,7 @@
 name: publish
 description: Capture and publish UI work on vitrinka — sticky screenshot sessions, branching journey maps, client-facing walkthroughs, board and testing-suite organization. Use for "publish", "screenshot", "journey", or any capture/visualize-UI ask. Authored documents, pages, diagrams, and docs boards are the artifact skill.
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # publish — one skill, four intents
@@ -107,7 +107,7 @@ Per-kind payload contracts: the `docs` MCP tool; kind index + doctrine:
   what was NOT covered; later passes UPDATE it, never stack a second.
   Statuses live on the cards (`step.status`).
 - **Iteration = next pass** (`pass: "next"`), never mixed takes.
-- **Report the spend**: `usage: {tokens, effort}` on every `create_board`,
+- **Report the spend**: `usage: {tokens, effort}` on every `create {kind:"board"}`,
   `compose_board` and `update_cards` — not verified or billed.
 - **The listener is yours**: after the wrap-up, arm it per the listen skill,
   announce `⏳ listening — annotate away`, END the turn.

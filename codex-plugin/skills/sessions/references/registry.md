@@ -17,10 +17,10 @@ this set + a repo test scan.
 Read doors:
 
 - `vitrinka task resolve-qa --json` (the branch's `vt-<id>`, or `--task
-  <epic|qa>`) → `get_task {id: <qa>, include: [children]}` — the feature's
+  <epic|qa>`) → `get {kind:"task", id: <qa>, include: [children]}` — the feature's
   QA plan with its `journey` children. Exit 4 = no plan for this branch.
-- `list_tasks {project, f: {types: ["journey"]}, fields: "full"}` — every
-  journey of the project when no plan is bound; `search_tasks {q}` for one
+- `list {kind:"task", project, f: {types: ["journey"]}, fields: "full"}` — every
+  journey of the project when no plan is bound; `search {kind:"task", q}` for one
   by intent.
 
 Per journey task:
@@ -28,7 +28,7 @@ Per journey task:
 - `fields.key` — the registry key: kebab-case user intent. NEVER
   session-derived (`session-7-flow` is forbidden — journeys outlive sessions).
 - `fields.test` — the primary spec path (`e2e/orders-create.spec.ts`);
-  written by generate-test through `update_task`.
+  written by generate-test through `update {kind:"task"}`.
 - `fields.route` / `flow` / `expected` / `role` — the walk itself (see the
   tasks skill's "Journeys" recipe).
 - refs — `add_task_ref {kind: "session", ref: "<session board slug>"}`
@@ -52,7 +52,7 @@ recipe adds it under the qa task.
 ## The session ledger — `meta.pipeline` on the recorded session
 
 Which recorded sessions this repo has already worked, and what came out of
-them. `get_session {board}` (or `GET /api/v1/sessions?project=<slug>`) returns
+them. `get {kind:"session", board}` (or `GET /api/v1/sessions?project=<slug>`) returns
 each session with its stamps:
 
 ```
