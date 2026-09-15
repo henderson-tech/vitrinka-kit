@@ -10,10 +10,10 @@ Run it **from the app's repo**. NOT a CI job — refresh is manual (↻ / re-run
 
 ## Flow
 
-1. **Find or create the docs board.** `list_boards {project}` first (a 409 on
+1. **Find or create the docs board.** `list {kind:"board", project}` first (a 409 on
    create means reuse — never suffix-mint a duplicate). Create fully-specified:
    ```
-   create_board {slug:"<project>-docs", board_type:"docs", project,
+   create {kind:"board", slug:"<project>-docs", board_type:"docs", project,
      subgroup:"docs"}
    ```
    A docs board is born EMPTY — its sections (**Architecture / Database / API /
@@ -57,7 +57,7 @@ Run it **from the app's repo**. NOT a CI job — refresh is manual (↻ / re-run
 
 ## Refresh on demand ("sync the docs board")
 
-1. `list_sections {board}` / `scrape_board {board}` → the diagram + page cards
+1. `list {kind:"section", board}` / `scrape_board {board}` → the diagram + page cards
    and their ids.
 2. For each imported diagram: re-read its source file, `POST
    /api/v1/cards/{id}/refresh {source:<new contents>, rev:<new SHA>}`. Ids
@@ -71,7 +71,7 @@ Run it **from the app's repo**. NOT a CI job — refresh is manual (↻ / re-run
 
 | Instead of | Do |
 |---|---|
-| Scraping the whole board to find cards | `list_sections {board}` — sections, card ids, counts |
+| Scraping the whole board to find cards | `list {kind:"section", board}` — sections, card ids, counts |
 | A fresh diagram per sync | `/refresh` the imported card — overrides survive |
 | Re-uploading page prose per edit | repo-backed page + `/refresh {source, rev}` |
 | Pre-creating empty section frames | target `--section` — the frame is created when content lands |

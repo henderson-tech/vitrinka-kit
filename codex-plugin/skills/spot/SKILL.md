@@ -2,7 +2,7 @@
 name: spot
 description: "File something you spotted while working a vitrinka task but will NOT do in this change — a defect, a follow-up, a call a human owns — as a child task the moment you see it, through the one `spot` door. Use for `/vitrinka:spot \"<what you saw>\"` or whenever a 'later'/'out of scope'/'someone should decide' thought appears mid-work; ending work is the handoff skill."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:spot — file it the moment you see it
@@ -14,7 +14,7 @@ One thought, one child, filed while the context is fresh; then back to work.
 
 ## The verb
 
-1. **Read the children first** — `get_task {id: <bound>, include:
+1. **Read the children first** — `get {kind:"task", id: <bound>, include:
    ["children"]}` — so nothing is filed twice; a match by meaning gets a
    comment if you have something new, never a second child.
 2. **File** through the one door — MCP `spot`, CLI `vitrinka task spot
@@ -31,7 +31,7 @@ One thought, one child, filed while the context is fresh; then back to work.
    - `production: true` when a user could hit it on the deployed product.
    - `refs` (board, session, PR) whenever you have the evidence.
    - An item that genuinely stops THIS task is spotted AND linked with
-     `create_task_link {rel: "blocks"}` so the pickup's BEFORE row carries it.
+     `create {kind:"task_link", rel: "blocks"}` so the pickup's BEFORE row carries it.
 3. **Print the child's `url` as returned**, one line, and continue. The
    hand-back lists open children by itself.
 

@@ -2,7 +2,7 @@
 name: pickup
 description: "Pick up a vitrinka task or epic from a fresh session — read its server-composed pickup (last hand-back, branch, what to read first, what to do next, what NOT to load), claim it, start on NEXT. Use when a task id or URL arrives in the prompt or `/vitrinka:pickup <id|url>` is invoked; ending work is the handoff skill."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:pickup — start where the last session stopped
@@ -19,7 +19,7 @@ checkout binds it (branch name, worktree path or HEAD trailer carrying
 
 ## Read the pickup
 
-`get_task {id, view: "pickup"}` — CLI `vitrinka task pickup <id|url>` (also
+`get {kind:"task", id, view: "pickup"}` — CLI `vitrinka task pickup <id|url>` (also
 says whether the branch exists on origin; `--json` puts the pickup in
 `data`). The reply is the pickup JSON plus `rendered`, rows WHAT · LAST ·
 DONE · ON · BRANCH · BEFORE · READ · WHO · NEXT · SKIP; empty rows are
@@ -27,7 +27,7 @@ omitted, rows past the token cap are dropped whole and counted in SKIP.
 
 Task ids are per-workspace. When the repo is bound to a workspace (the
 binding line the session shows, or `vitrinka setup`), spell the id
-`"<workspace>/<id>"` on `get_task` and on every id-only call that follows
+`"<workspace>/<id>"` on `get {kind:"task"}` and on every id-only call that follows
 (claim, `spot`, `hand_back`); a URL already names it in `/w/<workspace>/`.
 A bare number lands in the connection's home workspace, which may be a
 different team's task under the same number — say which workspace answered
@@ -51,7 +51,7 @@ and stop.
    worked; its children are.
 
 LAST empty means the task was never worked: WHAT, READ and NEXT are the whole
-brief; the parent is one `get_task {id: parentId}` away. File what you learn
+brief; the parent is one `get {kind:"task", id: parentId}` away. File what you learn
 with the spot skill; the first hand-back (handoff skill) becomes the next
 session's LAST.
 

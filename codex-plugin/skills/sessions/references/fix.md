@@ -9,7 +9,7 @@ job is to turn that session into fixed code and a closed board. The failure
 modes this skill exists to prevent:
 
 1. **Traversing the raw session** — `/events` streams and board scrapes are
-   10–100× the tokens of the digest. ONE `get_session` call is the whole read.
+   10–100× the tokens of the digest. ONE `get {kind:"session"}` call is the whole read.
 2. **Fixing issue-by-issue in timeline order** — a session's 30 issues are
    usually 3–6 real workstreams. Five 500s from one endpoint are ONE fix.
 3. **One subagent per issue** — an agent that spends its whole session on one
@@ -27,7 +27,7 @@ Run FROM THE APP'S REPO — the one the session tested.
 
 ## Phase 0 — one call for the whole session
 
-`get_session({ board: "<slug>" })` (or `{ id: N }`). The digest returns:
+`get {kind:"session", board: "<slug>"}` (or `{ id: N }`). The digest returns:
 
 - `steps` — the screen walk: route, title, action, notes, `cardId`, and
   `issueRefs` into the issues list. An entry with `count` > 1 is a folded run
@@ -206,8 +206,8 @@ Everything here runs on the INTEGRATED tree — boot infra/sim there, once.
 
 | Instead of | Do |
 |---|---|
-| `/events` stream or `scrape_board` | `get_session` once |
-| `get_annotation` × N | digest issues already carry text+status; enrich only ambiguous ones, batched |
+| `/events` stream or `scrape_board` | `get {kind:"session"}` once |
+| `get {kind:"annotation"}` × N | digest issues already carry text+status; enrich only ambiguous ones, batched |
 | Reading shots/crops in main context | ONE enrichment subagent returning text |
 | One agent per issue | one agent per 5–10-issue batch, ≤4 batches |
 | Fix → verify → reply per item | fix per batch, verify per batch, close per batch |

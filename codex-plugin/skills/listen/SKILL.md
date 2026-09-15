@@ -2,7 +2,7 @@
 name: listen
 description: "Tune this session into a vitrinka annotation board and work its queue continuously — `vitrinka work watch` wakes the session per annotation through a background monitor, the vitrinka host, or a held turn. Invoke as /vitrinka:listen [board-slug] FROM THE APP'S REPO."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:listen — the listening session
@@ -55,7 +55,7 @@ Scope flags (all optional): `--board <slug>` (one board), `--project <p>
 claims no scope; only for a read-only overview session, never to work items
 another session owns).
 
-All scope resolves *within the token's workspace* — `wait_for_work`/`list_work`
+All scope resolves *within the token's workspace* — `wait_for_work`/`list {kind:"work"}`
 scoping by `{board}` or `{project, branch}` only ever sees that workspace's
 work.
 
@@ -65,7 +65,7 @@ work.
    rev-parse --show-toplevel` works and the project matches what capsules
    will reference). Clearly not an app repo → say so and stop.
 2. The `vitrinka` MCP tools are available (`wait_for_work`, `set_status`,
-   `reply`, `attach_after`, `get_capsule`). If not, tell the user to run
+   `reply`, `attach_after`, `get {kind:"capsule"}`). If not, tell the user to run
    `vitrinka setup` (or the manual form: `claude mcp add --scope user
    --transport http vitrinka <origin>/mcp`, then `/mcp` → vitrinka →
    authenticate inside Claude Code) — ONE secret-free user-scope HTTP entry
@@ -124,10 +124,10 @@ annotation. Other line shapes:
   `choices[]` alongside `work[]`; record the decision (answer + any `note`)
   per the brainstorming skill, not as a code-fix item. Choices are delivered
   exactly once — act on the drained `choices[]` in this turn (or re-read via
-  `get_questions {board}`, the durable record, if lost).
+  `get {kind:"questions", board}`, the durable record, if lost).
 - `№<id> [session] <project>: testing session started — …` — the user began
   a RECORDER SESSION on your project (the `sessions[]` lane): the № is a
-  session id (`get_session`, not `get_annotation`), and the move is
+  session id (`get {kind:"session"}`, not `get {kind:"annotation"}`), and the move is
   `/vitrinka:pair`'s preflight and loop; there is no annotation to service
   yet.
 - `№<id> [ask] <board>: <question> → <prompt>` — an ASK-AI INFO REQUEST, in
@@ -167,7 +167,7 @@ disables); the watch never emits it while nobody is viewing a board.
    amber live. A 409 (cancelled / already claimed) → skip silently.
 2. **Announce the plan**: `reply` with ONE terse line.
 3. **Understand**: the capsule has the ask, the region, and a crop URL —
-   fetch the crop image if seeing the region matters. `get_capsule {id}`
+   fetch the crop image if seeing the region matters. `get {kind:"capsule", id}`
    re-fetches the latest brief after user edits.
 4. **Fix it in this repo.** The annotated ask only — no drive-by refactors.
    Commit with a conventional message referencing №id.

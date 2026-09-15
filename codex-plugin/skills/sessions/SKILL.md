@@ -2,7 +2,7 @@
 name: sessions
 description: "The recorded user-testing pipeline — discover pending sessions, fix their issues, generate journey e2e tests, verify with a run traced onto the session board — plus archiving and continuing coding-agent sessions behind tasks. Use for processing a recorded session or its backlog (single-stage fix/test runs route in the body), or for `vitrinka qa session archive|continue`."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:sessions — the pipeline autopilot
@@ -39,7 +39,7 @@ rules). Run FROM THE APP'S REPO.
 - **One session at a time, oldest first, in its own worktree.** Concurrent
   fix batches get their own worktrees off one base; the session's worktree
   is the INTEGRATION tree — never four agents in one tree.
-- **Digest once**: ONE `get_session {id}` feeds both stages. Test generation
+- **Digest once**: ONE `get {kind:"session", id}` feeds both stages. Test generation
   requires the full journey — an issues view is not coverage evidence.
 - **Ship only after the verification run**: fixes and tests stay committed
   locally on the session's branch until the targeted journeys ran green (or

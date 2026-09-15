@@ -2,7 +2,7 @@
 name: resolve
 description: "Resolve a board's accumulated annotation backlog — one queue fetch, group by root cause into functional blocks, fix block-by-block, close every item with proof. Invoke as /vitrinka:resolve [board-slug] FROM THE APP'S REPO; continuous live servicing is /vitrinka:listen."
 metadata:
-  vitrinka-contract: "2026-09-14"
+  vitrinka-contract: "2026-09-15"
 ---
 
 # /vitrinka:resolve — work a board's backlog properly
@@ -14,19 +14,19 @@ skill prevents:
 1. **Fixing annotations one-by-one in board order** — a 65-item board is
    usually 8–12 real workstreams; five items saying "use the glass chips
    here" are ONE rollout.
-2. **Fetching everything up front** — `get_annotation` × 65 and full-board
+2. **Fetching everything up front** — `get {kind:"annotation"}` × 65 and full-board
    scrapes burn tens of thousands of tokens.
 3. **Reading crop images into the main context.**
 4. **Fixing without resolving** — every item ends with proof + status.
 
 Argument: a board slug (`/vitrinka:resolve testing-11-7`). Without one,
 auto-scope to this repo + branch the same way `/vitrinka:listen` does. NEVER
-call `list_work` unscoped — the global firehose contains other sessions'
+call `list {kind:"work"}` unscoped — the global firehose contains other sessions'
 work.
 
 ## Phase 0 — one call for the whole picture
 
-`list_work({ board, status: "open" })` (or `{ project, branch, status:
+`list {kind:"work", board, status: "open"}` (or `{ project, branch, status:
 "open" }`). One call: every work item's `id`, `intent`, full `prompt`,
 `cropUrl`, `covered` cards, status — the complete triage input.
 
@@ -34,7 +34,7 @@ work.
   (drafts the user hasn't dispatched yet — NEVER work a staged item), plus
   `resolved`/`in_review` history and `working` items another live session
   has claimed. Open is yours; the rest is not.
-- Do NOT loop `get_annotation` over the queue; enrichment is Phase 2,
+- Do NOT loop `get {kind:"annotation"}` over the queue; enrichment is Phase 2,
   selective and batched.
 - Do NOT `scrape_board` for a backlog pass. Reach for it (with `section`)
   only when an annotation explicitly concerns journey ordering or a whole
@@ -48,8 +48,8 @@ Classify each item BEFORE fetching anything else:
 |---|---|---|
 | **Self-contained** | Names files/routes/components (`apps/client/...`, `/marketplace-filters`), the action is unambiguous | none — the prompt IS the brief |
 | **Ambiguous target** | "this", "here", "this screen", no file named | crop (batched, Phase 2) |
-| **Referenced** | Contains `⌖E…` tokens | `get_annotation` — refs are deliberate user pointing and rank ABOVE the implicit crop context; each ref carries its own `cropUrl` |
-| **Conversational** | A thread already exists / prompt was revised | `get_capsule` — latest revision + thread tail; escalate to the full brief only for file attachments |
+| **Referenced** | Contains `⌖E…` tokens | `get {kind:"annotation"}` — refs are deliberate user pointing and rank ABOVE the implicit crop context; each ref carries its own `cropUrl` |
+| **Conversational** | A thread already exists / prompt was revised | `get {kind:"capsule"}` — latest revision + thread tail; escalate to the full brief only for file attachments |
 
 `intent` changes the deliverable:
 
@@ -79,7 +79,7 @@ Target 3–8 items per block, cross-cutting blocks FIRST. Record the block map
 
 Batched enrichment for everything flagged in Phase 1: spawn **ONE subagent**
 with the full list of ambiguous ids. It fetches crops + ref crops
-(`get_annotation` for refs/threads, direct crop URLs otherwise) and returns
+(`get {kind:"annotation"}` for refs/threads, direct crop URLs otherwise) and returns
 TEXT: `id → screen identification (quote visible labels verbatim) → what the
 markup circles → what each ⌖E ref points at`. Images never enter your
 context.
@@ -140,7 +140,7 @@ task, run the `handoff` skill (`hand_back`) — the chat block is its
 
 | Instead of | Do |
 |---|---|
-| `get_annotation` × N up front | `list_work` once; enrich only Phase-1 flagged items |
+| `get {kind:"annotation"}` × N up front | `list {kind:"work"}` once; enrich only Phase-1 flagged items |
 | `scrape_board` for context | the prompts + `covered` cards; scrape only per-section on demand |
 | Reading crops in main context | ONE batched subagent returning text findings |
 | Reporting NEW defects you noticed as document/`finding` cards | `get_card_image` per screen → ONE `annotate` batch (keys, regions, `agent`); they wait `staged` for the user's Accept |
@@ -153,7 +153,7 @@ task, run the `handoff` skill (`hand_back`) — the chat block is its
 - "I'll just start with annotation #1 and go down the list" → triage +
   grouping first.
 - "Fetching all briefs up front is thorough" → the prompt text in
-  `list_work` already contains the user's words; briefs are for the
+  `list {kind:"work"}` already contains the user's words; briefs are for the
   ambiguous minority.
 - "I'll quickly look at this one crop myself" → batch it into the enrichment
   subagent.
@@ -166,7 +166,7 @@ task, run the `handoff` skill (`hand_back`) — the chat block is its
 
 ## Red flags — STOP
 
-- `list_work` without `board` or `project`+`branch`.
+- `list {kind:"work"}` without `board` or `project`+`branch`.
 - Your context contains a crop image.
 - 10+ edits with zero board items moved to `in_review`.
 - Working an item whose status is `staged` (an unsent draft) or `working`
