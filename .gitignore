@@ -18,6 +18,7 @@ coverage/
 
 # AI tooling — planning, memory, and agent config never enter this repo
 .claude/
+.worktrees/
 CLAUDE.md
 AGENTS.md
 .codex/

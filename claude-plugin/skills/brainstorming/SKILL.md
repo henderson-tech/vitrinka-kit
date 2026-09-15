@@ -71,5 +71,5 @@ An authenticated service: `vitrinka auth login` mints your token; `VITRINKA_TOKE
 - **Board vs terminal**: the board is for 2-3 *different visual takes* — layouts, design directions, flows — or an explicit ask; plain preference questions stay in `AskUserQuestion`. Offer just-in-time, once; on decline stay text-only.
 - **Until the board actually exists** (created, composed, URL handed over), terminal mode is in force and the written-out map is mandatory. With a board, the FULL map lives on it — one CHAPTER section per decision — and the terminal map is shortened to its titles, never skipped.
 - **Every payload shape in `references/board.md` is exact** — read it before composing anything on a board.
-- **A board session listens**: once the URL is handed over, hold the highest rung of the listen skill's ladder (rung 3: hold this turn on `wait_for_work {board}`, never ending it on your own).
+- **A board session listens**: once the URL is handed over, hold the highest rung of the `docs {topic: "guide:listening"}` ladder (rung 3: hold this turn on `wait_for_work {board}`, never ending it on your own).
 - **Report the spend**: `usage: {tokens, effort}` on every `create {kind:"board"}`, `compose_board` and `update_cards`.
