@@ -57,8 +57,8 @@ part of creation.
 5. **Arm the listener AUTOMATICALLY** — if this session will service the
    board's annotations (it almost always will), follow the listen skill
    (`/vitrinka:listen`; the plugin's `skills/listen/SKILL.md`) right after
-   creating, on the highest rung its `references/listening.md` ladder offers
-   in this harness: a native Monitor on `exec vitrinka work watch` (the
+   creating, on the highest rung the `docs {topic: "guide:listening"}` ladder
+   offers in this harness: a native Monitor on `exec vitrinka work watch` (the
    `exec` is load-bearing — without it the watch outlives the session and
    holds the board's lease forever), the `vitrinka work listen --harness
    <name>` host, or holding this turn on `wait_for_work`. Announce the rung's

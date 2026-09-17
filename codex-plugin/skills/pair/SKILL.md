@@ -41,11 +41,11 @@ adds the supervisor, the pair worktree, the restart step, and the pace.
      so asset-only fixes (board engine, css, templates' static imports) are
      browser-refresh-fast — restart only for Go changes.
 4. **Arm the listener** (per the listen skill, project scope, from the
-   worktree) on the highest rung this harness offers — the listen skill's
-   `references/listening.md` ladder: a native Monitor on `exec vitrinka
-   watch` (then END THE TURN), the `vitrinka work listen --harness <name>`
-   host (arm nothing, END THE TURN), or holding this turn on
-   `wait_for_work`. Announce the rung's one line and never mix rungs.
+   worktree) on the highest rung this harness offers — the
+   `docs {topic: "guide:listening"}` ladder: a native Monitor on
+   `exec vitrinka work watch` (then END THE TURN), the `vitrinka work listen
+   --harness <name>` host (arm nothing, END THE TURN), or holding this turn
+   on `wait_for_work`. Announce the rung's one line and never mix rungs.
 
 Landing here mid-listen: a `№<id> [session] <project>: testing session
 started — …` watch line (the `sessions[]` lane of `wait_for_work`) is the
