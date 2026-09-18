@@ -57,10 +57,10 @@ rules). Run FROM THE APP'S REPO.
 
 ## Coding-agent sessions — archive and continue
 
-Your transcript (Claude Code, Codex), kept behind the task it worked.
+Your transcript (Claude Code, Codex), kept behind the task it worked —
+uploaded when the work passes to someone else, never by a session ending.
 
 ```text
-vitrinka qa session archive on|off|status
 vitrinka qa session archive <transcript.jsonl> --task <id> [--hint "load when …"] [--version-of <ref>]
 vitrinka qa session continue <task-id> [--ref <distill-ref>]
 ```

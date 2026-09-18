@@ -35,6 +35,8 @@ board card, nested inside a fractal `doc`, and full-screen at its solo
   above. What `vitrinka board push` mints from a semantic artifact.
 - **`html`** — the sandboxed escape hatch when no hard component fits; also
   accepts the `{body, runtime:"tw4"}` markup-only form (server wraps it).
+  The card takes the document's natural size at any width (a desktop or
+  multi-phone mock included); `width`/`height` pin the box instead.
   Sandbox CSP allows only the pinned `/vendor/…` shelf (`runtime.md`, this
   directory) — no CDNs, no fetch.
 
