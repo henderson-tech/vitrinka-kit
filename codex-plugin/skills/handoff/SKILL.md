@@ -22,6 +22,10 @@ returns `rendered`, the chat block. The schema carries each field's shape.
   product, not the diff.
 - Spotted items already filed (spot skill) are NOT repeated in `next`; the
   block lists open children by itself.
+- `next` holds only what the human must do (a merge they keep, a decision,
+  an account or device only they hold). Work the agent can do is built
+  before the hand-back, not filed; a remainder that outgrew the context
+  window is the one exception, and it says so in `buildOn`.
 - A non-empty `prerequisites` marks the parent epic `waiting`.
 - `status` moves by itself (a run → in progress, an open PR → in review, a
   merged PR → done). Fill it only to correct: reopen, cancel, back to backlog.

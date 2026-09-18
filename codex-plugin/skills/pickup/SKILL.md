@@ -46,9 +46,14 @@ and stop.
    `vt-<id>` so the hooks bind the session.
 4. **Claim**: the SessionStart hook usually did (WHO lists you); otherwise
    `vitrinka task start <id>`. The run is how the team sees you on the plan.
-5. **NEXT**: take the first row nobody in WHO holds, by its own url. A child
-   that is more than one sitting's work gets its own pickup. An epic is never
-   worked; its children are.
+5. **NEXT** is the work queue, not a menu: start on the first row nobody in
+   WHO holds, by its own url, and keep going down the list until only rows
+   that need the human remain (a merge they keep, a decision, an account or
+   device only they hold). Never stop after one child; a decision the tree
+   is waiting on is asked mid-flight, not filed as `Decide:` and left. Only
+   the context window ends a sitting: a remainder bigger than it goes to a
+   fresh session through its own pickup. An epic is never worked; its
+   children are.
 
 LAST empty means the task was never worked: WHAT, READ and NEXT are the whole
 brief; the parent is one `get {kind:"task", id: parentId}` away. File what you learn
