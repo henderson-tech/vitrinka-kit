@@ -25,9 +25,18 @@ One thought, one child, filed while the context is fresh; then back to work.
    - No bound task → omit `parentId`: the door files under the project's
      rolling `Found during implementation` epic. Never file at the top
      level by hand.
-   - `bug` (default) for a defect that exists today; `task` for a follow-up.
-   - A call a human owns is a `task` titled `Decide: <the question>` with
-     the options in the body. Never decide it silently in code.
+   - `bug` (default) for a defect that exists today; `task` for a follow-up
+     that needs its own session, PR or QA record. A check on the work you
+     are doing, a merge, a look, a verify is a STEP on the bound task
+     (`update {kind:"task", fields: {gates: [...]}}`, or `next` at
+     hand-back) — never a child.
+   - A call a human owns is a `human` gate on the bound task (`kind:
+     "human"`, `who`, the options as `evidence`; `decide: true` at
+     hand-back does the same). Never decide it silently in code; a child
+     `task` only when the decision is itself a piece of work.
+   - A step that outgrew the checklist is promoted, not retyped: `fromStep`
+     (its item id or exact name) removes it from the parent as the child is
+     filed.
    - `production: true` when a user could hit it on the deployed product.
    - `refs` (board, session, PR) whenever you have the evidence.
    - An item that genuinely stops THIS task is spotted AND linked with
@@ -38,7 +47,8 @@ One thought, one child, filed while the context is fresh; then back to work.
 ## Never
 
 - Never file the same finding twice — children first, then spot.
-- Never file what you are about to do in this change.
+- Never file what you are about to do in this change, nor a check on it —
+  that is a step on the task.
 - Never batch spots for the hand-back, never park them in a comment, an
   intake draft or the chat.
 - Never hand-compose a task URL.

@@ -35,7 +35,8 @@ and stop.
 
 ## Work from it, in this order
 
-1. **BEFORE** is a stop, not a note: an open `blocks` link, a `waiting_on`
+1. **BEFORE** is a stop, not a note: an open `human` or `date` gate on the
+   task (who resolves it, or when), an open `blocks` link, a `waiting_on`
    field or a named prerequisite — say what waits on whom before touching
    code.
 2. **READ** only the READ rows, each with `read_task_ref {id, ref}`. SKIP
@@ -46,14 +47,18 @@ and stop.
    `vt-<id>` so the hooks bind the session.
 4. **Claim**: the SessionStart hook usually did (WHO lists you); otherwise
    `vitrinka task start <id>`. The run is how the team sees you on the plan.
-5. **NEXT** is the work queue, not a menu: start on the first row nobody in
-   WHO holds, by its own url, and keep going down the list until only rows
-   that need the human remain (a merge they keep, a decision, an account or
-   device only they hold). Never stop after one child; a decision the tree
-   is waiting on is asked mid-flight, not filed as `Decide:` and left. Only
-   the context window ends a sitting: a remainder bigger than it goes to a
-   fresh session through its own pickup. An epic is never worked; its
-   children are.
+5. **NEXT**: the task's open steps come first, then its children. A step
+   (`[step]`, no id of its own) is worked HERE and ticked when done —
+   `update {kind: "task", fields: {gates: [...]}}` with `done: true` and its
+   `evidence`; a step that outgrows one sitting is promoted with
+   `spot {fromStep}`, never retyped by hand. NEXT is the work queue, not a
+   menu: a child row is taken by its own url, and you keep going down the
+   list until only rows that need the human remain (a merge they keep, a
+   decision, an account or device only they hold). Never stop after one
+   child; a decision the tree is waiting on is asked mid-flight, not filed
+   as `Decide:` and left. Only the context window ends a sitting: a
+   remainder bigger than it goes to a fresh session through its own pickup.
+   An epic is never worked; its children are.
 
 LAST empty means the task was never worked: WHAT, READ and NEXT are the whole
 brief; the parent is one `get {kind:"task", id: parentId}` away. File what you learn

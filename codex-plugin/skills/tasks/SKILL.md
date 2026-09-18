@@ -63,7 +63,8 @@ carries only the laws the verbs do not print.
   bookkeeping: `get {kind:"task", view: "pickup"}` before touching code (pickup
   skill), `spot` the moment you will not do something (spot skill),
   `hand_back` to end (handoff skill — its `rendered` block IS the chat
-  hand-back). Status moves by itself (run → in progress, PR → in review,
+  hand-back; next steps land as steps and gates ON the task, a child only
+  for work that needs its own session). Status moves by itself (run → in progress, PR → in review,
   merge → done); `update {kind:"task", status}` only to correct.
 - **Reading**: `summarize_tasks` for counts; `list {kind:"task", f}` with the
   filter document (states, groups, types, priorities, assignees, labels,
