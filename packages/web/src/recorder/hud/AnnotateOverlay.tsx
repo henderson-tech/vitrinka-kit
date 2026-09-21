@@ -31,24 +31,41 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
     let downAt: { x: number; y: number } | null = null;
     let dragging = false;
     document.documentElement.style.cursor = 'crosshair';
-    const move = (e: PointerEvent) => {
-      if (downAt && (dragging || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6)) {
+    // Pointer events arrive well above frame rate (120 Hz+ on a trackpad);
+    // hit-testing and re-rendering on each would burn the frame budget of the
+    // page under test. Coalesce to ONE hit-test per animation frame and skip
+    // the state write when the box did not move.
+    type Box = { x: number; y: number; w: number; h: number };
+    let raf = 0;
+    let last: { x: number; y: number } | null = null;
+    const same = (a: Box | null, b: Box | null) =>
+      a === b || (a !== null && b !== null && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+    const place = (next: Box | null) => setBox((prev) => (same(prev, next) ? prev : next));
+    const frame = () => {
+      raf = 0;
+      if (!last) return;
+      const { x, y } = last;
+      if (downAt && (dragging || Math.hypot(x - downAt.x, y - downAt.y) > 6)) {
         dragging = true;
-        setBox({
-          x: Math.min(downAt.x, e.clientX),
-          y: Math.min(downAt.y, e.clientY),
-          w: Math.abs(e.clientX - downAt.x),
-          h: Math.abs(e.clientY - downAt.y),
+        place({
+          x: Math.min(downAt.x, x),
+          y: Math.min(downAt.y, y),
+          w: Math.abs(x - downAt.x),
+          h: Math.abs(y - downAt.y),
         });
         return;
       }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const el = document.elementFromPoint(x, y);
       if (!el || insideHud(el)) {
-        setBox(null);
+        place(null);
         return;
       }
       const r = el.getBoundingClientRect();
-      setBox({ x: r.x - 3, y: r.y - 3, w: r.width + 2, h: r.height + 2 });
+      place({ x: r.x - 3, y: r.y - 3, w: r.width + 2, h: r.height + 2 });
+    };
+    const move = (e: PointerEvent) => {
+      last = { x: e.clientX, y: e.clientY };
+      if (raf === 0) raf = requestAnimationFrame(frame);
     };
     const down = (e: PointerEvent) => {
       if (insideHud(e.target)) return;
@@ -107,6 +124,7 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
     document.addEventListener('keydown', key, true);
     return () => {
       document.documentElement.style.cursor = '';
+      if (raf !== 0) cancelAnimationFrame(raf);
       document.removeEventListener('pointermove', move, true);
       document.removeEventListener('pointerdown', down, true);
       document.removeEventListener('pointerup', up, true);

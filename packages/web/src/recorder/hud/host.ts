@@ -72,17 +72,38 @@ export function createHudHost(): HudHost {
       raise();
     });
   };
+  // A dialog can mount anywhere in the tree, so the whole document is watched
+  // — but the WORK is kept off the mutation hot path: records are collected
+  // and inspected at most once per animation frame, text nodes and childless
+  // elements are dismissed without a query, and the first hit ends the scan.
+  // Attribute records are already narrowed by attributeFilter.
   const touchesDialog = (m: MutationRecord): boolean => {
     if (m.type === 'attributes') return m.target instanceof Element && isDialog(m.target);
     for (const list of [m.addedNodes, m.removedNodes]) {
       for (const n of list) {
-        if (n instanceof Element && (isDialog(n) || n.querySelector(DIALOG_SEL))) return true;
+        if (!(n instanceof Element)) continue;
+        if (isDialog(n)) return true;
+        if (n.childElementCount > 0 && n.querySelector(DIALOG_SEL)) return true;
       }
     }
     return false;
   };
+  let pending: MutationRecord[] = [];
+  let scanRaf = 0;
+  const scan = () => {
+    scanRaf = 0;
+    const batch = pending;
+    pending = [];
+    if (batch.some(touchesDialog)) schedule();
+  };
   const mo = new MutationObserver((muts) => {
-    if (muts.some(touchesDialog)) schedule();
+    for (const m of muts) pending.push(m);
+    if (scanRaf === 0) {
+      scanRaf =
+        typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(scan)
+          : (setTimeout(scan, 16) as unknown as number);
+    }
   });
   mo.observe(document.documentElement, {
     subtree: true,
@@ -96,6 +117,8 @@ export function createHudHost(): HudHost {
     mount,
     destroy: () => {
       mo.disconnect();
+      if (scanRaf !== 0 && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(scanRaf);
+      pending = [];
       try {
         host.hidePopover?.();
       } catch {
