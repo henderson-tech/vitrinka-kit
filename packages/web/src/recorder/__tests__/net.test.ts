@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { patchNetwork } from '../capture/net';
+import { __readBoundedTextForTests, __setBodyReadDeadlineForTests, patchNetwork } from '../capture/net';
 import { __bufferForTests, capturesSettled, setState } from '../queue';
 import { BASE, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
@@ -78,5 +78,54 @@ describe('net lane uninstall', () => {
     const { unpatchNetwork } = await import('../capture/net');
     unpatchNetwork();
     expect(globalThis.fetch).toBe(foreign);
+  });
+});
+
+// The bound is asserted on the RAW read (the capping wrapper would hide it):
+// a stream that never ends stops at 512 KiB, a stalled one at the deadline, and
+// a body whose declared length already exceeds the bound is never pulled.
+describe('net lane bounded body read', () => {
+  const LIMIT = 512 * 1024;
+
+  it('stops pulling at the byte bound and marks the body truncated', async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    let pulls = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulls += 1;
+        c.enqueue(chunk);
+      },
+    });
+    const res = new Response(endless, { headers: { 'content-type': 'text/plain' } });
+    const text = await __readBoundedTextForTests(res, res.headers);
+    expect(text).toMatch(/…\[truncated at 524288 bytes\]$/);
+    expect(text?.length ?? 0).toBeLessThanOrEqual(LIMIT + 40);
+    // 8 chunks fill the bound; a few pulls of read-ahead are fine, hundreds are not.
+    expect(pulls).toBeLessThanOrEqual(16);
+  });
+
+  it('gives a stalled stream up at the read deadline and keeps what arrived', async () => {
+    const restore = __setBodyReadDeadlineForTests(40);
+    try {
+      const stalled = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('partial'));
+          // never closes
+        },
+      });
+      const res = new Response(stalled, { headers: { 'content-type': 'text/plain' } });
+      const started = Date.now();
+      const text = await __readBoundedTextForTests(res, res.headers);
+      expect(text).toBe('partial…[body read timed out after 40ms]');
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      restore();
+    }
+  });
+
+  it('omits a body whose declared length exceeds the bound without reading it', async () => {
+    const headers = new Headers({ 'content-length': String(10 * 1024 * 1024), 'content-type': 'text/plain' });
+    const res = new Response('x', { headers });
+    expect(await __readBoundedTextForTests(res, headers)).toBe('[body omitted: 10485760 bytes]');
   });
 });
