@@ -1,6 +1,6 @@
 ---
 name: publish
-description: Capture and publish UI work on vitrinka — sticky screenshot sessions, branching journey maps, client-facing walkthroughs, board and testing-suite organization. Use for "publish", "screenshot", "journey", or any capture/visualize-UI ask. Authored documents, pages, diagrams, and docs boards are the artifact skill.
+description: "Use when asked to capture or visualise UI work on vitrinka — 'publish', 'screenshot', 'journey', 'walkthrough', a testing-suite board; authored documents, pages and diagrams are artifact."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

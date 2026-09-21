@@ -61,7 +61,7 @@ part of creation.
    offers in this harness: a native Monitor on `exec vitrinka work watch` (the
    `exec` is load-bearing — without it the watch outlives the session and
    holds the board's lease forever), the `vitrinka work listen --harness
-   <name>` host, or holding this turn on `wait_for_work`. Announce the rung's
+   <name>` host, or a one-shot drain that ends on idle. Announce the rung's
    one line. Never offer or wait to be asked.
 
 ## Testing-journey suites (`board_type: "journeys"`)

@@ -1,6 +1,6 @@
 ---
 name: pair
-description: "Live pairing during user testing — supervise the app under test (`vitrinka qa pair`), listen for the recorder's ⌖ snaps, fix each bug while the tester keeps testing, and restart so fixes appear immediately. Invoke as /vitrinka:pair FROM THE APP'S REPO."
+description: "Use when a human is user-testing the app live and wants bugs fixed as they appear — '/vitrinka:pair' from the app's repo, 'pair with me while I test', 'fix while I test'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
@@ -44,8 +44,8 @@ adds the supervisor, the pair worktree, the restart step, and the pace.
    worktree) on the highest rung this harness offers — the
    `docs {topic: "guide:listening"}` ladder: a native Monitor on
    `exec vitrinka work watch` (then END THE TURN), the `vitrinka work listen
-   --harness <name>` host (arm nothing, END THE TURN), or holding this turn
-   on `wait_for_work`. Announce the rung's one line and never mix rungs.
+   --harness <name>` host (arm nothing, END THE TURN), or a one-shot drain
+   followed by ending on idle. Announce the rung's one line and never mix rungs.
 
 Landing here mid-listen: a `№<id> [session] <project>: testing session
 started — …` watch line (the `sessions[]` lane of `wait_for_work`) is the

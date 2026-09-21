@@ -1,7 +1,7 @@
 ---
 name: me
 disable-model-invocation: true
-description: "Personal todos, reminders and milestones in vitrinka — capture, list and judge ripeness, close, schedule with a clock, reach a milestone. Invoke as /vitrinka:me [add|list|done|drop|remind|milestone] FROM THE APP'S REPO; the CLI is `vitrinka me todo` and `vitrinka me schedule`."
+description: "Use for personal todos, reminders and milestones in vitrinka — '/vitrinka:me [add|list|done|drop|remind|milestone]' from the app's repo, 'remind me', 'add a todo', 'what is ripe'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
