@@ -186,7 +186,9 @@ identity.
 
 Something ELSE wrong on the screen (not the annotated ask)? Don't widen the
 fix — file it: `get_card_image {board, cardId}` to measure, then `annotate
-{board, agent, items:[{key, cardId, cardVersion, region, summary, …}]}`. It
+{board, agent, items:[{key, cardId, cardVersion, region,
+image:{width,height}, summary, …}]}` with `image` = the size that read
+returned; read `covers` in the receipt — the text under the filed region. It
 lands `staged`; the user accepts it into the queue. Never a document card,
 never `highlight` for a finding (docs topic `annotation`).
 
