@@ -1,6 +1,6 @@
 ---
 name: listen
-description: "Tune this session into a vitrinka annotation board and work its queue continuously — `vitrinka work watch` wakes the session per annotation through a background monitor, the vitrinka host, or a held turn. Invoke as /vitrinka:listen [board-slug] FROM THE APP'S REPO."
+description: "Use when a session should service a vitrinka annotation board live — '/vitrinka:listen [board-slug]' from the app's repo, 'listen to the board', 'watch the annotations'; a backlog is resolve."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
@@ -15,8 +15,8 @@ attach visual proof, and go back to listening.
 leases the scope, and prints ONE line per NEW item.
 `docs {topic: "guide:listening"}` (CLI `vitrinka docs guide:listening`) is
 the ONE ladder every listening skill follows: a native background Monitor,
-the `vitrinka work listen --harness <name>` host, or — with neither — holding
-this turn on `wait_for_work`. Pick the highest rung this harness offers,
+the `vitrinka work listen --harness <name>` host, or — with neither — one
+scoped drain. Never keep the model turn alive on empty polls. Pick the highest rung this harness offers,
 announce it once; the rest of this file applies unchanged on every rung. A
 "monitor line" below means the line however it reaches you.
 
@@ -92,7 +92,7 @@ vitrinka repo checkout.
 
 ```
 Monitor({
-  command: "exec vitrinka work watch",   // auto-scopes to this repo+branch; add --board <slug> for one board, --all for the firehose
+  command: "exec vitrinka work watch --keepalive 0",   // auto-scopes to repo+branch; add --board <slug> for a board
   persistent: true,
   timeout_ms: 300000,
   description: "vitrinka work queue (<repo/branch|board|all>)"
@@ -106,9 +106,10 @@ not sleep.
 **Rung 2 — hosted**: arm nothing. Announce the rung-2 line and END THE TURN
 — the next work item arrives as a prompt.
 
-**Rung 3 — hold the turn**: announce the rung-3 line (it names `vitrinka
-work listen --harness <name>` as the lift, once) and enter the ladder's
-`wait_for_work {…scope, timeoutSec: 50}` loop. Never end the turn on your own.
+**Rung 3 — one-shot drain**: announce the missing background wake path,
+drain using `wait_for_work {…scope, timeoutSec: 1}`, then end on idle.
+Name `vitrinka work listen --harness <name>` as the continuous-listening
+path. Never claim a listener is active when none is armed.
 
 **Default is auto-scope** — no `--board` needed. If the watch's FIRST output
 line is `⚠ listener already active (live, another machine) …` (exit 2),
@@ -145,9 +146,8 @@ When re-invoked by a line (or a batch):
    returned capsule serially, oldest first. Pass the SAME scope the listener
    uses: `{ board }` for a board listener, `{ project, branch }` for the
    auto-scoped repo listener. `timeoutSec: 1` (NOT 50) — the watch is what
-   waits. (On rung 3 there is no line: the ladder's 50-second loop IS the
-   drain.)
-2. On idle, **end the turn again** on rungs 1 and 2 — the monitor stays
+   waits. Rung 3 performs only the scoped drain.)
+2. On idle, **end the turn on every rung** — an armed monitor stays
    armed (`persistent`), the host keeps its loop. Never disarm it yourself.
 
 Do NOT re-arm the listener on each notification.
@@ -159,8 +159,9 @@ watch emits while the user has a scope board open and this session has been
 idle for about one prompt-cache TTL; the wake itself re-warms the cache. On
 a keepalive line, **do nothing**: no `wait_for_work`, no replies, no text —
 end the turn immediately. Batched with real work lines, drain normally. The
-interval is `vitrinka work watch --keepalive <sec>` (default 3000; `0`
-disables); the watch never emits it while nobody is viewing a board.
+interval is `vitrinka work watch --keepalive <sec>` (default `0`, disabled).
+Opting in deliberately causes model wakeups; the watch emits none while
+nobody is viewing a board. Never enable it just to keep an idle model busy.
 
 ## Working one item
 
@@ -207,13 +208,13 @@ withdrew it mid-flight:
 A work line `⚠ vitrinka unreachable for <n>s — listener degraded`: tell the
 user vitrinka looks down and the listener is retrying — **keep the listener
 armed** (it self-recovers and prints `✓ vitrinka reachable again`). Do not
-disarm or re-arm. On rung 3 a failing `wait_for_work` is the same signal:
-say so once and keep looping.
+disarm or re-arm. On rung 3 report a failed drain and end the turn; there is
+no background listener to claim is retrying.
 
 ## Stopping the listener
 
 - **The user asks to stop listening** → rung 1: `TaskStop` the monitor; rung
-  2: Ctrl-C in the host's terminal; rung 3: the user interrupts the turn.
+  2: Ctrl-C in the host's terminal; rung 3: no listener was armed.
   Each releases the lease at once and re-queues anything claimed. Never just
   "stop paying attention" — the lease outlives your attention.
 - **The user is exiting the harness** and its exit dialog lists the monitor:

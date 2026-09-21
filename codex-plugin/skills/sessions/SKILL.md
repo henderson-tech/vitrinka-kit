@@ -1,6 +1,6 @@
 ---
 name: sessions
-description: "The recorded user-testing pipeline — discover pending sessions, fix their issues, generate journey e2e tests, verify with a run traced onto the session board — plus archiving and continuing coding-agent sessions behind tasks. Use for processing a recorded session or its backlog (single-stage fix/test runs route in the body), or for `vitrinka qa session archive|continue`."
+description: "Use for a recorded user-testing session or its backlog — 'process the session', 'pending sessions', 'generate journey tests from the session' — and for 'vitrinka qa session archive|continue'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

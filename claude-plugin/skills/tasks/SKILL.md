@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: "Work a project's task engine from the repo — file and triage intake drafts, plan an epic, comment, label, rank, link, bulk-move, search, attach and read versioned files, ask Eve about a task, sprint start/complete, and author automation rules (dry-run first). Invoke as /vitrinka:tasks [list|intake|file|epic|rule] FROM THE APP'S REPO; the same verbs exist as MCP tools and `vitrinka task|sprint|intake`."
+description: "Use when working a project's task engine from the repo — '/vitrinka:tasks [list|intake|file|epic|rule]' from the app's repo, 'file a task', 'plan the epic', 'triage intake', 'sprint start', 'add an automation rule'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

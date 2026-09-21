@@ -1,6 +1,6 @@
 ---
 name: spot
-description: "File something you spotted while working a vitrinka task but will NOT do in this change — a defect, a follow-up, a call a human owns — as a child task the moment you see it, through the one `spot` door. Use for `/vitrinka:spot \"<what you saw>\"` or whenever a 'later'/'out of scope'/'someone should decide' thought appears mid-work; ending work is the handoff skill."
+description: "Use for '/vitrinka:spot <what you saw>' or whenever a 'later', 'out of scope' or 'someone should decide' thought appears mid-work on a vitrinka task; ending work is handoff."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

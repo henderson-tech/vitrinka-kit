@@ -1,6 +1,6 @@
 ---
 name: pickup
-description: "Pick up a vitrinka task or epic from a fresh session — read its server-composed pickup (last hand-back, branch, what to read first, what to do next, what NOT to load), claim it, start on NEXT. Use when a task id or URL arrives in the prompt or `/vitrinka:pickup <id|url>` is invoked; ending work is the handoff skill."
+description: "Use when a vitrinka task id or URL arrives in the prompt, or '/vitrinka:pickup <id|url>' is invoked, to start work in a fresh session; ending work is handoff."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

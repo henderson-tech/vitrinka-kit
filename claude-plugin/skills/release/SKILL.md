@@ -1,6 +1,6 @@
 ---
 name: release
-description: "Drive a project's vitrinka release from the repo — sweep merged PRs into the rolling next-release board, watch Eve, vitrinka's AI reviewer, write the page, or cut the release. Invoke as /vitrinka:release [refresh|cut|status] FROM THE APP'S REPO; first ever run needs a start point."
+description: "Use when driving a project's vitrinka release from the repo — '/vitrinka:release [refresh|cut|status]' from the app's repo, 'cut the release', 'refresh the release board', 'what is in the next release'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

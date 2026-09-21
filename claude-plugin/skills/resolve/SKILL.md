@@ -1,6 +1,6 @@
 ---
 name: resolve
-description: "Resolve a board's accumulated annotation backlog — one queue fetch, group by root cause into functional blocks, fix block-by-block, close every item with proof. Invoke as /vitrinka:resolve [board-slug] FROM THE APP'S REPO; continuous live servicing is /vitrinka:listen."
+description: "Use when a board's annotation backlog should be worked down — '/vitrinka:resolve [board-slug]' from the app's repo, 'resolve the board', 'work through the annotations'; live servicing is listen."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
