@@ -53,7 +53,7 @@ export function VitrinkaRecorderRoot({
 }) {
   // Inlined literals → statically true on any build without recorder env, so
   // everything below is dead code and never bundled.
-  if (!process.env.EXPO_PUBLIC_VITRINKA_URL || !process.env.EXPO_PUBLIC_VITRINKA_TOKEN) {
+  if (!process.env.EXPO_PUBLIC_VITRINKA_URL) {
     return children;
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -80,7 +80,7 @@ export function VitrinkaRecorderPill({
 }: {
   hideIdleGripOn?: readonly string[];
 } = {}) {
-  if (!process.env.EXPO_PUBLIC_VITRINKA_URL || !process.env.EXPO_PUBLIC_VITRINKA_TOKEN) {
+  if (!process.env.EXPO_PUBLIC_VITRINKA_URL) {
     return null; // same static-strip contract as above
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports

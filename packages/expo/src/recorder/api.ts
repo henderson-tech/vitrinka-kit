@@ -1,34 +1,88 @@
 /**
  * Vitrinka API client for the journey recorder (dev-only module).
  *
- * Ingest contract, shared with the browser extension
- * (this repo, apps/extension/background.js):
+ * Ingest contract, shared with the web recorder and the browser extension:
  *   POST  /api/v1/sessions            {app, title, meta}  → session
  *   POST  /api/v1/sessions/:id/events {events: [...]}
  *   POST  /api/v1/sessions/:id/shot?seq=N   (image body)
  *   PATCH /api/v1/sessions/:id        {status: recording|paused|done}
  *
- * Config is env-baked at build time: EXPO_PUBLIC_VITRINKA_URL +
- * EXPO_PUBLIC_VITRINKA_TOKEN. Keep the token out of committed env files —
- * inject it per machine (a gitignored env overlay) or per build profile (e.g.
- * an EAS environment).
- *
- * SECURITY POSTURE: the bearer token is the only thing protecting the target
- * workspace — vitrinka ingest routes carry no ingest-only scope, so a token
- * extracted from a distributed build grants workspace-wide read from anywhere
- * the server is reachable. Treat tokens baked into internally-distributed
- * builds (TestFlight and similar) as rotate-per-build-round credentials,
- * never long-lived ones.
+ * The recorder is ENABLED by `EXPO_PUBLIC_VITRINKA_URL` alone (baked at build
+ * time). It AUTHENTICATES with a linked `vkr_` token — the device link the
+ * tester completes from the pill (`@vitrinka/link`), stored through the
+ * recorder storage driver under `vitrinka.recorder.link` — or, for
+ * unattended builds (CI, machine-driven runs), `EXPO_PUBLIC_VITRINKA_TOKEN`
+ * holding an admin-minted `vkr_` recorder key — never a workspace token. Both
+ * are ingest-only; the env token wins when set. A 401 from any door means
+ * the token is dead: the link is forgotten and the recorder returns to its
+ * unlinked state.
  */
 import { FileSystemUploadType, uploadAsync } from 'expo-file-system/legacy';
+import { isUnauthorized, type Linked } from '@vitrinka/link';
 
 import { VitrinkaApiError } from './api-status';
+import { getRecorderStorage } from './storage';
 
 const BASE = (process.env.EXPO_PUBLIC_VITRINKA_URL ?? '').replace(/\/$/, '');
-const TOKEN = process.env.EXPO_PUBLIC_VITRINKA_TOKEN ?? '';
+const ENV_TOKEN = process.env.EXPO_PUBLIC_VITRINKA_TOKEN ?? '';
 
+/** Storage key of the linked token (`@vitrinka/link`). */
+export const LINK_KEY = 'vitrinka.recorder.link';
+
+export function vitrinkaBase(): string {
+  return BASE;
+}
+
+/** Enabled: a URL is baked. Auth is the link or the env token. */
 export function vitrinkaConfigured(): boolean {
-  return BASE !== '' && TOKEN !== '';
+  return BASE !== '';
+}
+
+export function readLink(): Linked | null {
+  const raw = getRecorderStorage().getString(LINK_KEY);
+  if (!raw) return null;
+  try {
+    const l = JSON.parse(raw) as Linked;
+    return typeof l.token === 'string' && l.token ? l : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeLink(link: Linked): void {
+  getRecorderStorage().set(LINK_KEY, JSON.stringify(link));
+}
+
+export function clearLink(): void {
+  getRecorderStorage().remove(LINK_KEY);
+}
+
+/** Something to authenticate with: the env token or a stored link. */
+export function vitrinkaLinked(): boolean {
+  return ENV_TOKEN !== '' || readLink() !== null;
+}
+
+/** The env token is explicit (unattended builds) and wins over a link. */
+export function hasEnvToken(): boolean {
+  return ENV_TOKEN !== '';
+}
+
+function bearer(): string {
+  return ENV_TOKEN || readLink()?.token || '';
+}
+
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Register the 401 → unlinked transition (installed by the provider). */
+export function onUnauthorized(fn: () => void): () => void {
+  unauthorizedHandler = fn;
+  return () => {
+    if (unauthorizedHandler === fn) unauthorizedHandler = null;
+  };
+}
+
+function reportStatus(status: number): void {
+  if (isUnauthorized(status)) unauthorizedHandler?.();
 }
 
 /** Recorder's own traffic — the network capture layer must skip it. */
@@ -67,13 +121,14 @@ export async function api<T = Record<string, unknown>>(
   const res = await fetch(BASE + path, {
     method,
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${bearer()}`,
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
   if (!res.ok) {
+    reportStatus(res.status);
     throw new VitrinkaApiError(`${method} ${path} → ${res.status}: ${text}`, res.status);
   }
   return (text ? JSON.parse(text) : {}) as T;
@@ -89,11 +144,12 @@ export async function uploadShot(
     httpMethod: 'POST',
     uploadType: FileSystemUploadType.BINARY_CONTENT,
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${bearer()}`,
       'content-type': 'image/jpeg',
     },
   });
   if (res.status < 200 || res.status >= 300) {
+    reportStatus(res.status);
     throw new VitrinkaApiError(`POST shot seq ${seq} → ${res.status}: ${res.body}`, res.status);
   }
   try {

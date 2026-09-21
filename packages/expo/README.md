@@ -65,13 +65,25 @@ export default function Layout() {
 **4. Enable it** — only on builds that should record:
 
 ```sh
-EXPO_PUBLIC_VITRINKA_URL=https://your-vitrinka.example
-EXPO_PUBLIC_VITRINKA_TOKEN=<ingest token>   # never in a committed env file
+EXPO_PUBLIC_VITRINKA_URL=https://your-vitrinka.example   # the URL alone enables the recorder
 ```
 
-Without these, the entire recorder is stripped from the bundle at compile
-time — the gate folds to a no-op and the metro hook redirects the recorder's
+Without it, the entire recorder is stripped from the bundle at compile time
+— the gate folds to a no-op and the metro hook redirects the recorder's
 modules to an empty stub.
+
+**5. Link the device** — no secret is baked. The first time a tester opens
+the rail they see **Link recorder**: a short code, **Open vitrinka** (approve
+on the same device) — or type the code in vitrinka on any other device. The
+server mints an ingest-only `vkr_` token that the recorder stores
+(`vitrinka.recorder.link`, through the storage driver) and uses from then on;
+**Unlink** in the rail forgets it, and so does a 401 from the server.
+
+Unattended builds (CI, machine-driven runs) can still bake a token:
+
+```sh
+EXPO_PUBLIC_VITRINKA_TOKEN=<vkr_ recorder key>   # admin-minted, ingest-only — never a workspace token
+```
 
 ## The production-strip guarantee
 
@@ -82,7 +94,8 @@ Three layers, all shipped here:
 2. **Metro stub** — `withRecorderStrip` redirects the recorder's entry modules
    to an empty stub on unconfigured builds, so Metro never bundles the subtree.
 3. **Build guard** — the config plugin throws on any build/OTA-publish where a
-   token is present outside your allowlisted profiles (see
+   baked token is present outside your allowlisted profiles (the URL alone is
+   never gated — it is not a secret) (see
    `plugin/build-guard.js` for the full semantics: forbidden OTA channels are
    checked first and have no escape hatch).
 

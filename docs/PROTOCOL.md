@@ -25,32 +25,48 @@ GET   /api/v1/sessions/:id         reconcile: what the server holds
 PATCH /api/v1/sessions/:id         status (recording | paused | done)
 ```
 
-The web recorder authenticates with a **publishable recorder key** (`vkr_…`:
-project-pinned, origin-allowlisted, valid only on the routes above); the
-package never inspects the key, it only sends it as the bearer, with
-`credentials: omit` so no cookie ever rides along.
+Both recorders authenticate with an **ingest-only recorder token** (`vkr_…`:
+project-pinned, valid only on the routes above) — minted by the device link
+(`POST {origin}/api/v1/cli/auth {kind:"recorder", label}` → code;
+`POST {origin}/api/v1/cli/auth/claim {device_code}` polled until approved;
+see [`packages/link`](../packages/link)) or, for unattended builds, an
+admin-minted recorder key baked into the build. The packages never inspect
+the token, they only send it as the bearer — the web recorder with
+`credentials: omit` so no cookie ever rides along. A 401 forgets a linked
+token.
 
 ## When recording happens
 
 Only during a session you explicitly start:
 
-- **Expo recorder**: recording exists only in builds that bake recorder env
-  (`EXPO_PUBLIC_VITRINKA_URL` + `_TOKEN`); every other build strips the whole
-  recorder from the bundle at compile time. Within an enabled build, capture
-  runs only between you pressing record and stop (or a machine-driven session
-  started over the Expo devtools channel, shown by a visible HUD indicator).
+- **Expo recorder**: recording exists only in builds that bake
+  `EXPO_PUBLIC_VITRINKA_URL`; every other build strips the whole recorder
+  from the bundle at compile time. No secret is baked: the tester **links the
+  device** from the pill (a short code approved in vitrinka — the
+  `@vitrinka/link` flow), which mints an ingest-only `vkr_` token the
+  recorder stores on-device (`vitrinka.recorder.link`); "Unlink" or a 401
+  forgets it. Unattended builds may bake `EXPO_PUBLIC_VITRINKA_TOKEN` holding
+  an admin-minted `vkr_` recorder key — never a workspace token. Within an
+  enabled build, capture runs only between you pressing record and stop (or
+  a machine-driven session started over the Expo devtools channel, shown by
+  a visible HUD indicator).
 - **Browser extension**: capture runs only in tabs matching the project's
   configured domains, only while a session you started is live. The popup
   always shows the recording state.
 - **Web recorder** (`@vitrinka/web`, mounted in the app itself): the recorder
-  is inert unless BOTH `url` and `key` are present (props, or
-  `NEXT_PUBLIC_VITRINKA_URL` + `NEXT_PUBLIC_VITRINKA_KEY`) — without them the
-  root renders its children and starts nothing; `withVitrinkaRecorder`
-  refuses a production build carrying a key outside an allowed lane. Within
-  an enabled build, capture runs only between you starting a recording from
-  the pill (or the `window.__vitrinkaRecorder` control handle) and stopping
-  it; the pill is always visible while recording. A recording survives a
-  reload of the same tab and continues in it.
+  is inert unless `url` is present (a prop, or `NEXT_PUBLIC_VITRINKA_URL`) —
+  without it the root renders its children and starts nothing. No secret is
+  baked: the tester **links the device** from the pill (a short code, an
+  "Open vitrinka" link for the same device, a server-rendered QR for another
+  device), which mints an ingest-only `vkr_` token stored in `localStorage`
+  under `vitrinka.recorder.link`; "Unlink" or a 401 forgets it. A
+  `recorderKey` prop (`NEXT_PUBLIC_VITRINKA_KEY`, an admin-minted `vkr_`
+  key) is for CI and unattended builds only, and `withVitrinkaRecorder`
+  refuses a production build carrying such a baked key outside an allowed
+  lane. Within an enabled build, capture runs only between you starting a
+  recording from the pill (or the `window.__vitrinkaRecorder` control
+  handle) and stopping it; the pill is always visible while recording. A
+  recording survives a reload of the same tab and continues in it.
 
 ## What is captured (per session)
 

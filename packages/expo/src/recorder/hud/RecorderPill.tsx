@@ -27,6 +27,7 @@ import {
   ActivityIndicator,
   Alert,
   LayoutAnimation,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -34,6 +35,8 @@ import {
   View,
 } from 'react-native';
 
+import { hasEnvToken, vitrinkaLinked } from '../api';
+import { type DeviceLink, forgetLink, linkDevice, LinkExpired } from '../link';
 import { getState, health, type RecorderHealthState } from '../queue';
 import { addNote, elapsedOf, startSession, stopSession, subscribe, togglePause } from '../session';
 import { annotateState, currentRoute, setAnnotating } from '../state';
@@ -184,8 +187,58 @@ export function RecorderPill({ hideIdleGripOn }: { hideIdleGripOn?: readonly str
     return () => clearInterval(id);
   }, [recording, hasBacklog]);
 
+  // Device link (@vitrinka/link): the code sheet above the rail. No QR on
+  // native — RN Image renders SVG only with react-native-svg, which is not a
+  // peer; the code + "Open vitrinka" cover the same-device path, and the
+  // tester types the code in vitrinka on another device.
+  const [link, setLink] = useState<{
+    phase: 'starting' | 'waiting' | 'expired' | 'error';
+    flow: DeviceLink | null;
+    error?: string;
+  } | null>(null);
+  const [linkFlow, setLinkFlow] = useState<DeviceLink | null>(null);
+  const closeLink = () => {
+    linkFlow?.cancel();
+    setLinkFlow(null);
+    setLink(null);
+  };
+  const beginLink = () => {
+    linkFlow?.cancel();
+    setLink({ phase: 'starting', flow: null });
+    linkDevice()
+      .then((flow) => {
+        setLinkFlow(flow);
+        setLink({ phase: 'waiting', flow });
+        return flow.linked.then(
+          () => {
+            setLinkFlow(null);
+            setLink(null);
+            onStart(); // linked: record exactly as if a token had been baked
+          },
+          (e: unknown) => {
+            setLinkFlow(null);
+            if (e instanceof LinkExpired) setLink({ phase: 'expired', flow });
+            else if (!(e instanceof Error && e.name === 'AbortError'))
+              setLink({ phase: 'error', flow, error: e instanceof Error ? e.message : String(e) });
+          },
+        );
+      })
+      .catch((e: unknown) =>
+        setLink({ phase: 'error', flow: null, error: e instanceof Error ? e.message : String(e) }),
+      );
+  };
+  const onUnlink = () => {
+    closeLink();
+    setNoteOpen(false);
+    forgetLink();
+  };
+
   const onStart = () => {
     if (busy) return;
+    if (!vitrinkaLinked()) {
+      beginLink();
+      return;
+    }
     setBusyAction('start');
     startSession()
       .then(() => {
@@ -354,6 +407,63 @@ export function RecorderPill({ hideIdleGripOn }: { hideIdleGripOn?: readonly str
 
   return (
     <View style={styles.wrap} pointerEvents="box-none" testID="vitrinka-recorder-pill">
+      {link ? (
+        <View style={styles.linkSheet} testID="vitrinka-recorder-link">
+          <View style={styles.linkHead}>
+            <Text style={styles.linkTitle}>LINK RECORDER</Text>
+            <Pressable
+              onPress={closeLink}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <X size={14} color="#999" />
+            </Pressable>
+          </View>
+          {link.flow ? (
+            <>
+              <Text style={styles.linkCode} testID="vitrinka-recorder-link-code">
+                {link.flow.start.user_code}
+              </Text>
+              <Pressable
+                onPress={() => void Linking.openURL(link.flow?.start.verifyUrl ?? '')}
+                accessibilityRole="link"
+                accessibilityLabel="Open vitrinka"
+                style={styles.linkBtn}
+                testID="vitrinka-recorder-link-open"
+              >
+                <Text style={styles.linkBtnText}>Open vitrinka</Text>
+              </Pressable>
+            </>
+          ) : null}
+          <View style={styles.linkRow}>
+            <Text
+              style={[
+                styles.linkLine,
+                link.phase === 'expired' || link.phase === 'error' ? styles.linkBad : null,
+              ]}
+            >
+              {link.phase === 'starting'
+                ? 'asking vitrinka for a code…'
+                : link.phase === 'waiting'
+                  ? 'waiting for approval…'
+                  : link.phase === 'expired'
+                    ? 'code expired — try again'
+                    : (link.error ?? 'could not start the link')}
+            </Text>
+            {link.phase === 'expired' || link.phase === 'error' ? (
+              <Pressable
+                onPress={beginLink}
+                accessibilityRole="button"
+                accessibilityLabel="Try again"
+                style={styles.linkRetry}
+              >
+                <Text style={styles.linkRetryText}>Try again</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
       {noteOpen ? (
         <View style={styles.noteRow}>
           <TextInput
@@ -382,14 +492,31 @@ export function RecorderPill({ hideIdleGripOn }: { hideIdleGripOn?: readonly str
       <View style={styles.dockStack} pointerEvents="box-none">
         {rec !== null ? <AnnotateChip wide disabled={rec.paused || rec.dead || busy} /> : null}
         <EdgeDock testID="vitrinka-recorder-rail" wide>
-          {rec === null ? (
+          {rec === null && !vitrinkaLinked() ? (
             railBtn({
-              testID: 'vitrinka-recorder-rec',
-              label: 'Start recording',
-              onPress: onStart,
-              icon: <Circle size={17} color="#ff3b57" fill="#ff3b57" />,
-              spinning: busyAction === 'start',
+              testID: 'vitrinka-recorder-link-start',
+              label: 'Link recorder',
+              onPress: beginLink,
+              icon: <Circle size={17} color="#ff3b57" />,
             })
+          ) : rec === null ? (
+            <>
+              {railBtn({
+                testID: 'vitrinka-recorder-rec',
+                label: 'Start recording',
+                onPress: onStart,
+                icon: <Circle size={17} color="#ff3b57" fill="#ff3b57" />,
+                spinning: busyAction === 'start',
+              })}
+              {!hasEnvToken()
+                ? railBtn({
+                    testID: 'vitrinka-recorder-unlink',
+                    label: 'Unlink recorder',
+                    onPress: onUnlink,
+                    icon: <X size={15} color="#999" />,
+                  })
+                : null}
+            </>
           ) : (
             <>
               <Text style={styles.clock}>{fmt(elapsedOf(rec))}</Text>
@@ -524,6 +651,47 @@ const styles = StyleSheet.create({
     minHeight: 34,
   },
   dimmed: { opacity: 0.4 },
+  linkSheet: {
+    width: 260,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#1d1a1b',
+    borderWidth: 1,
+    borderColor: '#292526',
+    marginBottom: 8,
+    alignSelf: 'flex-end',
+  },
+  linkHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  linkTitle: { color: '#756e68', fontSize: 9.5, fontWeight: '700', letterSpacing: 1.6 },
+  linkCode: {
+    color: '#f0eae4',
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: 4,
+    textAlign: 'center',
+    marginTop: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  linkBtn: {
+    marginTop: 12,
+    alignSelf: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#ff3b57',
+  },
+  linkBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  linkLine: { color: '#756e68', fontSize: 10, flex: 1 },
+  linkBad: { color: '#ff3b57' },
+  linkRetry: {
+    borderWidth: 1,
+    borderColor: '#363132',
+    borderRadius: 6,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  linkRetryText: { color: '#a8a099', fontSize: 10, fontWeight: '600' },
   clock: {
     color: '#fff',
     fontSize: 9,
