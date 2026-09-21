@@ -1,0 +1,76 @@
+{
+  "name": "@vitrinka/web",
+  "version": "0.1.0",
+  "description": "vitrinka toolkit for React DOM apps — the journey recorder: capture manual-testing sessions (rrweb DOM stream, clicks, navigation, network, console, notes) straight into vitrinka boards.",
+  "license": "Elastic-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/henderson-tech/vitrinka-kit.git",
+    "directory": "packages/web"
+  },
+  "type": "module",
+  "source": "src/index.ts",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./recorder": {
+      "types": "./build/recorder/index.d.ts",
+      "default": "./build/recorder/index.js"
+    },
+    "./protocol": {
+      "types": "./build/protocol/index.d.ts",
+      "default": "./build/protocol/index.js"
+    },
+    "./next": {
+      "types": "./build/next.d.ts",
+      "default": "./build/next.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "test:e2e": "playwright test -c playwright.config.ts --workers 1",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@vitrinka/redact": "^0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18",
+    "rrweb": "^2.0.0"
+  },
+  "devDependencies": {
+    "@rrweb/types": "^2.0.0",
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "^19.2.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "rrweb": "^2.0.0",
+    "typescript": "~6.0.3"
+  },
+  "keywords": [
+    "vitrinka",
+    "react",
+    "nextjs",
+    "recorder",
+    "rrweb",
+    "testing",
+    "devtools",
+    "session-recording"
+  ]
+}

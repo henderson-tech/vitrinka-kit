@@ -1,0 +1,3 @@
+[test]
+# The queue/session/net suites drive the real modules against an in-memory
+# storage driver; nothing here touches a DOM. No preload needed.
