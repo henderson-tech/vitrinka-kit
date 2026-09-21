@@ -24,3 +24,7 @@ AGENTS.md
 .codex/
 .cursor/
 .cursorignore
+
+# Playwright output (packages/web/e2e)
+test-results/
+playwright-report/

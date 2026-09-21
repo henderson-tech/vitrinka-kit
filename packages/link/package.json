@@ -1,0 +1,36 @@
+{
+  "name": "@vitrinka/link",
+  "version": "0.1.0",
+  "description": "vitrinka device link — the Netflix-style code flow that mints an ingest-only recorder token for the web and Expo recorders. Zero dependencies.",
+  "license": "Elastic-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/henderson-tech/vitrinka-kit.git",
+    "directory": "packages/link"
+  },
+  "type": "module",
+  "source": "src/index.ts",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["build", "README.md", "CHANGELOG.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.3"
+  },
+  "keywords": ["vitrinka", "device-link", "recorder"]
+}
