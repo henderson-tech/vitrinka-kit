@@ -38,12 +38,22 @@ function record(text: string): void {
   );
 }
 
+const UNPATCH_MARK = '__vitrinkaRecorderConsoleUnpatch';
+
+type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: boolean; [UNPATCH_MARK]?: () => void };
+
+/** Restore console.error (while it is still ours) and drop the window listeners. */
+export function unpatchConsole(): void {
+  (globalThis as PatchGlobals)[UNPATCH_MARK]?.();
+}
+
 export function patchConsole(): void {
-  const g = globalThis as typeof globalThis & { [PATCH_MARK]?: boolean };
+  const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
   g[PATCH_MARK] = true;
-  const orig = console.error.bind(console);
-  console.error = (...args: unknown[]) => {
+  const origError = console.error;
+  const orig = origError.bind(console);
+  const patched = (...args: unknown[]) => {
     orig(...args);
     try {
       record(describe(args));
@@ -51,19 +61,33 @@ export function patchConsole(): void {
       // capture must never break logging
     }
   };
-  if (typeof addEventListener !== 'function') return;
-  addEventListener('error', (e: ErrorEvent) => {
+  console.error = patched;
+  const onError = (e: ErrorEvent) => {
     try {
       record(describe([e.error ?? e.message]));
     } catch {
       // never break the page's own error handling
     }
-  });
-  addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+  };
+  const onRejection = (e: PromiseRejectionEvent) => {
     try {
       record(`unhandled rejection: ${describe([e.reason])}`);
     } catch {
       // see above
     }
-  });
+  };
+  const hasWindow = typeof addEventListener === 'function';
+  if (hasWindow) {
+    addEventListener('error', onError);
+    addEventListener('unhandledrejection', onRejection);
+  }
+  g[UNPATCH_MARK] = () => {
+    if (console.error === patched) console.error = origError;
+    if (hasWindow) {
+      removeEventListener('error', onError);
+      removeEventListener('unhandledrejection', onRejection);
+    }
+    delete g[PATCH_MARK];
+    delete g[UNPATCH_MARK];
+  };
 }

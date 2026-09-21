@@ -66,8 +66,42 @@ function stillCapturing(id: string | null): boolean {
  *.
  */
 function capBody(body: unknown, contentType?: string): string | undefined {
-  if (typeof body !== 'string') return undefined;
-  return redactAndCap(body, BODY_CAP, contentType);
+  if (typeof body === 'string') return redactAndCap(body, BODY_CAP, contentType);
+  // URLSearchParams is a form body by construction — serialize it and let the
+  // engine's form transform scrub it like any other string.
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+    return redactAndCap(body.toString(), BODY_CAP, 'application/x-www-form-urlencoded');
+  }
+  return describeOpaqueBody(body);
+}
+
+/**
+ * Non-string bodies are recorded as a TYPED PLACEHOLDER, never their bytes:
+ * a FormData routinely carries files and credentials and cannot be scrubbed
+ * without parsing it; a Blob/ArrayBuffer is binary. The placeholder keeps
+ * the timeline honest (a body WAS sent, this shape, this size) without the
+ * content.
+ */
+export function describeOpaqueBody(body: unknown): string | undefined {
+  if (body == null) return undefined;
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    let n = 0;
+    try {
+      body.forEach(() => n++);
+    } catch {
+      // a stubbed FormData without forEach — count unknown
+    }
+    return `[formdata body omitted: ${n} field(s)]`;
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    return `[blob body omitted: ${body.size} bytes${body.type ? `, ${body.type}` : ''}]`;
+  }
+  if (body instanceof ArrayBuffer) return `[buffer body omitted: ${body.byteLength} bytes]`;
+  if (ArrayBuffer.isView(body)) return `[buffer body omitted: ${body.byteLength} bytes]`;
+  if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+    return '[stream body omitted]';
+  }
+  return `[${typeof body} body omitted]`;
 }
 
 /** Content-type from a raw (pre-redaction) header object, '' when absent. */
@@ -309,10 +343,34 @@ interface VtMeta {
   reqHeaders?: Record<string, string>;
 }
 
+/** The uninstaller of the live patch, kept on globalThis for the same reason as the mark. */
+const UNPATCH_MARK = '__vitrinkaRecorderNetUnpatch';
+
+type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: boolean; [UNPATCH_MARK]?: () => void };
+
+/**
+ * Remove the fetch/XHR wrappers installed by `patchNetwork` — the provider's
+ * unmount calls it so the recorder never outlives its tree. Each global is
+ * restored only while it is STILL our wrapper: a later patch by someone else
+ * (a devtools, an APM agent) stacked on top must not be torn out from under
+ * them, so such a global is left in place and only our capture goes quiet
+ * (no session ⇒ the wrapper passes straight through).
+ */
+export function unpatchNetwork(): void {
+  const g = globalThis as PatchGlobals;
+  g[UNPATCH_MARK]?.();
+}
+
 export function patchNetwork(): void {
-  const g = globalThis as typeof globalThis & { [PATCH_MARK]?: boolean };
+  const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
   g[PATCH_MARK] = true;
+  const restores: (() => void)[] = [];
+  g[UNPATCH_MARK] = () => {
+    for (const r of restores.splice(0)) r();
+    delete g[PATCH_MARK];
+    delete g[UNPATCH_MARK];
+  };
 
   const origFetch = globalThis.fetch;
   const wrappedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -373,6 +431,9 @@ export function patchNetwork(): void {
   // Bun/undici type `fetch` with static extras (preconnect) the wrapper does
   // not carry; the runtime contract is the call signature alone.
   globalThis.fetch = wrappedFetch as typeof fetch;
+  restores.push(() => {
+    if (globalThis.fetch === wrappedFetch) globalThis.fetch = origFetch;
+  });
 
   const XHR = globalThis.XMLHttpRequest;
   // A runtime without XHR (or a stubbed one) must not take the recorder down —
@@ -383,8 +444,14 @@ export function patchNetwork(): void {
   const origSend = XHR.prototype.send;
 
   const origSetHeader = XHR.prototype.setRequestHeader;
+  restores.push(() => {
+    const p = XHR.prototype;
+    if (p.open === patchedOpen) p.open = origOpen;
+    if (p.send === patchedSend) p.send = origSend;
+    if (p.setRequestHeader === patchedSetHeader) p.setRequestHeader = origSetHeader;
+  });
 
-  XHR.prototype.open = function (
+  const patchedOpen = (XHR.prototype.open = function (
     this: XMLHttpRequest,
     ...args: Parameters<XMLHttpRequest['open']>
   ) {
@@ -393,18 +460,22 @@ export function patchNetwork(): void {
       url: String(args[1]),
     };
     return origOpen.apply(this, args);
-  } as typeof XHR.prototype.open;
+  } as typeof XHR.prototype.open);
 
   // Request headers are only observable at the call site — record them as the
   // app sets them (redaction happens at event build, against the live rules).
   // The original may be absent on a stubbed XHR; observing must survive that.
-  XHR.prototype.setRequestHeader = function (this: XMLHttpRequest, name: string, value: string) {
+  const patchedSetHeader = (XHR.prototype.setRequestHeader = function (
+    this: XMLHttpRequest,
+    name: string,
+    value: string,
+  ) {
     const meta = (this as XMLHttpRequest & { __vt?: VtMeta }).__vt;
     if (meta) (meta.reqHeaders ??= {})[name] = value;
     return origSetHeader?.call(this, name, value);
-  };
+  });
 
-  XHR.prototype.send = function (
+  const patchedSend = (XHR.prototype.send = function (
     this: XMLHttpRequest,
     body?: Parameters<XMLHttpRequest['send']>[0],
   ) {
@@ -447,5 +518,5 @@ export function patchNetwork(): void {
       });
     }
     return origSend.call(this, body);
-  };
+  });
 }

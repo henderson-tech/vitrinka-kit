@@ -6,9 +6,9 @@
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 
 import { installClickLane } from './capture/click';
-import { patchConsole } from './capture/console';
+import { patchConsole, unpatchConsole } from './capture/console';
 import { installNavLane, noteNavigation, primeNavigation } from './capture/nav';
-import { patchNetwork } from './capture/net';
+import { patchNetwork, unpatchNetwork } from './capture/net';
 import { checkoutRRWeb, flushRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
 import { configureRecorder, type RecorderConfig } from './config';
 import { installControl } from './control';
@@ -34,7 +34,6 @@ function tabId(): string {
   }
 }
 
-const INSTALL_MARK = '__vitrinkaRecorderInstalled';
 
 export function RecorderProvider({
   config,
@@ -50,15 +49,15 @@ export function RecorderProvider({
   }, [config]);
 
   useEffect(() => {
-    const g = globalThis as typeof globalThis & { [INSTALL_MARK]?: boolean };
     setTabIdentity(tabId(), location.host);
     primeNavigation();
-    if (!g[INSTALL_MARK]) {
-      g[INSTALL_MARK] = true;
-      patchNetwork();
-      patchConsole();
-      installNavLane();
-    }
+    // The fetch/XHR and console patches are idempotent (a globalThis mark)
+    // and UNINSTALLED on unmount below, so the recorder never outlives its
+    // tree; the History wrap is idempotent too and stays (a nav event with no
+    // session is dropped at the queue, so it costs nothing).
+    patchNetwork();
+    patchConsole();
+    installNavLane();
     const uninstallClicks = installClickLane({
       ignore: (t) => annotateState.active || insideHud(t),
     });
@@ -115,6 +114,8 @@ export function RecorderProvider({
       uninstallControl();
       uninstall401();
       stopRRWeb();
+      unpatchNetwork();
+      unpatchConsole();
     };
     // The lanes install once per mount; config changes are handled above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

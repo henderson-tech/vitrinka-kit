@@ -52,3 +52,31 @@ describe('net lane', () => {
     expect(recorded()).toHaveLength(0);
   });
 });
+
+describe('net lane uninstall', () => {
+  it('restores fetch and the XHR prototype on unpatch, and re-patches cleanly', async () => {
+    const { unpatchNetwork } = await import('../capture/net');
+    const patchedFetch = globalThis.fetch;
+    unpatchNetwork();
+    expect(globalThis.fetch).not.toBe(patchedFetch);
+    // (bun has no XMLHttpRequest — the prototype restore rides the same restores list)
+    // Nothing is recorded after unpatch, even with a live session.
+    setState(liveSession());
+    await fetch('https://api.example.test/after');
+    await capturesSettled();
+    expect(recorded()).toHaveLength(0);
+    // And the mark is gone, so the next mount patches again.
+    patchNetwork();
+    await fetch('https://api.example.test/again');
+    await capturesSettled();
+    expect(recorded().map((e) => e.url)).toEqual(['https://api.example.test/again']);
+  });
+
+  it('leaves a global alone when someone else wrapped it after us', async () => {
+    const foreign = (async () => new Response('x')) as unknown as typeof fetch;
+    globalThis.fetch = foreign;
+    const { unpatchNetwork } = await import('../capture/net');
+    unpatchNetwork();
+    expect(globalThis.fetch).toBe(foreign);
+  });
+});
