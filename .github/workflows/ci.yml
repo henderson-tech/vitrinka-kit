@@ -20,3 +20,18 @@ jobs:
       - run: bun run build
       - run: bun run typecheck
       - run: bun run test
+
+  # The web recorder end to end: one headless Chromium against a node:http
+  # page fixture + vitrinka stub (packages/web/e2e). Its own job so the unit
+  # suite above never waits on a browser download.
+  e2e-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter '@vitrinka/redact' build
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e:web
