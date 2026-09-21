@@ -10,8 +10,9 @@
     },
     "packages/expo": {
       "name": "@vitrinka/expo",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
+        "@vitrinka/link": "^0.1.0",
         "@vitrinka/redact": "^0.1.0",
       },
       "devDependencies": {
@@ -47,6 +48,15 @@
         "react-native-mmkv",
       ],
     },
+    "packages/link": {
+      "name": "@vitrinka/link",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "^1.2.0",
+        "@types/node": "^22.0.0",
+        "typescript": "~6.0.3",
+      },
+    },
     "packages/redact": {
       "name": "@vitrinka/redact",
       "version": "0.1.0",
@@ -60,6 +70,7 @@
       "name": "@vitrinka/web",
       "version": "0.1.0",
       "dependencies": {
+        "@vitrinka/link": "^0.1.0",
         "@vitrinka/redact": "^0.1.0",
       },
       "devDependencies": {
@@ -506,6 +517,8 @@
     "@ungap/structured-clone": ["@ungap/structured-clone@1.3.3", "", {}, "sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg=="],
 
     "@vitrinka/expo": ["@vitrinka/expo@workspace:packages/expo"],
+
+    "@vitrinka/link": ["@vitrinka/link@workspace:packages/link"],
 
     "@vitrinka/redact": ["@vitrinka/redact@workspace:packages/redact"],
 
