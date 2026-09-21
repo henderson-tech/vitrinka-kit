@@ -54,6 +54,26 @@ export class LinkError extends Error {
   }
 }
 
+/**
+ * Transport-status vocabulary shared by every recorder (web, Expo) — ONE copy,
+ * here in the zero-dependency package both already depend on, so a change to
+ * the retry rule cannot drift between them.
+ */
+export class VitrinkaApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'VitrinkaApiError';
+  }
+}
+
+/** A server verdict retrying can never fix (4xx minus timeout/rate-limit). */
+export function permanentStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 type Fetch = typeof globalThis.fetch;
 
 export interface LinkOptions {
@@ -86,8 +106,35 @@ interface StartWire {
   expires_in?: number;
 }
 
-function join(origin: string, path: string): string {
-  return path.startsWith('http') ? path : origin + (path.startsWith('/') ? path : `/${path}`);
+/**
+ * Resolve a server-supplied path or URL against the link origin and accept it
+ * ONLY when it lands on that same origin over http(s). The result is rendered
+ * as a clickable href and an <img src>, so a compromised or misconfigured
+ * server must not be able to point the tester's tap or the QR anywhere else.
+ * Anything off-origin, non-http or unparsable falls back to the origin's own
+ * path (or, when even that is unusable, to the given default).
+ */
+function sameOriginUrl(origin: string, candidate: string | undefined, fallbackPath: string, defaultPath: string): string {
+  const own = (v: string | undefined): string | undefined => {
+    if (!v) return undefined;
+    try {
+      const u = new URL(v, origin);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+      if (u.origin === origin) return u.href;
+      // Same path, OUR origin: a server that answered with another host's URL
+      // still gets the tap and the QR pointed at the deployment we linked to.
+      return origin + u.pathname + u.search;
+    } catch {
+      return undefined;
+    }
+  };
+  return own(candidate) ?? own(fallbackPath) ?? origin + defaultPath;
+}
+
+function requireString(w: Record<string, unknown>, key: string, status: number): string {
+  const v = w[key];
+  if (typeof v !== 'string' || v === '') throw new LinkError(`link start → malformed payload (${key})`, status);
+  return v;
 }
 
 /** Ask the server for a link code. */
@@ -103,14 +150,25 @@ export async function startLink(base: string, opts: { label: string } & LinkOpti
   if (res.status !== 201 && res.status !== 200) {
     throw new LinkError(`link start → ${res.status}`, res.status);
   }
-  const w = (await res.json()) as StartWire;
+  let raw: unknown;
+  try {
+    raw = await res.json();
+  } catch {
+    throw new LinkError('link start → malformed payload (not JSON)', res.status);
+  }
+  if (typeof raw !== 'object' || raw === null) throw new LinkError('link start → malformed payload', res.status);
+  const w = raw as Record<string, unknown> & Partial<StartWire>;
+  const deviceCode = requireString(w, 'device_code', res.status);
+  const userCode = requireString(w, 'user_code', res.status);
+  const verifyPath = requireString(w, 'verify_path', res.status);
+  const qrPath = requireString(w, 'qr_path', res.status);
   return {
     base,
-    device_code: w.device_code,
-    user_code: w.user_code,
-    verify_path: w.verify_path,
-    verifyUrl: w.verify_url ?? join(origin, w.verify_path),
-    qrUrl: join(origin, w.qr_path),
+    device_code: deviceCode,
+    user_code: userCode,
+    verify_path: verifyPath,
+    verifyUrl: sameOriginUrl(origin, typeof w.verify_url === 'string' ? w.verify_url : undefined, verifyPath, `/cli-auth?code=${encodeURIComponent(userCode)}`),
+    qrUrl: sameOriginUrl(origin, qrPath, qrPath, `/cli-auth/qr?code=${encodeURIComponent(userCode)}`),
     interval: Math.max(2, Number(w.interval) || 2),
     expires_in: Number(w.expires_in) || 0,
   };

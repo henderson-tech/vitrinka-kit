@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { isUnauthorized, LinkExpired, linkOrigin, pollLink, startLink } from '../index';
+import { isUnauthorized, LinkError, LinkExpired, linkOrigin, permanentStatus, pollLink, startLink, VitrinkaApiError } from '../index';
 
 const json = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status });
@@ -37,5 +37,51 @@ describe('link', () => {
     await expect(p).rejects.toMatchObject({ name: 'AbortError' });
     expect(isUnauthorized(401)).toBe(true);
     expect(isUnauthorized(403)).toBe(false);
+  });
+
+  it('surfaces a non-202/200 claim as LinkError with its status, and 410 as expired', async () => {
+    const boom = (async () => json(503)) as unknown as typeof globalThis.fetch;
+    await expect(pollLink('https://x.test', 'dc', { fetch: boom, sleep: async () => undefined })).rejects.toMatchObject({ name: 'LinkError', status: 503 });
+    const forbidden = (async () => json(403)) as unknown as typeof globalThis.fetch;
+    await expect(pollLink('https://x.test', 'dc', { fetch: forbidden, sleep: async () => undefined })).rejects.toBeInstanceOf(LinkError);
+    const gone = (async () => json(410)) as unknown as typeof globalThis.fetch;
+    await expect(pollLink('https://x.test', 'dc', { fetch: gone, sleep: async () => undefined })).rejects.toBeInstanceOf(LinkExpired);
+  });
+
+  it('refuses a malformed start payload instead of yielding undefined URLs', async () => {
+    const noVerify = (async () => json(201, { device_code: 'dc', user_code: 'ABCD-EFGH', qr_path: '/q' })) as unknown as typeof globalThis.fetch;
+    await expect(startLink('https://x.test', { label: 'l', fetch: noVerify })).rejects.toMatchObject({ name: 'LinkError', message: expect.stringContaining('verify_path') });
+    const notJson = (async () => new Response('<html>', { status: 201 })) as unknown as typeof globalThis.fetch;
+    await expect(startLink('https://x.test', { label: 'l', fetch: notJson })).rejects.toBeInstanceOf(LinkError);
+    const denied = (async () => json(429)) as unknown as typeof globalThis.fetch;
+    await expect(startLink('https://x.test', { label: 'l', fetch: denied })).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('never points the tap or the QR off the link origin', async () => {
+    const hostile = (async () =>
+      json(201, {
+        device_code: 'dc',
+        user_code: 'ABCD-EFGH',
+        verify_path: '/cli-auth?code=ABCD-EFGH',
+        verify_url: 'https://evil.example/cli-auth?code=ABCD-EFGH',
+        qr_path: 'javascript:alert(1)',
+      })) as unknown as typeof globalThis.fetch;
+    const s = await startLink('https://app.vitrinka.ai/w/acme', { label: 'l', fetch: hostile });
+    expect(s.verifyUrl).toBe('https://app.vitrinka.ai/cli-auth?code=ABCD-EFGH');
+    expect(s.qrUrl.startsWith('https://app.vitrinka.ai/')).toBe(true);
+    expect(s.qrUrl).not.toContain('javascript:');
+    const relative = (async () =>
+      json(201, { device_code: 'dc', user_code: 'ABCD-EFGH', verify_path: 'cli-auth?code=X', qr_path: '/cli-auth/qr?code=X' })) as unknown as typeof globalThis.fetch;
+    const r = await startLink('https://app.vitrinka.ai', { label: 'l', fetch: relative });
+    expect(r.verifyUrl).toBe('https://app.vitrinka.ai/cli-auth?code=X');
+    expect(r.qrUrl).toBe('https://app.vitrinka.ai/cli-auth/qr?code=X');
+  });
+
+  it('carries the shared transport-status vocabulary', () => {
+    expect(permanentStatus(404)).toBe(true);
+    expect(permanentStatus(408)).toBe(false);
+    expect(permanentStatus(429)).toBe(false);
+    expect(permanentStatus(503)).toBe(false);
+    expect(new VitrinkaApiError('x', 401).status).toBe(401);
   });
 });
