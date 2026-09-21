@@ -45,6 +45,7 @@
     "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@vitrinka/link": "^0.1.0",
     "@vitrinka/redact": "^0.1.0"
   },
   "peerDependencies": {

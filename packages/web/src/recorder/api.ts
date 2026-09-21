@@ -16,9 +16,29 @@
 import type { RedactionPolicy } from '@vitrinka/redact';
 
 import { VitrinkaApiError } from './api-status';
-import { recorderConfig } from './config';
+import { isUnauthorized } from '@vitrinka/link';
+
+import { bearerToken, recorderConfig } from './config';
 
 export { permanentStatus, VitrinkaApiError } from './api-status';
+
+/**
+ * A 401 from any session door means the token is dead (link revoked, key
+ * rotated). The session module registers the handler that forgets the link
+ * and ends the recording locally; api.ts only reports.
+ */
+let unauthorizedHandler: (() => void) | null = null;
+
+export function onUnauthorized(fn: () => void): () => void {
+  unauthorizedHandler = fn;
+  return () => {
+    if (unauthorizedHandler === fn) unauthorizedHandler = null;
+  };
+}
+
+function reportStatus(status: number): void {
+  if (isUnauthorized(status)) unauthorizedHandler?.();
+}
 
 /**
  * Fetch the workspace redaction policy at session start. NEVER rejects: null
@@ -49,7 +69,8 @@ export async function api<T = Record<string, unknown>>(
   body?: unknown,
   opts: ApiOptions = {},
 ): Promise<T> {
-  const { url, key } = recorderConfig();
+  const { url } = recorderConfig();
+  const key = bearerToken();
   const res = await fetch(url + path, {
     method,
     mode: 'cors',
@@ -63,6 +84,7 @@ export async function api<T = Record<string, unknown>>(
   });
   const text = await res.text();
   if (!res.ok) {
+    reportStatus(res.status);
     throw new VitrinkaApiError(`${method} ${path} → ${res.status}: ${text}`, res.status);
   }
   return (text ? JSON.parse(text) : {}) as T;
@@ -78,7 +100,8 @@ export async function uploadChunk(
   seq: number,
   body: string,
 ): Promise<{ blobKey?: string }> {
-  const { url, key } = recorderConfig();
+  const { url } = recorderConfig();
+  const key = bearerToken();
   const res = await fetch(`${url}/api/v1/sessions/${sessionId}/chunk?seq=${seq}`, {
     method: 'POST',
     mode: 'cors',
@@ -88,6 +111,7 @@ export async function uploadChunk(
   });
   const text = await res.text();
   if (!res.ok) {
+    reportStatus(res.status);
     throw new VitrinkaApiError(`POST chunk seq ${seq} → ${res.status}: ${text}`, res.status);
   }
   try {

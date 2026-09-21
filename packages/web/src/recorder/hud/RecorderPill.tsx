@@ -9,7 +9,7 @@ import { type ReactElement, useEffect, useState } from 'react';
 
 import { health, type RecorderHealth, type SessionState } from '../queue';
 import { elapsedOf } from '../session';
-import { AnnotateIcon, CheckIcon, MoreIcon, NewTabIcon, PauseIcon, PencilIcon, PlayIcon, StopIcon } from './icons';
+import { AnnotateIcon, CheckIcon, CloseIcon, MoreIcon, NewTabIcon, PauseIcon, PencilIcon, PlayIcon, StopIcon } from './icons';
 
 export const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '') ? '⌥⇧' : 'Alt⇧';
 
@@ -48,6 +48,12 @@ export interface RecorderPillProps {
   annotating: boolean;
   stopping: boolean;
   starting: boolean;
+  /** Something to authenticate with (an explicit key or a stored link). */
+  linked: boolean;
+  /** A stored link can be forgotten; an explicit key cannot. */
+  canUnlink: boolean;
+  onLink: () => void;
+  onUnlink: () => void;
   onStart: () => void;
   onPause: () => void;
   onNote: () => void;
@@ -65,6 +71,17 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   useEffect(() => {
     if (!p.rec) setMenu(false);
   }, [p.rec]);
+
+  if (!p.rec && !p.linked) {
+    return (
+      <div className="stack">
+        <button type="button" className="grip link" aria-label="Link recorder" onClick={p.onLink}>
+          <span className="dot" />
+          <span>Link recorder</span>
+        </button>
+      </div>
+    );
+  }
 
   if (!p.rec) {
     return (
@@ -144,6 +161,18 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
               >
                 <StopIcon /> Stop recording
               </button>
+              {p.canUnlink ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(false);
+                    p.onUnlink();
+                  }}
+                >
+                  <CloseIcon /> Unlink
+                </button>
+              ) : null}
             </div>
           ) : null}
         </span>

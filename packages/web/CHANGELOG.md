@@ -8,3 +8,6 @@
   `@vitrinka/redact`; the pill HUD in a top-layer shadow host with notes,
   element/region annotations and keyboard shortcuts; `window.__vitrinkaRecorder`
   control handle; `withVitrinkaRecorder` (`@vitrinka/web/next`) build guard.
+- Device link: no key needed — the pill links the device (`@vitrinka/link`),
+  stores the minted token under `vitrinka.recorder.link`; `recorderKey` is
+  for CI. The runtime strip is the URL alone.

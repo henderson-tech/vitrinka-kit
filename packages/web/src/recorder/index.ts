@@ -1,11 +1,12 @@
 /**
  * Vitrinka journey recorder for React DOM apps — `@vitrinka/web/recorder`.
  *
- * The runtime strip: when `url` or `key` is empty, `VitrinkaRecorderRoot`
- * renders its children and starts NOTHING, and `VitrinkaRecorderPill` renders
- * null. A build without the env pair therefore carries an inert recorder;
- * `withVitrinkaRecorder` (`@vitrinka/web/next`) additionally refuses a
- * production build that carries a key outside an allowed lane.
+ * The runtime strip: when `url` is empty, `VitrinkaRecorderRoot` renders its
+ * children and starts NOTHING, and `VitrinkaRecorderPill` renders null. Auth
+ * is a device link minted from the pill (`@vitrinka/link`) or, for CI and
+ * unattended builds, an explicit `recorderKey`; `withVitrinkaRecorder`
+ * (`@vitrinka/web/next`) refuses a production build that carries a baked key
+ * outside an allowed lane.
  */
 import { createElement, Fragment, type ReactElement, type ReactNode, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -28,6 +29,8 @@ export interface VitrinkaRecorderRootProps {
    * `recorderKey` because React reserves `key` and never delivers it as a prop.
    */
   recorderKey?: string;
+  /** Device-link label shown in vitrinka; defaults to `<browser> on <os> · <host>`. */
+  label?: string;
   /** Reported in session meta. */
   appVersion?: string;
   /** Explicit server lane; omitted = the key's project rule decides. */
@@ -42,11 +45,12 @@ export function VitrinkaRecorderRoot(props: VitrinkaRecorderRootProps): ReactEle
   const env = envConfig();
   const url = props.url ?? env.url;
   const key = props.recorderKey ?? env.key;
-  if (!url || !key) return createElement(Fragment, null, props.children);
+  // The strip: the URL alone enables the recorder; auth is a key or the device link.
+  if (!url) return createElement(Fragment, null, props.children);
   return createElement(
     RecorderProvider,
     {
-      config: { url, key, appVersion: props.appVersion, environment: props.environment },
+      config: { url, key, appVersion: props.appVersion, environment: props.environment, label: props.label },
     },
     createElement(RouteFeed, { route: props.route }),
     props.children,

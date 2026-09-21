@@ -38,7 +38,7 @@ const cfg = window.__VT_CFG;
 createRoot(document.getElementById('root')!).render(
   createElement(
     VitrinkaRecorderRoot,
-    { url: cfg.url, recorderKey: cfg.key },
+    { url: cfg.url, recorderKey: cfg.key || undefined },
     createElement(App),
     createElement(VitrinkaRecorderPill, { title: 'e2e journey' }),
   ),

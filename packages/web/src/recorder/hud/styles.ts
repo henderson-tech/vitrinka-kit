@@ -3,7 +3,7 @@
  * it applies. Lives inside the shadow root (a `<style>` element), so it never
  * touches host CSS and host CSS never touches it.
  */
-export const HUD_CSS = `
+export const HUD_CSS_BASE = `
 * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 svg { width:1em; height:1em; vertical-align:-.125em; }
 .stack { position:relative; z-index:4; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
@@ -100,3 +100,18 @@ export const HOST_STYLE =
 export const SHEET_HOST_STYLE =
   'all:initial;position:fixed;z-index:2147483647;right:20px;bottom:76px;margin:0;padding:0;border:0;' +
   'background:transparent;overflow:visible;width:auto;height:auto;color-scheme:normal;';
+
+/** Link-sheet additions (appended to HUD_CSS). */
+export const LINK_CSS = `
+.pop.link .code { margin-top:12px; font:700 28px/1.2 ui-monospace, Menlo, monospace; letter-spacing:.14em; text-align:center; color:#f0eae4; }
+.linkrow { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:12px; }
+.linkrow .sendb { text-decoration:none; }
+.qr { width:96px; height:96px; border-radius:8px; background:#fff; padding:4px; }
+.linkline { margin-top:10px; font:500 10px/1.4 ui-monospace, Menlo, monospace; color:#756e68; display:flex; gap:10px; align-items:center; }
+.linkline.bad { color:#ff3b57; }
+.retry { all:unset; cursor:pointer; padding:3px 8px; border-radius:6px; border:1px solid #363132; color:#a8a099; font:600 10px/1 ui-monospace, Menlo, monospace; }
+.retry:hover { color:#f0eae4; border-color:#756e68; }
+.grip.link { width:auto; border-radius:999px; padding:0 14px; gap:8px; color:#f0eae4; font:600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+`;
+
+export const HUD_CSS = HUD_CSS_BASE + LINK_CSS;

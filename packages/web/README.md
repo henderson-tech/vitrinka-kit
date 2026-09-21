@@ -48,9 +48,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
 `VitrinkaRecorderRoot` installs the capture lanes; `VitrinkaRecorderPill`
 renders the HUD into its own shadow host on `<html>` (top layer, never inside
-your DOM). **When `url` or `recorderKey` is empty the root renders its
-children and starts nothing** — a build without the env pair carries an
-inert recorder. The prop is `recorderKey`, not `key`: React reserves `key`
+your DOM). **When `url` is empty the root renders its children and starts
+nothing** — a build without the URL carries an inert recorder.
+
+**No key is needed.** Dev/preview builds set only `NEXT_PUBLIC_VITRINKA_URL`;
+testers **link their device from the pill**: the pill shows **Link
+recorder**, the sheet shows a short code, **Open vitrinka** (approve on this
+device) and a QR (scan from your phone); once approved the server mints an
+ingest-only `vkr_` token, stored in `localStorage` under
+`vitrinka.recorder.link`, and recording starts. **Unlink** in the ⋯ menu
+forgets it — so does a 401 from the server. `recorderKey` (an admin-minted
+`vkr_` key) is for CI, e2e and unattended builds only; when passed it wins
+over the link. The prop is `recorderKey`, not `key`: React reserves `key`
 and never delivers it to a component.
 
 Navigation is observed through `history.pushState` / `replaceState` /
@@ -76,7 +85,7 @@ bundler inlines `process.env`).
 | Var | What |
 |---|---|
 | `NEXT_PUBLIC_VITRINKA_URL` | Your vitrinka server, e.g. `https://app.vitrinka.ai` |
-| `NEXT_PUBLIC_VITRINKA_KEY` | A **`vkr_` recorder key** minted in vitrinka under Settings → project → Recorder keys. Publishable: project-pinned, origin-allowlisted, valid only on the session routes — never a `vkp_`/`vks_` API key. |
+| `NEXT_PUBLIC_VITRINKA_KEY` | Optional — CI / unattended only. A **`vkr_` recorder key** minted in vitrinka under Settings → project → Recorder keys: project-pinned, origin-allowlisted, valid only on the session routes — never a `vkp_`/`vks_` API key. Testers link instead. |
 | `VITRINKA_RECORDER_LANE` | The build's lane for the guard below (`development`, `preview`, …) |
 
 ### The build guard
@@ -90,16 +99,17 @@ const { withVitrinkaRecorder } = require('@vitrinka/web/next');
 module.exports = withVitrinkaRecorder({ /* your config */ });
 ```
 
-`next build` (`NODE_ENV=production`) then **refuses** when
+`next build` (`NODE_ENV=production`) then **refuses** when a baked
 `NEXT_PUBLIC_VITRINKA_KEY` is set and `VITRINKA_RECORDER_LANE` is not one of
-the allowed lanes (default `development`, `preview`; override with
+the allowed lanes — the URL alone is allowed everywhere (dev/preview builds
+set only the URL; testers link from the pill; a key is for CI) (default `development`, `preview`; override with
 `allowedLanes`, and the var names with `laneVar` / `keyVar`). Unset the key
 for the production lane, or set the lane on the preview one. The config is
 returned unchanged otherwise.
 
 ## Using the pill
 
-Idle: a quiet dot bottom-right — click to **start** (the session title is
+Unlinked: **Link recorder** bottom-right. Linked and idle: a quiet dot — click to **start** (the session title is
 `document.title`, or the `title` prop). Recording: rec dot · timer · name ·
 sync glyph · controls (keycaps show on hover):
 
@@ -108,7 +118,7 @@ sync glyph · controls (keycaps show on hover):
 | ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
 | ✎ Note | ⌥⇧N | the 360px sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel) |
 | ⌖ Annotate | ⌥⇧A | click an element or drag a region, then describe it; `board` (an annotation on the board) or `task` (also filed as an intake draft) |
-| ⋯ | | **Open board** (the server-minted link) · **Stop recording** |
+| ⋯ | | **Open board** (the server-minted link) · **Stop recording** · **Unlink** |
 
 The sync glyph is honest: ✓ means the server confirmed it holds everything
 captured; a second line unfolds only for a backlog, an outage (`offline ·

@@ -21,7 +21,8 @@ export interface RecorderStorage {
   remove(key: string): void;
 }
 
-const PREFIX = 'vitrinka.rec.';
+// Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · link.
+const PREFIX = 'vitrinka.recorder.';
 
 let current: RecorderStorage | null = null;
 let used = false;

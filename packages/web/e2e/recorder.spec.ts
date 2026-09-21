@@ -31,6 +31,7 @@ let stubServer: Server;
 let pageUrl: string;
 let stubUrl: string;
 const seen: Seen[] = [];
+let claims = 0;
 
 function listen(server: Server): Promise<string> {
   return new Promise((res) => {
@@ -85,6 +86,15 @@ test.beforeAll(async () => {
     const path = req.url ?? '';
     seen.push({ method: req.method ?? '', path, headers, body });
     res.setHeader('content-type', 'application/json');
+    if (path === '/api/v1/cli/auth') {
+      claims = 0;
+      res.writeHead(201);
+      return void res.end(JSON.stringify({ device_code: 'dc-e2e', user_code: 'WXYZ-1234', verify_path: '/link?c=WXYZ-1234', qr_path: '/link/qr?c=WXYZ-1234', interval: 2, expires_in: 600 }));
+    }
+    if (path === '/api/v1/cli/auth/claim') {
+      if (++claims < 2) return void res.writeHead(202).end();
+      return void res.end(JSON.stringify({ token: 'vkr_test', workspace: 'acme', label: 'e2e', expires_at: '2027-01-01T00:00:00Z' }));
+    }
     if (path === '/api/v1/recorder/policy') return void res.end(JSON.stringify({ policy: null }));
     if (path === '/api/v1/sessions' && req.method === 'POST') {
       res.writeHead(201);
@@ -117,7 +127,7 @@ test.beforeAll(async () => {
     res.end(
       `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title></head><body>` +
         `<div id="root"></div>` +
-        `<script>window.__VT_CFG=${JSON.stringify({ url: stubUrl, key: 'vkr_e2e' })}</script>` +
+        `<script>window.__VT_CFG=${JSON.stringify({ url: stubUrl, key: (req.url ?? '').includes('nokey') ? '' : 'vkr_e2e' })}</script>` +
         `<script src="/app.js"></script></body></html>`,
     );
   });
@@ -200,4 +210,31 @@ test('records a journey: create · click · nav · note · region annotation · 
   expect(new Set(seqs).size).toBe(seqs.length);
   // The recorder never recorded its own uploads.
   expect(events.some((e) => e.kind === 'net' && String(e.payload?.url).startsWith(stubUrl))).toBe(false);
+});
+
+test('links the device from the pill, then records with the minted token', async ({ page }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/?nokey=1`);
+  await page.getByRole('button', { name: 'Link recorder' }).click();
+  const sheet = page.locator('[data-e2e="link-sheet"]');
+  await expect(sheet).toBeVisible();
+  await expect(page.locator('[data-e2e="link-code"]')).toHaveText('WXYZ-1234');
+  const open = page.getByRole('link', { name: 'Open vitrinka' });
+  await expect(open).toHaveAttribute('href', `${stubUrl}/link?c=WXYZ-1234`);
+  await expect(open).toHaveAttribute('target', '_blank');
+  await expect(page.getByAltText('Scan to link')).toHaveAttribute('src', `${stubUrl}/link/qr?c=WXYZ-1234`);
+  await expect(sheet).toContainText('waiting for approval…');
+  // The stub answers 202 once, then 200 — approval lands on the second claim.
+  await expect(page.locator('[data-e2e="recorder-pill"]')).toBeVisible({ timeout: 20_000 });
+  const start = seen.find((s) => s.path === '/api/v1/cli/auth')!;
+  expect(start.body).toEqual({ kind: 'recorder', label: expect.stringMatching(/ on .* · 127\.0\.0\.1:\d+$/) });
+  expect(seen.filter((s) => s.path === '/api/v1/cli/auth/claim').length).toBeGreaterThanOrEqual(2);
+  const create = seen.find((s) => s.method === 'POST' && s.path === '/api/v1/sessions')!;
+  expect(create.headers.authorization).toBe('Bearer vkr_test');
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toContain('vkr_test');
+  // Unlink from the menu → back to the unlinked pill.
+  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('menuitem', { name: 'Unlink' }).click();
+  await expect(page.getByRole('button', { name: 'Link recorder' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
 });

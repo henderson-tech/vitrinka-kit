@@ -12,6 +12,7 @@ import { patchNetwork } from './capture/net';
 import { checkoutRRWeb, flushRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
 import { configureRecorder, type RecorderConfig } from './config';
 import { installControl } from './control';
+import { installUnauthorizedHandler } from './link';
 import { insideHud } from './hud/host';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
 import { onBeforeStop, recoverRedactionPolicy } from './session';
@@ -62,6 +63,7 @@ export function RecorderProvider({
       ignore: (t) => annotateState.active || insideHud(t),
     });
     const uninstallControl = installControl();
+    const uninstall401 = installUnauthorizedHandler();
 
     // Keep the rrweb lane in step with the session: start on record, a fresh
     // checkout on resume, ship-and-stop on stop.
@@ -111,6 +113,7 @@ export function RecorderProvider({
       offBeforeStop();
       uninstallClicks();
       uninstallControl();
+      uninstall401();
       stopRRWeb();
     };
     // The lanes install once per mount; config changes are handled above.

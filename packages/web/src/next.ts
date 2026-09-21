@@ -6,7 +6,8 @@
  * the safety boundary: a PRODUCTION build (`NODE_ENV=production`) that has
  * the key var set must also declare an allowed lane in `VITRINKA_RECORDER_LANE`
  * (default: `development` or `preview`), or the build refuses with a clear
- * error. The config is returned unchanged otherwise.
+ * error. The URL alone is allowed everywhere (testers link from the pill); the
+ * config is returned unchanged otherwise.
  */
 
 export interface WithVitrinkaRecorderOptions {

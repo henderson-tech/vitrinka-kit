@@ -3,14 +3,17 @@
  * the sheet (open/title/ctx/pick + the surviving draft), annotate mode, the
  * keyboard shortcuts and the Esc-anywhere / click-outside close.
  */
-import { type ReactElement, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 
+import { readLink, recorderConfig, vitrinkaLinked } from '../config';
+import { forgetLink, linkDevice, LinkExpired, type DeviceLink } from '../link';
 import { getState } from '../queue';
 import { addAnnotation, addNote, startSession, stopSession, togglePause } from '../session';
 import { annotateState, setAnnotating, subscribe } from '../state';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
 import { createSheetHost, insideHud, sheetTarget } from './host';
+import { type LinkPhase, LinkSheet } from './LinkSheet';
 import { RecorderPill } from './RecorderPill';
 import { Sheet } from './Sheet';
 import { HUD_CSS } from './styles';
@@ -46,6 +49,50 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const annotating = annotateState.active;
+  const linked = vitrinkaLinked();
+  const canUnlink = !recorderConfig().key && readLink() !== null;
+
+  // Device link (Netflix-style code): the sheet paints the phase, this owns it.
+  const [link, setLink] = useState<{ phase: LinkPhase; flow: DeviceLink | null; error?: string } | null>(null);
+  const linkRef = useRef<DeviceLink | null>(null);
+  const closeLink = useCallback(() => {
+    linkRef.current?.cancel();
+    linkRef.current = null;
+    setLink(null);
+  }, []);
+  const beginLink = useCallback(() => {
+    linkRef.current?.cancel();
+    setSheet(null);
+    setLink({ phase: 'starting', flow: null });
+    linkDevice()
+      .then((flow) => {
+        linkRef.current = flow;
+        setLink({ phase: 'waiting', flow });
+        return flow.linked.then(
+          () => {
+            if (linkRef.current !== flow) return;
+            linkRef.current = null;
+            setLink(null);
+            // Linked: start recording exactly as if a key had been passed.
+            onStartRef.current();
+          },
+          (e: unknown) => {
+            if (linkRef.current !== flow) return;
+            linkRef.current = null;
+            if (e instanceof LinkExpired) setLink({ phase: 'expired', flow });
+            else if (!(e instanceof Error && e.name === 'AbortError'))
+              setLink({ phase: 'error', flow, error: e instanceof Error ? e.message : String(e) });
+          },
+        );
+      })
+      .catch((e: unknown) => setLink({ phase: 'error', flow: null, error: e instanceof Error ? e.message : String(e) }));
+  }, []);
+  const onUnlink = useCallback(() => {
+    closeLink();
+    setSheet(null);
+    setAnnotating(false);
+    forgetLink();
+  }, [closeLink]);
 
   const closeSheet = useCallback(() => setSheet(null), []);
   const openNote = useCallback(() => {
@@ -82,11 +129,17 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
     [sheet],
   );
   const onStart = useCallback(() => {
+    if (!vitrinkaLinked()) {
+      beginLink();
+      return;
+    }
     setStarting(true);
     startSession({ title: defaultTitle() })
       .catch((e) => console.warn('vitrinka: start failed', e))
       .finally(() => setStarting(false));
-  }, [defaultTitle]);
+  }, [defaultTitle, beginLink]);
+  const onStartRef = useRef(onStart);
+  onStartRef.current = onStart;
   const onStop = useCallback(() => {
     setSheet(null);
     setAnnotating(false);
@@ -133,7 +186,7 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
       document.removeEventListener('keydown', key, true);
       document.removeEventListener('pointerdown', down, true);
     };
-  }, [sheet, closeSheet]);
+  }, [sheet, link, closeSheet, closeLink]);
 
   // The sheet's portal target (D4): a host inside the topmost open dialog
   // when one exists, else the HUD host. Resolved per open.
@@ -174,6 +227,10 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
           annotating={annotating}
           stopping={stopping}
           starting={starting}
+          linked={linked}
+          canUnlink={canUnlink}
+          onLink={beginLink}
+          onUnlink={onUnlink}
           onStart={onStart}
           onPause={onPause}
           onNote={openNote}
@@ -181,6 +238,11 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
           onStop={onStop}
         />
         {sheetEl && portal ? createPortal(sheetEl, portal.mount) : null}
+        {link ? (
+          <div className="sheetwrap" style={{ position: 'absolute', right: 0, bottom: 52 }}>
+            <LinkSheet phase={link.phase} start={link.flow?.start ?? null} error={link.error} onRetry={beginLink} onClose={closeLink} />
+          </div>
+        ) : null}
       </div>
     </>
   );
