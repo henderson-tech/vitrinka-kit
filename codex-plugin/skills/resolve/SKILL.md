@@ -122,6 +122,9 @@ rules):
   a subagent before capturing the rest.
 - ONE verifier subagent per batch of shots, returning PASS/FAIL + quoted
   visible text per item. Never read the shots yourself.
+- Journey screens re-capture as a NEW pass on the chain (`compose_board
+  {board, journey, pass: "next", …}`), never over the reviewed section —
+  the before must survive.
 
 Then close the loop, per item:
 
@@ -130,8 +133,13 @@ Then close the loop, per item:
    For `investigate`: the answer itself.
 3. `set_status` → `in_review`. **Never `resolved`** — the user's accept,
    taken on the board.
+4. An item filed from an Eve review job (it carries `jobId` /
+   `judgmentIndex`): `POST /api/v1/review/jobs/{id}/verify {cardId,
+   cardVersion}` links the proof so the post-fix audit runs, then
+   `review_judge {board, journey}` re-reads the pass for regressions.
+   Resolution is evidence, never automatic usefulness points.
 
-Batch these three calls per block, right after the block's verification —
+Batch these calls per block, right after the block's verification —
 not per-edit and not all at session end. Before the hand-back on a bound
 task, run the `handoff` skill (`hand_back`) — the chat block is its
 `rendered` output.

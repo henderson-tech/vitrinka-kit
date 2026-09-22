@@ -1,35 +1,37 @@
 ---
 name: review
-description: "Use when asked to review a vitrinka board's screens or a journey pass for defects from the app's repo — 'review the board', 'review this journey', '/vitrinka:review [board] [journey] [eve]', 'have Eve review it'; human annotations are listen (live) / resolve (backlog)."
+description: "Use when asked to review a vitrinka board's screens or a journey pass for defects from the app's repo — 'review the board', 'review this journey', '/vitrinka:review [board] [journey] [eve]', 'have Eve review it'; fixing what the board accepts is resolve, live human annotations are listen."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
 
-# /vitrinka:review — the review loop
+# /vitrinka:review — file findings, never fix
 
-Two modes, chosen by the trailing argument. They never mix in one run.
+Two modes, chosen by the trailing argument. They never mix in one run, and
+neither touches the repo: a review ends when its findings sit `staged` on
+the board for the user's Accept/Dismiss. Fixing accepted findings is
+`/vitrinka:resolve`, a separate run the user starts.
 
 - **local (default)** — YOU are the reviewer. You read the screens with
-  your own eyes, judge them against the team's review brief, file findings
-  as staged annotations, fix the real ones in THIS repo and push a next
-  pass. No server-side reviewer is requested, mentioned or waited on.
+  your own eyes, judge them against the team's review brief and file
+  findings as staged annotations. No server-side reviewer is requested,
+  mentioned or waited on.
 - **`eve`** — Eve, vitrinka's AI reviewer, judges the screens through the
   server-side judge and independent auditor. This session is a proxy: it
-  requests the pass, waits, then RE-VERIFIES Eve's findings against the
-  code before fixing. It files no findings of its own.
+  requests the pass, waits, RE-VERIFIES Eve's findings against the code and
+  reports which hold. It files no findings of its own.
 
 Failure modes this skill prevents:
 
-1. **Looking and walking away** — the loop isn't done until fixes shipped
-   and a next pass exists.
+1. **Fixing what you just found** — a staged finding is a claim awaiting
+   the user's verdict; a code change before Accept IS a verdict, and it
+   leaves the board with nothing to decide on. Review writes to the board
+   and the report only.
 2. **Treating every finding as a defect** — a finding (yours or Eve's) is a
-   claim; locate it in the code before touching anything.
-3. **Fixing on top of stale screens** — fixes land as a NEW journey pass,
-   never edits to the reviewed section.
-4. **Verdicting findings yourself** — `accepted`/`dismissed` is the USER's
-   call in the AI BOARD tab. Your outputs are code, replies in your report,
-   and the next pass.
-5. **Mixing modes** — a local run never calls `review_judge`; an `eve` run
+   claim; locate it in the code before reporting it as real.
+3. **Verdicting findings yourself** — `accepted`/`dismissed` is the USER's
+   call in the AI BOARD tab.
+4. **Mixing modes** — a local run never calls `review_judge`; an `eve` run
    never files `annotate` items of its own.
 
 Arguments: a board slug, optionally a journey key, optionally the word
@@ -123,55 +125,33 @@ with the exported `judge/<model>` agent. Preserve `jobId`,
 `judgmentIndex`, card and version fields: they link later fix evidence back
 to the original review and keep filing idempotent with the UI.
 
-**Re-verify every finding against the code before it becomes work.** Eve
-proposes; you confirm or refute. A finding that's wrong gets a line in your
-report ("F: claims X; the code does Y") — the user dismisses it, not you.
-Don't add findings of your own here; that is the local mode, run it as its
-own pass.
+**Re-verify every finding against the code before you report it as real.**
+Eve proposes; you confirm or refute. A finding that's wrong gets a line in
+your report ("F: claims X; the code does Y") — the user dismisses it, not
+you. Don't add findings of your own here; that is the local mode, run it as
+its own pass.
 
-## Phase 2 — triage into blocks
+## Phase 2 — group by root cause
 
-Triage the whole set at once, grouped by root cause exactly like
-`/vitrinka:resolve` Phase 2 — five contrast findings on five screens are ONE
-token fix:
+Group the whole set at once by root cause, the way `/vitrinka:resolve`
+triages — five contrast findings on five screens are ONE token problem, and
+the report says so, so the user can Accept or Dismiss a block instead of a
+scatter. `kind: suggestion` is taste and is labelled as such; `refuted` is
+context only; `severity` orders the report. The grouping is words in the
+report, never a commit.
 
-- Work `proposed` findings of kind `finding`. `refuted` is context only.
-  `kind: suggestion` is taste: surface to the user, don't auto-implement.
-- `severity` orders the work; it doesn't gate it.
-
-## Phase 3 — fix, reshoot, next pass
-
-1. Fix the confirmed findings block-by-block, one coherent commit each — the
-   resolve skill's scope discipline applies verbatim.
-2. Re-capture the affected screens the way this repo does it (`vitrinka
-   snap`/journey script) and push the set.
-3. Compose the iteration as a NEW pass on the chain: `compose_board {board,
-   journey, pass: "next", …}` with the fresh screens — never overwrite the
-   reviewed section.
-4. Close the loop in the mode you started in:
-   - **local** — `get_card_image` the new pass's screens and re-check each
-     fixed finding on the pixels; anything still open gets a fresh
-     `annotate` item on the NEW card, with a `detail` that names the
-     earlier key. No server pass is requested.
-   - **`eve`** — link fresh evidence with `POST
-     /api/v1/review/jobs/{id}/verify {cardId, cardVersion}` to enqueue the
-     post-fix audit automatically, then `review_judge {board, journey}`
-     reviews the wider pass for regressions. Resolution is evidence, never
-     automatic usefulness points. AI dimensions (validity, actionability,
-     impact, novelty, resolution) remain distinct from human feedback.
-     Anchored 1–5 scores display as 1–100; there is no combined score.
-
-## Phase 4 — report and ask for triage
+## Phase 3 — report and ask for triage
 
 One summary to the user (and to the board as a `callout` card when the
-session is board-first): which mode ran, findings confirmed-and-fixed (with
-commits), findings you believe are wrong (with evidence, for their dismiss
-click), suggestions left for their call, and the new pass's outcome when it
-lands. Before the hand-back on a bound task, run the `handoff` skill
-(`hand_back`) — the chat block is its `rendered` output.
+session is board-first): which mode ran, findings filed grouped by root
+cause, findings you believe are wrong (with evidence, for their dismiss
+click), suggestions left for their call. Before the hand-back on a bound
+task, run the `handoff` skill (`hand_back`) — the chat block is its
+`rendered` output.
 
 End with an explicit board ask to Accept or Dismiss the staged findings (the
-card's Accept all / Dismiss all controls support batches). Never invent
+card's Accept all / Dismiss all controls support batches) and name
+`/vitrinka:resolve` as the run that fixes what they accept. Never invent
 verdicts to improve metrics. `vitrinka review stats --since 90d [--project
 <slug>]` or `review_stats {since:"90d", project?}` shows filed, accepted,
 dismissed and still-staged counts per rule and agent/model.
@@ -183,24 +163,25 @@ rejection rate.
 - "Looking at screenshots is expensive, I'll ask the server" → the default
   is local; the server reviewer is the user's explicit `eve` choice.
 - "The pass is requested, my job is done" → the loop is request → verify →
-  fix → next pass.
+  report.
 - "Eve flagged it, so it's a bug" → verify against code first; pushing back
   with evidence is a valid resolution.
 - "I'll just accept the obvious ones on the board" → you have no verdict.
-- "I'll re-shoot onto the same section" → same-section overwrites destroy
-  the before.
+- "It's a one-line fix, I'll do it while I'm in the file" → a fix is a
+  verdict; file it, report it, stop — the user decides, `resolve` fixes.
 - "Severity low, skip reading it" → low-severity findings cluster into the
-  cross-cutting blocks that ARE worth fixing.
+  cross-cutting blocks that ARE worth the user's decision.
 
 ## Red flags — STOP
 
 - A local run is calling `review_judge`, polling passes, or naming Eve.
 - An `eve` run is filing `annotate` items of its own.
 - You are about to PATCH an ai-annotation's `state`.
-- You are fixing a finding you never located in the code.
+- You are editing repo code, running a capture or composing a pass — that
+  is `/vitrinka:resolve`, after the user's verdict.
+- You are reporting as real a finding you never located in the code.
 - Your findings are document cards or a compose_board `finding` instead of
   `annotate` items with regions on the actual screenshots.
 - A pass is `running` and you're requesting another.
-- Your next pass has fewer screens than the findings you claim to have fixed.
 - You've read findings one HTTP call at a time instead of the one
   board-level GET.
