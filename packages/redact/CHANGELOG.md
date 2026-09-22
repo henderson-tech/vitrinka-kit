@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1
+
+- Declares `"type": "module"`: the build is ESM, and without the field Node
+  22+ re-parses it behind a `MODULE_TYPELESS_PACKAGE_JSON` warning while
+  runtimes without module detection (Node 20) fail to load it.
+- Ships the Elastic-2.0 `LICENSE` text in the tarball, like the other kit
+  packages.
+
 ## 0.1.0
 
 Initial release: the shared recorder redaction engine.

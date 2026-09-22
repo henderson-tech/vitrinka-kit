@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/redact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "vitrinka recorder redaction engine — safe-by-default scrubbing of auth headers, sensitive body keys, and URL secrets, driven by the workspace redaction policy. Shared by every vitrinka capture client.",
   "license": "Elastic-2.0",
   "repository": {
@@ -8,6 +8,7 @@
     "url": "https://github.com/henderson-tech/vitrinka-kit.git",
     "directory": "packages/redact"
   },
+  "type": "module",
   "source": "src/index.ts",
   "main": "build/index.js",
   "types": "build/index.d.ts",
