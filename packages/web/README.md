@@ -56,8 +56,10 @@ testers **link their device from the pill**: the pill shows **Link
 recorder**, the sheet shows a short code, **Open vitrinka** (approve on this
 device) and a QR (scan from your phone); once approved the server mints an
 ingest-only `vkr_` token, stored in `localStorage` under
-`vitrinka.recorder.link`, and recording starts. **Unlink** in the ⋯ menu
-forgets it — so does a 401 from the server. `recorderKey` (an admin-minted
+`vitrinka.recorder.link`, and recording starts. A `url` addressing
+`/w/<slug>` preselects that workspace on the approve page; a token approved
+into another workspace is discarded and the sheet says which one to pick.
+**Unlink** in the ⋯ menu forgets it — so does a 401 from the server. `recorderKey` (an admin-minted
 `vkr_` key) is for CI, e2e and unattended builds only; when passed it wins
 over the link. The prop is `recorderKey`, not `key`: React reserves `key`
 and never delivers it to a component.
@@ -146,7 +148,7 @@ __vitrinkaRecorder.status(); // { recording, sessionId, elapsedMs, queued, synce
 
 | Lane | Event `kind` | Payload |
 |---|---|---|
-| rrweb | `rrweb` | `{count}` + `blobKey` — the batch itself is uploaded as a chunk; inputs always masked, all text under a `maskAllText` policy |
+| rrweb | `rrweb` | `{count}` + `blobKey` — the batch itself is uploaded as a chunk; inputs always masked, all text under a `maskAllText` policy; images recorded by URL, never inlined (inlining would alter the page's own `<img>`) |
 | clicks | `click` | `{selector, text, rect, route}` |
 | navigation | `nav` | `{url, route, spa}` |
 | network | `net` | `{method, url, status, ms, reqHeaders, resHeaders, reqBody, resBody, via}` — redacted, capped at 64 KiB per body; the recorder's own uploads are never recorded |

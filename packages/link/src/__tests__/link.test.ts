@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 
-import { isUnauthorized, LinkError, LinkExpired, linkOrigin, permanentStatus, pollLink, startLink, VitrinkaApiError } from '../index';
+import {
+  isUnauthorized,
+  LinkError,
+  LinkExpired,
+  linkOrigin,
+  linkWorkspace,
+  LinkWorkspaceMismatch,
+  permanentStatus,
+  pollLink,
+  startLink,
+  VitrinkaApiError,
+} from '../index';
 
 const json = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status });
@@ -20,7 +31,7 @@ describe('link', () => {
 
   it('polls pending → ok', async () => {
     let n = 0;
-    const fetch = (async () => (++n < 3 ? json(202) : json(200, { token: 'vkr_t', workspace: 'acme', label: 'l', expires_at: '2027-01-01' }))) as unknown as typeof globalThis.fetch;
+    const fetch = (async () => (++n < 3 ? json(202) : json(200, { token: 'vkr_t', kind: 'recorder', workspace: 'acme', label: 'l', expires_in: 2592000 }))) as unknown as typeof globalThis.fetch;
     const sleeps: number[] = [];
     const linked = await pollLink('https://x.test/w/a', 'dc', { fetch, interval: 1, sleep: async (ms) => void sleeps.push(ms) });
     expect(linked.token).toBe('vkr_t');
@@ -75,6 +86,44 @@ describe('link', () => {
     const r = await startLink('https://app.vitrinka.ai', { label: 'l', fetch: relative });
     expect(r.verifyUrl).toBe('https://app.vitrinka.ai/cli-auth?code=X');
     expect(r.qrUrl).toBe('https://app.vitrinka.ai/cli-auth/qr?code=X');
+  });
+
+  it('hints the /w/<slug> workspace on the approve and QR URLs; a bare origin carries none', async () => {
+    const calls: unknown[] = [];
+    const fetch = (async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)));
+      return json(201, { device_code: 'dc', user_code: 'ABCD-EFGH', verify_path: '/cli-auth?code=ABCD-EFGH', qr_path: '/cli-auth/qr?code=ABCD-EFGH' });
+    }) as unknown as typeof globalThis.fetch;
+    expect(linkWorkspace('https://app.vitrinka.ai/w/fixit/')).toBe('fixit');
+    expect(linkWorkspace('https://app.vitrinka.ai/api/w/fixit')).toBeUndefined();
+    expect(linkWorkspace('https://app.vitrinka.ai')).toBeUndefined();
+    const s = await startLink('https://app.vitrinka.ai/w/fixit', { label: 'l', workspace: 'fixit', fetch });
+    expect(s.verifyUrl).toBe('https://app.vitrinka.ai/cli-auth?code=ABCD-EFGH&workspace=fixit');
+    expect(s.qrUrl).toBe('https://app.vitrinka.ai/cli-auth/qr?code=ABCD-EFGH&workspace=fixit');
+    // The hint never reaches the start body: the server refuses unknown fields there.
+    expect(calls[0]).toEqual({ kind: 'recorder', label: 'l' });
+    const bare = await startLink('https://app.vitrinka.ai', { label: 'l', workspace: linkWorkspace('https://app.vitrinka.ai'), fetch });
+    expect(bare.verifyUrl).toBe('https://app.vitrinka.ai/cli-auth?code=ABCD-EFGH');
+  });
+
+  it('refuses a claim pinned to another workspace and never returns its token', async () => {
+    const turena = (async () => json(200, { token: 'vkr_wrong', kind: 'recorder', workspace: 'turena', label: 'l', expires_in: 1 })) as unknown as typeof globalThis.fetch;
+    const err = await pollLink('https://x.test/w/fixit', 'dc', { fetch: turena, workspace: 'fixit', sleep: async () => undefined }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LinkWorkspaceMismatch);
+    expect(err).toMatchObject({ linked: 'turena', expected: 'fixit', message: 'linked into turena — this app records into fixit; link again and pick fixit' });
+    expect(JSON.stringify(err)).not.toContain('vkr_wrong');
+    // Without an expected workspace (a bare-origin base) today's behaviour holds.
+    await expect(pollLink('https://x.test', 'dc', { fetch: turena, sleep: async () => undefined })).resolves.toMatchObject({ token: 'vkr_wrong' });
+  });
+
+  it('fails closed when an expected workspace meets a claim that names none', async () => {
+    for (const workspace of [undefined, '']) {
+      const unnamed = (async () => json(200, { token: 'vkr_unnamed', kind: 'recorder', workspace, label: 'l', expires_in: 1 })) as unknown as typeof globalThis.fetch;
+      const err = await pollLink('https://x.test/w/fixit', 'dc', { fetch: unnamed, workspace: 'fixit', sleep: async () => undefined }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LinkWorkspaceMismatch);
+      expect(err).toMatchObject({ linked: '(no workspace)', expected: 'fixit' });
+      expect(JSON.stringify(err)).not.toContain('vkr_unnamed');
+    }
   });
 
   it('carries the shared transport-status vocabulary', () => {

@@ -37,7 +37,7 @@ export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.1.0';
+export const RECORDER_VERSION = '0.1.1';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */

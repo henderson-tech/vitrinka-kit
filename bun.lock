@@ -10,9 +10,9 @@
     },
     "packages/expo": {
       "name": "@vitrinka/expo",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "dependencies": {
-        "@vitrinka/link": "^0.1.0",
+        "@vitrinka/link": "^0.1.1",
         "@vitrinka/redact": "^0.1.0",
       },
       "devDependencies": {
@@ -50,7 +50,7 @@
     },
     "packages/link": {
       "name": "@vitrinka/link",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "devDependencies": {
         "@types/bun": "^1.2.0",
         "@types/node": "^22.0.0",
@@ -68,9 +68,9 @@
     },
     "packages/web": {
       "name": "@vitrinka/web",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
-        "@vitrinka/link": "^0.1.0",
+        "@vitrinka/link": "^0.1.1",
         "@vitrinka/redact": "^0.1.0",
       },
       "devDependencies": {

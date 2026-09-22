@@ -41,7 +41,11 @@ export function startRRWeb(): void {
         buf.push(ev);
       },
       checkoutEveryNms: CHECKOUT_MS,
-      inlineImages: true,
+      // Never inline: to read a no-CORS cross-origin image rrweb sets
+      // crossOrigin='anonymous' on the page's own <img>, the browser refetches
+      // it in CORS mode and a host without ACAO shows a broken image — the
+      // recorder must never change the page under test. Replay loads by URL.
+      inlineImages: false,
       collectFonts: true,
       maskAllInputs: mask.maskAllInputs,
       ...(mask.maskTextSelector ? { maskTextSelector: mask.maskTextSelector } : {}),
