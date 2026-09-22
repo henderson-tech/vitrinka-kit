@@ -7,8 +7,9 @@
   `workspace=<slug>` to `verifyUrl` and `qrUrl` so the approve page
   preselects it (the start body stays `{kind, label}`), and
   `pollLink(base, code, { workspace })` rejects a claim pinned to any other
-  workspace with `LinkWorkspaceMismatch` — its token is never returned. A
-  base without `/w/<slug>` behaves as before.
+  workspace with `LinkWorkspaceMismatch` — its token is never returned. It
+  fails closed: a claim that names no workspace is refused too. A base
+  without `/w/<slug>` behaves as before.
 - `Linked` matches the claim the server sends: `expires_in` (seconds), not
   the never-sent `expires_at`.
 

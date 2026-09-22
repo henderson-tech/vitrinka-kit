@@ -277,8 +277,12 @@ export async function pollLink(base: string, deviceCode: string, opts: PollOptio
     });
     if (res.status === 200) {
       const linked = (await res.json()) as Linked;
-      if (opts.workspace && linked.workspace && linked.workspace !== opts.workspace) {
-        throw new LinkWorkspaceMismatch(linked.workspace, opts.workspace);
+      // Fail closed: a recorder claim always names its workspace (the server
+      // sets it for kind recorder), so a missing or non-string one is refused
+      // like a foreign one — never stored against a base it cannot serve.
+      if (opts.workspace && linked.workspace !== opts.workspace) {
+        const got = typeof linked.workspace === 'string' && linked.workspace ? linked.workspace : '(no workspace)';
+        throw new LinkWorkspaceMismatch(got, opts.workspace);
       }
       return linked;
     }

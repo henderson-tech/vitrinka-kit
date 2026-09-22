@@ -116,6 +116,16 @@ describe('link', () => {
     await expect(pollLink('https://x.test', 'dc', { fetch: turena, sleep: async () => undefined })).resolves.toMatchObject({ token: 'vkr_wrong' });
   });
 
+  it('fails closed when an expected workspace meets a claim that names none', async () => {
+    for (const workspace of [undefined, '']) {
+      const unnamed = (async () => json(200, { token: 'vkr_unnamed', kind: 'recorder', workspace, label: 'l', expires_in: 1 })) as unknown as typeof globalThis.fetch;
+      const err = await pollLink('https://x.test/w/fixit', 'dc', { fetch: unnamed, workspace: 'fixit', sleep: async () => undefined }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LinkWorkspaceMismatch);
+      expect(err).toMatchObject({ linked: '(no workspace)', expected: 'fixit' });
+      expect(JSON.stringify(err)).not.toContain('vkr_unnamed');
+    }
+  });
+
   it('carries the shared transport-status vocabulary', () => {
     expect(permanentStatus(404)).toBe(true);
     expect(permanentStatus(408)).toBe(false);
