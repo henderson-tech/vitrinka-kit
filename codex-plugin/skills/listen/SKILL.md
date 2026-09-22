@@ -123,7 +123,8 @@ annotation. Other line shapes:
 
 - `№<id> [answer] <board>: <question> → <answer>` — an ANSWERED BOARD
   QUESTION (a "Send to Claude" dispatch): `wait_for_work` returns it in
-  `choices[]` alongside `work[]`; record the decision (answer + any `note`)
+  `choices[]` alongside `work[]`; record the decision (answer + any `note`,
+  or a multi-select's per-pick `notes`)
   per the brainstorming skill, not as a code-fix item. Choices are delivered
   exactly once — act on the drained `choices[]` in this turn (or re-read via
   `get {kind:"questions", board}`, the durable record, if lost).
