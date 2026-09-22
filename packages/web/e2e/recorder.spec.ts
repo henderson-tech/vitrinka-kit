@@ -93,7 +93,7 @@ test.beforeAll(async () => {
     }
     if (path === '/api/v1/cli/auth/claim') {
       if (++claims < 2) return void res.writeHead(202).end();
-      return void res.end(JSON.stringify({ token: 'vkr_test', workspace: 'acme', label: 'e2e', expires_at: '2027-01-01T00:00:00Z' }));
+      return void res.end(JSON.stringify({ token: 'vkr_test', kind: 'recorder', workspace: 'acme', label: 'e2e', expires_in: 2592000 }));
     }
     if (path === '/api/v1/recorder/policy') return void res.end(JSON.stringify({ policy: null }));
     if (path === '/api/v1/sessions' && req.method === 'POST') {

@@ -29,6 +29,8 @@ Both recorders authenticate with an **ingest-only recorder token** (`vkr_…`:
 project-pinned, valid only on the routes above) — minted by the device link
 (`POST {origin}/api/v1/cli/auth {kind:"recorder", label}` → code;
 `POST {origin}/api/v1/cli/auth/claim {device_code}` polled until approved;
+a `…/w/<slug>` target adds `workspace=<slug>` to the approve link so the
+right workspace is preselected, and refuses a token approved into another;
 see [`packages/link`](../packages/link)) or, for unattended builds, an
 admin-minted recorder key baked into the build. The packages never inspect
 the token, they only send it as the bearer — the web recorder with
@@ -72,7 +74,7 @@ Only during a session you explicitly start:
 
 | Channel | Expo recorder | Browser extension | Web recorder |
 |---|---|---|---|
-| Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`) |
+| Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`; images recorded by URL, never inlined) |
 | Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text, rect), navigation (pushState/replaceState/popstate or the router's pathname) |
 | Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads |
 | Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections |

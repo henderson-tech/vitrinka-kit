@@ -1,5 +1,14 @@
 # @vitrinka/expo
 
+## 0.2.1
+
+- **Link into the right workspace**: an `EXPO_PUBLIC_VITRINKA_URL` addressing
+  `/w/<slug>` preselects that workspace on the approve page, and a token
+  approved into any other one is discarded instead of stored (it would 401
+  on every door and loop back to Link recorder); the rail's link sheet says
+  `linked into <x> — this app records into <slug>; link again and pick
+  <slug>`. Needs `@vitrinka/link` ≥ 0.1.1.
+
 ## 0.2.0
 
 - **Device link replaces the baked token.** The recorder is enabled by

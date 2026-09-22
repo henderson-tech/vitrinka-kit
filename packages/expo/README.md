@@ -77,7 +77,10 @@ the rail they see **Link recorder**: a short code, **Open vitrinka** (approve
 on the same device) — or type the code in vitrinka on any other device. The
 server mints an ingest-only `vkr_` token that the recorder stores
 (`vitrinka.recorder.link`, through the storage driver) and uses from then on;
-**Unlink** in the rail forgets it, and so does a 401 from the server.
+**Unlink** in the rail forgets it, and so does a 401 from the server. A URL
+addressing `/w/<slug>` preselects that workspace on the approve page; a
+token approved into another workspace is discarded and the sheet says which
+one to pick.
 
 Unattended builds (CI, machine-driven runs) can still bake a token:
 

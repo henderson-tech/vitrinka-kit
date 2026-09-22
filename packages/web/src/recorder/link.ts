@@ -2,7 +2,7 @@
  * The device link, wired to the recorder: start a code, poll for approval,
  * store the token; forget it on Unlink or when a session door answers 401.
  */
-import { type Linked, type LinkStart, pollLink, startLink } from '@vitrinka/link';
+import { type Linked, type LinkStart, linkWorkspace, pollLink, startLink } from '@vitrinka/link';
 
 import { onUnauthorized } from './api';
 import { clearLink, defaultLinkLabel, recorderConfig, storeLink } from './config';
@@ -13,17 +13,22 @@ export { LinkExpired } from '@vitrinka/link';
 
 export interface DeviceLink {
   start: LinkStart;
-  /** Resolves once the tester approved; rejects with LinkExpired / AbortError. */
+  /** Resolves once the tester approved; rejects with LinkExpired / LinkWorkspaceMismatch / AbortError. */
   linked: Promise<Linked>;
   cancel: () => void;
 }
 
-/** Ask for a code and poll until approved. The token is stored on success. */
+/**
+ * Ask for a code and poll until approved. The token is stored on success.
+ * A `url` addressing `/w/<slug>` preselects that workspace on the approve
+ * page, and a token approved into any other one is discarded unstored.
+ */
 export async function linkDevice(): Promise<DeviceLink> {
   const { url } = recorderConfig();
-  const start = await startLink(url, { label: defaultLinkLabel() });
+  const workspace = linkWorkspace(url);
+  const start = await startLink(url, { label: defaultLinkLabel(), workspace });
   const ac = new AbortController();
-  const linked = pollLink(url, start.device_code, { interval: start.interval, signal: ac.signal }).then((l) => {
+  const linked = pollLink(url, start.device_code, { interval: start.interval, workspace, signal: ac.signal }).then((l) => {
     storeLink(l);
     return l;
   });

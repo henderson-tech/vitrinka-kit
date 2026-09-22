@@ -7,7 +7,12 @@
  *   POST {origin}/api/v1/cli/auth        {kind:"recorder", label}
  *     → 201 {device_code, user_code, verify_path, verify_url?, qr_path, interval, expires_in}
  *   POST {origin}/api/v1/cli/auth/claim  {device_code}
- *     → 202 pending · 200 {token, workspace, label, expires_at} · 404 expired
+ *     → 202 pending · 200 {token, kind, workspace, label, expires_in} · 404 expired
+ *
+ * A base that addresses one workspace (`…/w/<slug>`) carries that slug as a
+ * `workspace=<slug>` hint on the approve and QR URLs (the approve page
+ * preselects it) and refuses a claim pinned to any other workspace — its
+ * token could never authenticate against `/w/<slug>`.
  *
  * Pure TypeScript: no DOM or React Native globals — `fetch` is taken from
  * the options or from globalThis.
@@ -31,9 +36,11 @@ export interface LinkStart {
 
 export interface Linked {
   token: string;
+  /** Slug of the workspace the approver pinned the token to. */
   workspace: string;
   label: string;
-  expires_at: string;
+  /** Seconds until the (sliding) token expiry, as of the claim. */
+  expires_in: number;
 }
 
 /** The server no longer knows the code (expired or already consumed). */
@@ -41,6 +48,21 @@ export class LinkExpired extends Error {
   constructor(message = 'link code expired') {
     super(message);
     this.name = 'LinkExpired';
+  }
+}
+
+/**
+ * The approver pinned the token to another workspace than the one the
+ * recorder records into. The token is discarded (never returned): every
+ * session door under `/w/<expected>` would answer it with a 401.
+ */
+export class LinkWorkspaceMismatch extends Error {
+  constructor(
+    readonly linked: string,
+    readonly expected: string,
+  ) {
+    super(`linked into ${linked} — this app records into ${expected}; link again and pick ${expected}`);
+    this.name = 'LinkWorkspaceMismatch';
   }
 }
 
@@ -83,6 +105,27 @@ export interface LinkOptions {
 /** The control-plane origin of a base URL. */
 export function linkOrigin(base: string): string {
   return new URL(base).origin;
+}
+
+/**
+ * The workspace a base URL addresses — `<slug>` of a `/w/<slug>` path, split
+ * exactly like the server's tenant router — or undefined for a bare origin.
+ */
+export function linkWorkspace(base: string): string | undefined {
+  const m = /^\/w\/([^/]+)/.exec(new URL(base).pathname);
+  if (!m?.[1]) return undefined;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
+function withWorkspace(url: string, workspace: string | undefined): string {
+  if (!workspace) return url;
+  const u = new URL(url);
+  u.searchParams.set('workspace', workspace);
+  return u.href;
 }
 
 /** A 401 from a session door: the stored token is dead. */
@@ -137,8 +180,12 @@ function requireString(w: Record<string, unknown>, key: string, status: number):
   return v;
 }
 
-/** Ask the server for a link code. */
-export async function startLink(base: string, opts: { label: string } & LinkOptions): Promise<LinkStart> {
+/**
+ * Ask the server for a link code. `workspace` (normally `linkWorkspace(base)`)
+ * rides the approve and QR URLs as a preselect hint only — the start body
+ * stays `{kind, label}`, because the server refuses unknown fields there.
+ */
+export async function startLink(base: string, opts: { label: string; workspace?: string } & LinkOptions): Promise<LinkStart> {
   const origin = linkOrigin(base);
   const res = await fetcher(opts)(`${origin}/api/v1/cli/auth`, {
     method: 'POST',
@@ -167,8 +214,11 @@ export async function startLink(base: string, opts: { label: string } & LinkOpti
     device_code: deviceCode,
     user_code: userCode,
     verify_path: verifyPath,
-    verifyUrl: sameOriginUrl(origin, typeof w.verify_url === 'string' ? w.verify_url : undefined, verifyPath, `/cli-auth?code=${encodeURIComponent(userCode)}`),
-    qrUrl: sameOriginUrl(origin, qrPath, qrPath, `/cli-auth/qr?code=${encodeURIComponent(userCode)}`),
+    verifyUrl: withWorkspace(
+      sameOriginUrl(origin, typeof w.verify_url === 'string' ? w.verify_url : undefined, verifyPath, `/cli-auth?code=${encodeURIComponent(userCode)}`),
+      opts.workspace,
+    ),
+    qrUrl: withWorkspace(sameOriginUrl(origin, qrPath, qrPath, `/cli-auth/qr?code=${encodeURIComponent(userCode)}`), opts.workspace),
     interval: Math.max(2, Number(w.interval) || 2),
     expires_in: Number(w.expires_in) || 0,
   };
@@ -177,6 +227,8 @@ export async function startLink(base: string, opts: { label: string } & LinkOpti
 export interface PollOptions extends LinkOptions {
   /** Seconds between claims (min 2). */
   interval?: number;
+  /** The workspace the recorder records into; a claim pinned elsewhere rejects with LinkWorkspaceMismatch. */
+  workspace?: string;
   signal?: AbortSignal;
   /** Test seam: the sleep. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -203,7 +255,11 @@ function abortError(): Error {
   return e;
 }
 
-/** Claim until approved. Resolves with the token; throws LinkExpired on 404, AbortError on abort. */
+/**
+ * Claim until approved. Resolves with the token; throws LinkExpired on 404,
+ * LinkWorkspaceMismatch when approved into another workspace than
+ * `opts.workspace`, AbortError on abort.
+ */
 export async function pollLink(base: string, deviceCode: string, opts: PollOptions = {}): Promise<Linked> {
   const origin = linkOrigin(base);
   const f = fetcher(opts);
@@ -219,7 +275,13 @@ export async function pollLink(base: string, deviceCode: string, opts: PollOptio
       body: JSON.stringify({ device_code: deviceCode }),
       signal: opts.signal,
     });
-    if (res.status === 200) return (await res.json()) as Linked;
+    if (res.status === 200) {
+      const linked = (await res.json()) as Linked;
+      if (opts.workspace && linked.workspace && linked.workspace !== opts.workspace) {
+        throw new LinkWorkspaceMismatch(linked.workspace, opts.workspace);
+      }
+      return linked;
+    }
     if (res.status === 404 || res.status === 410) throw new LinkExpired();
     if (res.status !== 202) throw new LinkError(`link claim → ${res.status}`, res.status);
     await sleep(interval * 1000, opts.signal);

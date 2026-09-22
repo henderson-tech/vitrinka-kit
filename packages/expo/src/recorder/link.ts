@@ -5,7 +5,7 @@
  */
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { type Linked, type LinkStart, pollLink, startLink } from '@vitrinka/link';
+import { type Linked, type LinkStart, linkWorkspace, pollLink, startLink } from '@vitrinka/link';
 
 import { clearLink, onUnauthorized, storeLink, vitrinkaBase } from './api';
 import { getState, resetQueues, setState } from './queue';
@@ -25,12 +25,18 @@ function label(): string {
   return `${app} on ${os}`;
 }
 
-/** Ask for a code and poll until approved; the token is stored on success. */
+/**
+ * Ask for a code and poll until approved; the token is stored on success.
+ * A base addressing `/w/<slug>` preselects that workspace on the approve
+ * page, and a token approved into any other one is discarded unstored
+ * (LinkWorkspaceMismatch — the pill shows its message).
+ */
 export async function linkDevice(): Promise<DeviceLink> {
   const base = vitrinkaBase();
-  const start = await startLink(base, { label: label() });
+  const workspace = linkWorkspace(base);
+  const start = await startLink(base, { label: label(), workspace });
   const ac = new AbortController();
-  const linked = pollLink(base, start.device_code, { interval: start.interval, signal: ac.signal }).then((l) => {
+  const linked = pollLink(base, start.device_code, { interval: start.interval, workspace, signal: ac.signal }).then((l) => {
     storeLink(l);
     notify();
     return l;
