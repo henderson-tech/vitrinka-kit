@@ -124,7 +124,7 @@ manual banner — download, unzip over the folder, ↻.
 | clicks | content script (capture phase) | selector, text, element rect in image px |
 | navigation | `webNavigation` (full + SPA history) | no page-world patching needed |
 | network | `chrome.debugger` CDP, XHR/fetch/document + worker/SW targets | req+resp bodies capped 64 KiB, headers capped 8 KiB/side; WS connections logged (frames NOT captured yet); degrades gracefully when DevTools holds the tab |
-| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off) | uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones |
+| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off) | uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
 | console errors | CDP `Runtime` (page world, incl. uncaught exceptions) | |
 | notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation, and an intake draft too when the tester picks `task` |
 

@@ -305,6 +305,11 @@
         border:0; background:transparent; display:none; color-scheme:normal; }
       :host([data-col="l"]) .pop, :host([data-col="c"]) .pop { right:auto; left:0; }
       .pop.open { display:block; }
+      /* Reduced motion: no ripple, no slides, no spring — durations only; the
+         tray's 2.5s fold delay stays (it is a grace period, not motion). */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition-duration:0ms !important; animation:none !important; }
+      }
       /* Move to (WCAG 2.5.7): the no-drag way to pick a spot */
       .spots { position:absolute; z-index:5; display:none; grid-template-columns:repeat(3, 24px); grid-template-rows:repeat(2, 24px);
         gap:0 2px; padding:6px; border-radius:10px; background:rgba(26,22,23,.88); box-shadow:var(--glass-shadow); }
