@@ -1,7 +1,8 @@
 /**
- * The composer sheet — the extension's hud.html, as a component: 360px, a
- * 16px textarea, ✕ in the kicker, a three-column footer (board|task ·
- * context · ↑ Send) and the hint line. Enter sends, ⇧Enter newlines, Esc
+ * The composer sheet — the extension's hud.html, as a component: ≤ 288px
+ * anchored to the dock (a bottom sheet on phones), a 14px textarea (16px on
+ * touch, so iOS never zooms), ✕ in the title row, a three-column footer
+ * (board|task · context · ↑ Send) and the hint line (hidden on touch). Enter sends, ⇧Enter newlines, Esc
  * cancels. The DRAFT is owned by the caller so a cancel keeps it until the
  * next send (recorder-hud-polish D3); the board|task choice resets on every
  * open — a destination is per observation, not a mode.
@@ -11,6 +12,10 @@ import { type KeyboardEvent, type ReactElement, useEffect, useRef, useState } fr
 import { ArrowUpIcon, CloseIcon } from './icons';
 
 export interface SheetProps {
+  /** Presence classes (`grow`/`rise` + `is-open`/`is-closing`). */
+  className: string;
+  /** The corner it grows from (`bottom-right`, …). */
+  origin: string;
   title: string;
   ctx: string;
   /** True when the sheet composes an annotation (shows board|task). */
@@ -21,7 +26,7 @@ export interface SheetProps {
   onClose: () => void;
 }
 
-export function Sheet({ title, ctx, pick, draft, onDraft, onSend, onClose }: SheetProps): ReactElement {
+export function Sheet({ className, origin, title, ctx, pick, draft, onDraft, onSend, onClose }: SheetProps): ReactElement {
   const ta = useRef<HTMLTextAreaElement>(null);
   const [task, setTask] = useState(false);
   useEffect(() => {
@@ -44,12 +49,12 @@ export function Sheet({ title, ctx, pick, draft, onDraft, onSend, onClose }: She
     }
   };
   return (
-    <div className="pop" role="dialog" aria-labelledby="vt-pop-title" onKeyDown={onKey}>
+    <div className={`pop ${className}`} data-origin={origin} role="dialog" aria-labelledby="vt-pop-title" onKeyDown={onKey}>
       <div className="pop-head">
-        <label>
+        <span className="title">
           <i />
           <span id="vt-pop-title">{title}</span>
-        </label>
+        </span>
         <button type="button" className="closeb" aria-label="Close" onClick={onClose}>
           <CloseIcon />
         </button>

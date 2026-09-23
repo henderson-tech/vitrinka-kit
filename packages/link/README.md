@@ -29,3 +29,17 @@ A token only authenticates in the workspace it was approved into, so a
 URLs as a `workspace=<slug>` preselect (never the start body), and a claim
 approved into another workspace rejects with `LinkWorkspaceMismatch`
 (`linked`, `expected`, a ready-to-show message) — the token is discarded.
+
+## Dock (`@vitrinka/link/dock`)
+
+Where a recorder HUD may rest, shared by every recorder so a throw lands the
+same way everywhere: six spots (corners plus top and bottom centre), a
+release projected along its velocity, and a tuck into a side-edge tab when
+more than a third of the HUD is pushed past that edge. Pure numbers.
+
+```ts
+import { settle, neighbour, parsePlace, spotRect } from '@vitrinka/link/dock';
+
+settle(releasedRect, { x: vx, y: vy }, viewport, insets); // { spot: 'tr' } | { tuck: 'right', y: 0.4 }
+neighbour({ spot: 'br' }, 'ArrowLeft');                   // { spot: 'bc' } — the keyboard alternative
+```

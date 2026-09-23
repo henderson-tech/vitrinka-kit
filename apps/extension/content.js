@@ -169,13 +169,48 @@
       * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
       /* manifest icons (vendor/vitrinka-icons.js): 1em, currentColor, sized by the host's font */
       svg { width:1em; height:1em; vertical-align:-.125em; }
+      /* recorder-hud-subtle: the kit HUD's tokens — smoked glass, one red. */
+      :host { --ink:rgba(26,22,23,.72); --ink-2:rgba(255,255,255,.08); --edge:rgba(255,255,255,.11);
+        --rim:rgba(0,0,0,.30); --fg:#f4efea; --fg-2:rgba(244,239,234,.66); --rec:#ff3b57;
+        --ease:cubic-bezier(.22,1,.36,1);
+        --glass-shadow:inset 0 0 0 1px var(--edge), 0 0 0 .5px var(--rim), 0 10px 28px -10px rgba(0,0,0,.5), 0 2px 6px -2px rgba(0,0,0,.28); }
       .stack { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
-      .pill { display:flex; align-items:center; gap:10px; padding:8px 10px 8px 14px;
-        background:#1d1a1b; border:1px solid #292526; border-radius:999px;
-        box-shadow:0 8px 30px rgba(0,0,0,.35); color:#f0eae4; }
-      .dot { width:10px; height:10px; border-radius:50%; background:#ff3b57; animation:p 1.4s ease infinite; }
-      .paused .dot { animation:none; background:#756e68; }
-      @keyframes p { 50% { opacity:.35; } }
+      :host([data-col="l"]) .stack, :host([data-col="c"]) .stack { align-items:flex-start; }
+      /* At rest the pill is a capsule — rec dot + clock (the drag handle);
+         hover, focus or an open sheet unfolds the tray, which folds back
+         2.5s after the pointer leaves. */
+      .pill { position:relative; display:flex; align-items:center; height:28px; border-radius:999px; color:var(--fg);
+        background:var(--ink); -webkit-backdrop-filter:blur(16px) saturate(1.5); backdrop-filter:blur(16px) saturate(1.5);
+        box-shadow:var(--glass-shadow); }
+      :host([data-col="r"]) .pill, :host([data-col="r"]) .tray-in { flex-direction:row-reverse; }
+      .grip { display:inline-flex; align-items:center; gap:7px; height:28px; padding:0 11px 0 10px; border-radius:999px;
+        cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+      :host(.dragging) .grip { cursor:grabbing; }
+      .grip:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
+      .tray { display:grid; grid-template-columns:0fr; transition:grid-template-columns .3s var(--ease) 2.5s; }
+      .tray-in { min-width:0; overflow:hidden; display:flex; align-items:center; gap:1px; padding:34px 3px; margin:-34px 0;
+        pointer-events:none; opacity:0; transition:opacity .15s ease-in-out 2.5s; }
+      .tray-in > * { pointer-events:auto; }
+      .pill:hover .tray, .pill:focus-within .tray, .pill.composing .tray { grid-template-columns:1fr; transition-delay:0s; }
+      .pill:hover .tray-in, .pill:focus-within .tray-in, .pill.composing .tray-in { opacity:1; transition-duration:.25s; transition-delay:60ms; }
+      :host(.dragging) .tray { grid-template-columns:0fr; transition-delay:0s; }
+      .sep { width:1px; height:14px; margin:0 5px; background:var(--edge); }
+      .dot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--rec); }
+      .dot::after { content:""; position:absolute; inset:0; border-radius:50%; animation:ripple 2s ease-out infinite; }
+      @keyframes ripple { 0% { box-shadow:0 0 0 0 rgba(255,59,87,.45); } 70%, 100% { box-shadow:0 0 0 7px rgba(255,59,87,0); } }
+      .paused .dot { background:rgba(244,239,234,.44); }
+      .paused .dot::after { animation:none; }
+      /* the edge tab a tucked HUD becomes */
+      .tab { display:none; position:relative; width:22px; height:56px; padding:0; border:0; border-radius:0; background:none; cursor:pointer; touch-action:none; }
+      :host([data-tuck]) .tab { display:block; }
+      :host([data-tuck]) .pill, :host([data-tuck]) .detail, :host([data-tuck]) .pairline, :host([data-tuck]) .pairpanel { display:none; }
+      .tab::before { content:""; position:absolute; top:0; bottom:0; width:6px; background:var(--ink); box-shadow:var(--glass-shadow); transition:width .15s ease-out; }
+      .tab::after { content:""; position:absolute; top:16px; bottom:16px; width:2px; border-radius:1px; background:var(--rec); }
+      :host([data-tuck="left"]) .tab::before { left:0; border-radius:0 7px 7px 0; }
+      :host([data-tuck="right"]) .tab::before { right:0; border-radius:7px 0 0 7px; }
+      :host([data-tuck="left"]) .tab::after { left:2px; }
+      :host([data-tuck="right"]) .tab::after { right:2px; }
+      .tab:hover::before, .tab:focus-visible::before { width:9px; }
       /* Health (recorder-live D4): one glyph at rest, a second line only when
          something is actually wrong — or while Stop drains. */
       .sync { font:600 11px/1 ui-monospace, Menlo, monospace; color:#5f7a5f; }
@@ -183,15 +218,15 @@
       .sync.bad { color:#ff3b57; }
       .sync.busy { color:#a8a099; }
       .detail { max-width:320px; padding:6px 12px; border-radius:999px;
-        background:#1d1a1b; border:1px solid #292526; color:#a8a099;
+        background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow); color:#a8a099;
         font:500 10px/1.4 ui-monospace, Menlo, monospace;
         opacity:0; transform:translateY(-3px); transition:opacity .24s ease, transform .24s ease;
         pointer-events:none; }
       .detail.show { opacity:1; transform:none; }
-      .detail.bad { border-color:#ff3b57; color:#f0eae4; }
+      .detail.bad { box-shadow:inset 0 0 0 1px rgba(240,166,58,.55), 0 10px 28px -10px rgba(0,0,0,.5); color:#f0eae4; }
       /* pair-mode narration: the listening/fixing micro-label (mono, quiet) */
       .pairline { max-width:320px; padding:6px 12px; border-radius:999px;
-        background:#1d1a1b; border:1px solid #292526; color:#756e68;
+        background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow); color:#756e68;
         font:500 10px/1.4 ui-monospace, Menlo, monospace;
         opacity:0; transform:translateY(-3px); transition:opacity .24s ease, transform .24s ease;
         pointer-events:none; }
@@ -202,7 +237,7 @@
          column — mono micro-labels, progressive disclosure, collapsed by
          default. Opens by clicking the pairline. */
       .pairpanel { display:none; width:320px; max-height:46vh; overflow:auto;
-        padding:10px 12px; background:#1d1a1b; border:1px solid #292526;
+        padding:10px 12px; background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow);
         border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,.35);
         font:500 10px/1.5 ui-monospace, Menlo, monospace; color:#a8a099;
         text-align:left; pointer-events:auto; }
@@ -236,15 +271,15 @@
       .pp-relay { margin-top:8px; padding-top:6px; border-top:1px solid #292526;
         color:#756e68; font-size:9.5px; white-space:pre-wrap; word-break:break-word; }
       .pp-err { color:#ff3b57; margin-top:4px; }
-      .time { font:600 11px/1 ui-monospace, Menlo, monospace; }
-      .name { font:500 10px/1 ui-monospace, Menlo, monospace; color:#756e68;
-        border-left:1px solid #292526; padding-left:10px; max-width:140px;
-        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      button { all:unset; cursor:pointer; position:relative; width:28px; height:28px; border-radius:50%;
-        border:1px solid #363132; color:#a8a099; font-size:12px; text-align:center; line-height:28px; }
-      button:hover { color:#f0eae4; border-color:#756e68; }
-      button:focus-visible, .sendb:focus-visible, .closeb:focus-visible { outline:2px solid #ff3b57; outline-offset:2px; }
-      button.snap { background:#ff3b57; border-color:#ff3b57; color:#fff; }
+      .time { font:600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; font-variant-numeric:tabular-nums; min-width:34px; }
+      /* pointer-events:auto — all:unset would inherit the tray's none */
+      button { all:unset; pointer-events:auto; cursor:pointer; position:relative; width:24px; height:24px; border-radius:50%;
+        color:var(--fg-2); font-size:13px; text-align:center; line-height:24px;
+        transition:background-color .15s ease-out, color .15s ease-out; }
+      button:hover { color:var(--fg); background:var(--ink-2); }
+      button:focus-visible, .sendb:focus-visible, .closeb:focus-visible { outline:2px solid #ff3b57; outline-offset:-2px; }
+      button.snap { color:var(--rec); }
+      button.snap:hover { color:var(--rec); }
       /* Keycaps (recorder-hud-polish D1): the shortcut above the hovered or
          focused button — quiet at rest, discoverable on intent. One at a
          time: three caps over three 28px buttons would overlap. Right-
@@ -255,6 +290,7 @@
         color:#a8a099; font:600 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing:.06em;
         white-space:nowrap; opacity:0; transition:opacity .16s ease; pointer-events:none; }
       .b-snap kbd { left:auto; right:0; transform:none; }
+      :host([data-row="t"]) kbd { bottom:auto; top:calc(100% + 8px); }
       button:hover kbd, button:focus-visible kbd { opacity:1; }
       .pill.composing kbd { opacity:0; }
       /* The pick chrome (dim, outline, hint) lives in this shadow root too;
@@ -265,20 +301,37 @@
          focus back from another document, and its keystrokes never reach
          the page. The frame is sized by the sheet inside it; only placement
          and open/close live here. */
-      .pop { position:absolute; right:0; bottom:52px; z-index:4; width:360px; height:0;
+      .pop { position:absolute; right:0; bottom:52px; z-index:4; width:288px; height:0;
         border:0; background:transparent; display:none; color-scheme:normal; }
+      :host([data-col="l"]) .pop, :host([data-col="c"]) .pop { right:auto; left:0; }
       .pop.open { display:block; }
+      /* Move to (WCAG 2.5.7): the no-drag way to pick a spot */
+      .spots { position:absolute; z-index:5; display:none; grid-template-columns:repeat(3, 24px); grid-template-rows:repeat(2, 24px);
+        gap:0 2px; padding:6px; border-radius:10px; background:rgba(26,22,23,.88); box-shadow:var(--glass-shadow); }
+      .spots.open { display:grid; }
+      :host([data-row="b"]) .spots { bottom:calc(100% + 8px); }
+      :host([data-row="t"]) .spots { top:calc(100% + 8px); }
+      :host([data-col="r"]) .spots { right:0; }
+      :host([data-col="l"]) .spots, :host([data-col="c"]) .spots { left:0; }
+      .spots button { border-radius:5px; }
+      .spots button::before { content:""; position:absolute; inset:7px 5px; border-radius:3px; background:var(--ink-2); box-shadow:inset 0 0 0 1px var(--edge); }
+      .spots button[aria-checked="true"]::before { background:var(--rec); box-shadow:none; }
     </style>
     <div class="stack">
       <div class="pill" part="pill">
-        <span class="dot"></span>
-        <span class="time">00:00</span>
-        <span class="name"></span>
-        <span class="sync" data-icon="check" title="everything captured has reached vitrinka">${I("check")}</span>
-        <button class="b-pause" aria-label="Pause">${I("pause")}<kbd>${MOD}P pause</kbd></button>
-        <button class="b-note" aria-label="Note">${I("pencil")}<kbd>${MOD}N note</kbd></button>
-        <button class="snap b-snap" aria-label="Snap to vitrinka">${I("annotate")}<kbd>${MOD}A annotate</kbd></button>
+        <span class="grip" role="button" tabindex="0" aria-label="Move recorder (drag, or arrow keys)"><span class="dot"></span><span class="time">00:00</span></span>
+        <span class="tray"><span class="tray-in">
+          <span class="sep"></span>
+          <span class="sync" data-icon="check" title="everything captured has reached vitrinka">${I("check")}</span>
+          <button class="b-pause" aria-label="Pause">${I("pause")}<kbd>${MOD}P pause</kbd></button>
+          <button class="b-note" aria-label="Note">${I("pencil")}<kbd>${MOD}N note</kbd></button>
+          <button class="snap b-snap" aria-label="Snap to vitrinka">${I("annotate")}<kbd>${MOD}A annotate</kbd></button>
+          <button class="b-move" aria-label="Move to" aria-haspopup="true" aria-expanded="false">${I("more")}</button>
+        </span></span>
+        <div class="spots" role="radiogroup" aria-label="Move to">${["tl", "tc", "tr", "bl", "bc", "br"].map((s) =>
+          `<button role="radio" data-spot="${s}" aria-checked="false" aria-label="Move to ${{ tl: "top left", tc: "top centre", tr: "top right", bl: "bottom left", bc: "bottom centre", br: "bottom right" }[s]}"></button>`).join("")}</div>
       </div>
+      <button class="tab" aria-label="Show recorder"></button>
       <div class="detail"></div>
       <div class="pairline"></div>
       <div class="pairpanel">
@@ -643,7 +696,7 @@
       const r = await send({ type: "vt-status" });
       if (r && r.rec) {
         setPaused(!!r.rec.paused, r.elapsedMs || 0);
-        $(".name").textContent = r.rec.title || `${r.rec.project} · ${r.rec.environment}`;
+        pill.title = r.rec.title || `${r.rec.project} · ${r.rec.environment}`;
         renderHealth(r.health);
         renderPair(r.pair);
         seedPanel(r.pairPanel);
@@ -685,8 +738,13 @@
     pendingPick = null;
   };
   const openPop = (title, ctx) => {
-    // Above the whole stack (pill + detail + pairline), never over the pill.
-    pop.style.bottom = `${$(".stack").offsetHeight + 8}px`;
+    if (dockPlace.tuck) moveTo({ spot: untuck(dockPlace) });
+    // Beyond the whole stack (pill + detail + pairline), never over the pill:
+    // above it from a bottom spot, below it from a top one.
+    const off = `${$(".stack").offsetHeight + 8}px`;
+    const top = hud.dataset.row === "t";
+    pop.style.top = top ? off : "auto";
+    pop.style.bottom = top ? "auto" : off;
     pop.classList.add("open");
     pill.classList.add("composing");
     const msg = { type: "open", title, ctx: ctx || `step · ${location.pathname}`, pick: !!pendingPick };
@@ -736,6 +794,165 @@
     closePop();
   }, true);
   $(".b-pause").onclick = () => send({ type: "vt-pause" }); // state echoes back via vt-paused
+
+  // -------------------------------------------------------------------------
+  // dock (recorder-hud-subtle D2): where the HUD rests and how it moves.
+  // A PORT of @vitrinka/link/dock (vitrinka-kit packages/link/src/dock.ts) —
+  // this script has no bundler; keep the two in step. Six spots (corners +
+  // top/bottom centre); a release is projected 0.3s along its velocity and
+  // settles on the nearest spot; a third of the pill pushed past a side edge
+  // tucks it into a tab at that height. The host re-anchors by insets, then
+  // springs from where it was let go (FLIP on `translate`). Remembered per
+  // origin in extension storage — never the page's own localStorage.
+
+  const SPOTS = ["tl", "tc", "tr", "bl", "bc", "br"];
+  const M = 16;
+  const SPRING = "linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856, 0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015, 1.011, 1.007, 1.004, 1)";
+  const dockKey = `vtDock:${location.origin}`;
+  let dockPlace = { spot: "br" };
+  const spotRect = (spot, w, h) => ({
+    x: spot[1] === "l" ? M : spot[1] === "r" ? innerWidth - M - w : (innerWidth - w) / 2,
+    y: spot[0] === "t" ? M : innerHeight - M - h, w, h,
+  });
+  const settle = (r, v) => {
+    const past = Math.max(-r.x, r.x + r.w - innerWidth);
+    if (past > r.w / 3) {
+      return { tuck: -r.x > r.x + r.w - innerWidth ? "left" : "right", y: Math.min(1, Math.max(0, (r.y + r.h / 2) / innerHeight)) };
+    }
+    const px = r.x + r.w / 2 + v.x * 0.3, py = r.y + r.h / 2 + v.y * 0.3;
+    let best = "br", bestD = Infinity;
+    for (const s of SPOTS) {
+      const t = spotRect(s, r.w, r.h);
+      const d = Math.hypot(t.x + t.w / 2 - px, t.y + t.h / 2 - py);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return { spot: best };
+  };
+  const untuck = (p) => p.spot || `${p.y < 0.5 ? "t" : "b"}${p.tuck === "left" ? "l" : "r"}`;
+  const neighbour = (p, key) => {
+    const s = untuck(p);
+    if (!p.spot) return { spot: s };
+    const cols = ["l", "c", "r"];
+    let row = s[0], ci = cols.indexOf(s[1]);
+    if (key === "ArrowLeft") ci = Math.max(0, ci - 1);
+    else if (key === "ArrowRight") ci = Math.min(2, ci + 1);
+    else row = key === "ArrowUp" ? "t" : "b";
+    return { spot: row + cols[ci] };
+  };
+  const grip = $(".grip"), tab = $(".tab"), spotsEl = $(".spots"), moveBtn = $(".b-move");
+  const placeHost = () => {
+    let css = "all:initial;position:fixed;z-index:2147483647;";
+    delete hud.dataset.row; delete hud.dataset.col; delete hud.dataset.tuck;
+    if (dockPlace.tuck) {
+      hud.dataset.tuck = dockPlace.tuck;
+      css += `${dockPlace.tuck}:0;top:clamp(8px, calc(${dockPlace.y * 100}% - 28px), calc(100% - 64px));`;
+    } else {
+      const [row, col] = dockPlace.spot;
+      hud.dataset.row = row; hud.dataset.col = col;
+      css += row === "t" ? `top:${M}px;` : `bottom:${M}px;`;
+      css += col === "l" ? `left:${M}px;` : col === "r" ? `right:${M}px;` : `left:calc(50% - ${grip.offsetWidth / 2}px);`;
+    }
+    hud.style.cssText = css;
+    spotsEl.querySelectorAll("button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.spot === dockPlace.spot)));
+  };
+  // The point of a rect the place anchors by: its corner (middle on the c
+  // column, mid-height when tucked) — so a grown or shrunk pill flies true.
+  const anchorOf = (r) => {
+    const s = untuck(dockPlace);
+    return {
+      x: s[1] === "l" ? r.left : s[1] === "r" ? r.right : r.left + r.width / 2,
+      y: dockPlace.tuck ? r.top + r.height / 2 : s[0] === "t" ? r.top : r.bottom,
+    };
+  };
+  const moveTo = (next, from) => {
+    const prev = from || hud.getBoundingClientRect();
+    dockPlace = next;
+    placeHost();
+    try { chrome.storage.local.set({ [dockKey]: next }); } catch { /* storage unavailable: the spot lasts this page */ }
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const a = anchorOf(prev), b = anchorOf(hud.getBoundingClientRect());
+    if (Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1) return;
+    hud.style.translate = `${a.x - b.x}px ${a.y - b.y}px`;
+    void hud.offsetWidth;
+    hud.style.transition = `translate .5s ${SPRING}`;
+    hud.style.translate = "";
+    hud.addEventListener("transitionend", () => { hud.style.transition = ""; }, { once: true });
+  };
+  try {
+    chrome.storage.local.get(dockKey).then((r) => {
+      const p = r && r[dockKey];
+      if (p && (SPOTS.includes(p.spot) || ((p.tuck === "left" || p.tuck === "right") && Number.isFinite(p.y)))) {
+        dockPlace = p.spot ? { spot: p.spot } : { tuck: p.tuck, y: Math.min(1, Math.max(0, p.y)) };
+        placeHost();
+      }
+    }, () => undefined);
+  } catch { /* no storage: bottom-right */ }
+
+  // Drag: captured at pointerdown (a fast first move would otherwise leave
+  // the grip), a drag past 4px, velocity over the last 100ms.
+  let press = null, swallowClick = false;
+  const onDown = (e) => {
+    if (e.button !== 0 || !e.isPrimary) return;
+    press = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, samples: [] };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e) => {
+    if (!press || press.id !== e.pointerId) return;
+    const dx = e.clientX - press.x, dy = e.clientY - press.y;
+    if (!press.moved) {
+      if (Math.hypot(dx, dy) < 4) return;
+      press.moved = true;
+      hud.style.transition = "";
+      hud.classList.add("dragging");
+      spotsEl.classList.remove("open");
+      closePop();
+    }
+    hud.style.translate = `${dx}px ${dy}px`;
+    press.samples.push({ x: e.clientX, y: e.clientY, t: e.timeStamp });
+    while (press.samples.length > 2 && e.timeStamp - press.samples[0].t > 100) press.samples.shift();
+  };
+  const onUp = (e) => {
+    const p = press;
+    press = null;
+    if (!p || p.id !== e.pointerId || !p.moved) return;
+    hud.classList.remove("dragging");
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
+    const r = hud.getBoundingClientRect();
+    const f = p.samples[0], l = p.samples[p.samples.length - 1];
+    const dt = f && l ? (l.t - f.t) / 1000 : 0;
+    const v = dt > 0 ? { x: (l.x - f.x) / dt, y: (l.y - f.y) / dt } : { x: 0, y: 0 };
+    moveTo(e.type === "pointercancel" ? dockPlace : settle({ x: r.left, y: r.top, w: r.width, h: r.height }, v), r);
+  };
+  for (const el of [grip, tab]) {
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+    el.addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) || e.altKey || e.metaKey || e.ctrlKey) return;
+      e.preventDefault();
+      moveTo(neighbour(dockPlace, e.key));
+    });
+  }
+  root.addEventListener("click", (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault(); e.stopPropagation();
+  }, true);
+  tab.onclick = () => moveTo({ spot: untuck(dockPlace) });
+  moveBtn.onclick = () => {
+    const open = spotsEl.classList.toggle("open");
+    moveBtn.setAttribute("aria-expanded", String(open));
+  };
+  spotsEl.addEventListener("click", (e) => {
+    const b = e.target instanceof Element && e.target.closest("button[data-spot]");
+    if (!b) return;
+    spotsEl.classList.remove("open");
+    moveBtn.setAttribute("aria-expanded", "false");
+    moveTo({ spot: b.dataset.spot });
+  });
+  placeHost();
 
   // -------------------------------------------------------------------------
   // element-pick snap (⌖): crosshair, outline hovered element, click → note
