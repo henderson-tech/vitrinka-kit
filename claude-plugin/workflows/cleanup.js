@@ -247,7 +247,10 @@ function route(a) {
 // can name the same task), so every kind is keyed and never filed twice.
 function settle(actions) {
   const dupFrom = new Map()
-  for (const a of actions) if (a.kind === 'duplicate' && a.id && a.into) dupFrom.set(a.id, a.into)
+  for (const a of actions) if (a.kind === 'duplicate' && a.id && a.into && a.id !== a.into) dupFrom.set(a.id, a.into)
+  // Only a duplicate that survives settling outranks a status verdict; a
+  // mutual pair lands in conflicts, so its tasks keep their status readings.
+  const merged = new Set([...dupFrom].filter(([id, into]) => dupFrom.get(into) !== id).map(([id]) => id))
   const conflicts = []
   const out = []
   const byKey = new Map()
@@ -261,7 +264,7 @@ function settle(actions) {
     }
     if (a.kind === 'status') {
       if (!a.id || !a.to) { conflicts.push({ ...a, why: `malformed status: ${a.why}` }); continue }
-      if (dupFrom.has(a.id)) continue
+      if (merged.has(a.id)) continue
     }
     if (!a.id) { conflicts.push({ ...a, why: `malformed ${a.kind} without id: ${a.why}` }); continue }
     const k = keyOf(a)
@@ -313,7 +316,9 @@ if (!inv && HEAVY !== 'opus') {
   HEAVY = 'opus'
   inv = await agent(inventoryPrompt, { label: 'inventory:retry', phase: 'Inventory', schema: INVENTORY_SCHEMA, model: HEAVY })
 }
-if (!inv || !inv.count) throw new Error('cleanup: inventory produced nothing')
+// Zero open tasks is a clean project, not a failed inventory: it runs on to
+// "nothing flagged" and the report.
+if (!inv) throw new Error('cleanup: inventory produced nothing')
 log(`cleanup: ${inv.count} open tasks in ${inv.path}, ${inv.doneCount || 0} done, ${inv.epics.length} open epics${(inv.problems || []).length ? ` — ${inv.problems.length} problem(s)` : ''}`)
 
 // ---- Group
