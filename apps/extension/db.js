@@ -168,13 +168,14 @@ export const vtdb = {
   // (review r3650595589).
   async sessionStats(sessionId) {
     const db = await openDB();
-    const out = { count: 0, bytes: 0, blobs: 0 };
+    const out = { count: 0, bytes: 0, blobs: 0, maxSeq: 0 };
     await new Promise((resolve, reject) => {
       const req = tx(db, "readonly").openCursor(sessionRange(sessionId));
       req.onsuccess = () => {
         const cur = req.result;
         if (!cur) return resolve();
         out.count++;
+        out.maxSeq = Math.max(out.maxSeq, cur.value.seq);
         out.bytes += cur.value.bytes || 0;
         if (cur.value.needsBlob) out.blobs++;
         cur.continue();

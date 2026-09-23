@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vitrinka Journey Recorder",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "description": "Record manual-testing journeys — screenshots, clicks, API calls, notes — straight into vitrinka.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo5D9QWXPrMYr6Ym0IMw/aq+ihIucE8gF9lQg6m7tQwotHTw4hK8tCKzQrpIzizfddVKY1wRD2xsdOtbyR7xkY92bLplxQHIa4pkC3iE6U16KL5BYYDWJEWJDxVmqvSdnPbFp5KuzSeq0oHkQB/SpuaRgMiWnZvjQAiyvRqMQqwHSn7fxdAOHPlqUT8Ils2oZpLJ7a88he+SOz3rlpkukIGe+4L3NSsB5fkp8ibxLKzPj2+loAnHnb01JhMxrfk5vQ030rqwR/1DX2yeDsOOGSwm1Ro7TNcrejLMjFIJYJYgITeyhoa1QHahDRJWztYOjyM30zI2+4mUMq4AXUgwD1QIDAQAB",
   "background": {
@@ -30,7 +30,8 @@
     "unlimitedStorage",
     "alarms",
     "notifications",
-    "nativeMessaging"
+    "nativeMessaging",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -38,7 +39,7 @@
   "commands": {
     "snap": {
       "suggested_key": {
-        "default": "Alt+Shift+S"
+        "default": "Alt+Shift+A"
       },
       "description": "Snap to vitrinka (element pick + note)"
     },
@@ -58,7 +59,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "vendor/rrweb-record.min.js"
+        "vendor/rrweb-record.min.js",
+        "hud.html"
       ],
       "matches": [
         "<all_urls>"
