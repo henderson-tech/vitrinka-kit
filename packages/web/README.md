@@ -111,16 +111,27 @@ returned unchanged otherwise.
 
 ## Using the pill
 
-Unlinked: **Link recorder** bottom-right. Linked and idle: a quiet dot — click to **start** (the session title is
-`document.title`, or the `title` prop). Recording: rec dot · timer · name ·
-sync glyph · controls (keycaps show on hover):
+Idle, the HUD is a 28px glass puck: a hollow ring until the device is linked
+(**Link recorder**), a muted dot once it is (**Start recording** — the session
+title is `document.title`, or the `title` prop); the label slides out on hover
+or focus. Recording, it rests as a dot + timer capsule (**Recorder controls**)
+that unfolds into the tools on hover, focus or tap and folds back 2.5s after
+you leave (keycaps show on hover):
 
 | Control | Shortcut | What |
 |---|---|---|
 | ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
-| ✎ Note | ⌥⇧N | the 360px sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel) |
+| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel) |
 | ⌖ Annotate | ⌥⇧A | click an element or drag a region, then describe it; `board` (an annotation on the board) or `task` (also filed as an intake draft) |
-| ⋯ | | **Open board** (the server-minted link) · **Stop recording** · **Unlink** |
+| ⋯ | | **Open board** (the server-minted link) · **Stop recording** · **Unlink** · **Move to** |
+
+Move it anywhere: drag the puck or capsule and it lands on one of six spots
+(corners, top and bottom centre) — a flick lands where it is thrown; push it
+past a side edge and it tucks into a 6px tab (**Show recorder** brings it
+back). Arrow keys on the focused handle and **Move to** do the same without a
+drag; the spot is remembered per site. Sheets (≤ 288px) open toward the
+middle of the page from wherever it sits; on a phone they are a bottom sheet
+above the keyboard and the link sheet drops the QR.
 
 The sync glyph is honest: ✓ means the server confirmed it holds everything
 captured; a second line unfolds only for a backlog, an outage (`offline ·
