@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/link",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "vitrinka device link — the Netflix-style code flow that mints an ingest-only recorder token for the web and Expo recorders. Zero dependencies.",
   "license": "Elastic-2.0",
   "repository": {
@@ -16,6 +16,10 @@
     ".": {
       "types": "./build/index.d.ts",
       "default": "./build/index.js"
+    },
+    "./dock": {
+      "types": "./build/dock.d.ts",
+      "default": "./build/dock.js"
     },
     "./package.json": "./package.json"
   },
