@@ -7,18 +7,30 @@
 // separate act that appears when the server has actually built it.
 
 import { newerVersion } from "./version.js";
+import { vtHeaders } from "./wire.js";
 
 const $ = (id) => document.getElementById(id);
 const send = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, res));
 
 async function config() {
-  const { base = "", token = "" } = await chrome.storage.local.get(["base", "token"]);
-  return { base: base.replace(/\/$/, ""), token };
+  const { base = "", workspace = "", token = "" } = await chrome.storage.local.get(["base", "workspace", "token"]);
+  return { base: base.replace(/\/$/, ""), workspace, token };
 }
 
 // Server-controlled strings (environment, pattern, project) are rendered via
-// textContent only — never innerHTML — so a hostile server's settings
+// textContent only — never innerHTML — so a hostile mesh peer's settings
 // can't inject markup into the privileged popup.
+// Manifest icons (vendor/vitrinka-icons.js, classic script loaded before this
+// module). Only the icon markup ever rides innerHTML — the words next to it
+// are appended as a text node, so server strings stay inert.
+function iconText(el, icon, text) {
+  el.textContent = "";
+  if (icon) el.insertAdjacentHTML("beforeend", VT_ICONS.html(icon) + " ");
+  el.append(text);
+}
+// Static <svg data-icon="…"> placeholders in popup.html hydrate once.
+for (const ph of document.querySelectorAll("svg[data-icon]")) ph.outerHTML = VT_ICONS.html(ph.dataset.icon);
+
 function renderSub(env, rest) {
   const sub = $("sub");
   sub.textContent = "";
@@ -103,10 +115,11 @@ async function renderBoard() {
   }
   if (lastBoard) {
     show("boardPanel", true);
-    show("boardOpen", true);
+    // The link is the server's address or nothing — never composed here.
+    show("boardOpen", !!lastBoard.url);
     $("boardState").textContent = lastBoard.title || "Session";
-    $("boardMeta").textContent = "ready";
-    $("boardOpen").href = lastBoard.url;
+    $("boardMeta").textContent = lastBoard.url ? "ready" : "ready — open it from vitrinka's sessions page";
+    $("boardOpen").href = lastBoard.url || "#";
     return false;
   }
   show("boardPanel", false);
@@ -117,7 +130,7 @@ async function renderBoard() {
 // main refresh
 
 async function refresh() {
-  const { base, token } = await config();
+  const { base, workspace, token } = await config();
   if (!base) {
     $("proj").textContent = "Not configured";
     $("sub").textContent = "set the vitrinka base URL in settings";
@@ -140,9 +153,9 @@ async function refresh() {
     show("start", false);
     show("title", false);
     show("recRow", true);
-    $("pause").textContent = rec.paused ? "● Resume" : "⏸ Pause";
+    iconText($("pause"), rec.paused ? "play" : "pause", rec.paused ? "Resume" : "Pause");
     $("pause").disabled = wrapping || !!rec.dead;
-    $("stop").textContent = wrapping ? "■ Stopping…" : "■ Stop";
+    iconText($("stop"), "stop", wrapping ? "Stopping…" : "Stop");
     $("stop").disabled = wrapping;
     if (wrapping) setTimeout(refresh, 500);
     return;
@@ -162,12 +175,19 @@ async function refresh() {
     return;
   }
   try {
-    const headers = token ? { authorization: `Bearer ${token}` } : {};
+    const headers = vtHeaders(token, workspace);
     const r = await (await fetch(`${base}/api/v1/projects/resolve?host=${encodeURIComponent(host)}`, { headers })).json();
     if (r.matched) {
       $("proj").textContent = r.project;
       renderSub(r.environment, `${host} · rule ${r.pattern}`);
       renderRecent(base, headers, r.project);
+    } else if (r.code === "workspace_required") {
+      // The token is valid in several workspaces and this browser names none.
+      // Saying "no domain rule matches" here would send the tester hunting
+      // through project settings for a rule that is already there.
+      $("proj").textContent = "Workspace not set";
+      $("sub").textContent = "your token acts in more than one workspace — name one in Settings";
+      $("start").disabled = true;
     } else {
       $("proj").textContent = host;
       $("sub").textContent = "no project domain rule matches — add one in vitrinka project settings";
@@ -193,7 +213,7 @@ $("pause").onclick = async () => { await send({ type: "vt-pause" }); refresh(); 
 // continues and the board notification still arrives.
 $("stop").onclick = async () => {
   $("stop").disabled = true;
-  $("stop").textContent = "■ Stopping…";
+  iconText($("stop"), "stop", "Stopping…");
   $("err").classList.add("hidden");
   const pending = send({ type: "vt-stop" });
   const tick = setInterval(refresh, 400);
@@ -202,7 +222,7 @@ $("stop").onclick = async () => {
   if (!r.ok) {
     fail(r.error);
     $("stop").disabled = false;
-    $("stop").textContent = "■ Stop again";
+    iconText($("stop"), "stop", "Stop again");
   }
   refresh();
 };
@@ -252,11 +272,13 @@ refresh();
 //
 // Without the host (no CLI on this machine) the button degrades to what it was
 // before: a link to the marketplace and the manual download → unzip → ↻ route.
-const MARKET = "https://releases.vitrinka.ai";
+const MARKET = "https://apps.fixit.app";
 const btn = $("update");
 
-function showUpdate(text, onClick, enabled = true) {
-  btn.textContent = text;
+// icon is the manifest state marker in front of the line (check / circle-x /
+// upload); the text may carry server strings, so it lands as a text node.
+function showUpdate(icon, text, onClick, enabled = true) {
+  iconText(btn, icon, text);
   btn.disabled = !enabled;
   btn.onclick = onClick || null;
   btn.classList.remove("hidden");
@@ -268,23 +290,23 @@ function showUpdate(text, onClick, enabled = true) {
 async function reloadInto(to) {
   const { rec } = await chrome.storage.local.get("rec");
   if (rec) {
-    showUpdate("✗ stop the recording first — reloading restarts the extension", () => reloadInto(to));
+    showUpdate("circle-x", "stop the recording first — reloading restarts the extension", () => reloadInto(to));
     return;
   }
-  showUpdate(`✓ ${to} is on disk — reloading…`, null, false);
+  showUpdate("check", `${to} is on disk — reloading…`, null, false);
   setTimeout(() => chrome.runtime.reload(), 700);
 }
 
 async function installUpdate(to) {
-  showUpdate(`↑ installing ${to}…`, null, false);
+  showUpdate("upload", `installing ${to}…`, null, false);
   const r = await send({ type: "vt-ext-update" });
   if (!r || !r.ok) {
     // A live recording refuses the reload — say so on the button itself, and
     // let a second click retry once the tester has stopped.
-    showUpdate(`✗ ${(r && r.error) || "update failed"} — click to retry`, () => installUpdate(to));
+    showUpdate("circle-x", `${(r && r.error) || "update failed"} — click to retry`, () => installUpdate(to));
     return;
   }
-  showUpdate(`✓ ${r.to} installed — reloading…`, null, false);
+  showUpdate("check", `${r.to} installed — reloading…`, null, false);
   // The reload tears this popup down with the extension; the pause lets the
   // line land first so a fast update doesn't just look like a flicker.
   setTimeout(() => chrome.runtime.reload(), 700);
@@ -320,7 +342,7 @@ async function checkUpdates(manual = false) {
     // shelf for the latest release first, so routing through it would make an
     // offline machine unable to activate what it has already downloaded.
     if (st.staged) {
-      showUpdate(`↑ ${st.disk} is installed — click to reload into it`, () => reloadInto(st.disk));
+      showUpdate("upload", `${st.disk} is installed — click to reload into it`, () => reloadInto(st.disk));
       // Staged and check-failed are not exclusive: the host can have a newer
       // folder on disk AND have failed to reach the shelf. Activating the disk
       // copy is still right, but the footer must not imply the check succeeded.
@@ -330,7 +352,7 @@ async function checkUpdates(manual = false) {
     }
     if (st.host === "ok") {
       if (st.available) {
-        showUpdate(`↑ update to ${st.latest} — click to install`, () => installUpdate(st.latest));
+        showUpdate("upload", `update to ${st.latest} — click to install`, () => installUpdate(st.latest));
         foot.textContent = `v${running}`;
       } else if (st.checkFailed) {
         // The host could not reach the shelf. Saying "up to date" here would be
@@ -345,7 +367,7 @@ async function checkUpdates(manual = false) {
     // No CLI host on this machine — the pre-host manual route, unchanged.
     const latest = await marketLatest(manual);
     if (latest && newerVersion(latest, running)) {
-      showUpdate(`↑ update ${latest} available — download, unzip over the folder, ↻ reload`, () => {
+      showUpdate("upload", `update ${latest} available — download, unzip over the folder, ↻ reload`, () => {
         chrome.tabs.create({ url: `${MARKET}/get/vitrinka-recorder` });
       });
       foot.textContent = `v${running}`;

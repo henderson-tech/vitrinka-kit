@@ -36,6 +36,8 @@
   .footbtn:hover:not(:disabled) { color: #a8a099; }
   .footbtn:disabled { cursor: default; }
   .hidden { display: none; }
+  /* manifest icons (vendor/vitrinka-icons.js): 1em, currentColor, sized by the host's font */
+  svg { width: 1em; height: 1em; vertical-align: -.125em; }
   .recent-label { margin: 14px 0 6px; font: 700 9.5px/1 ui-monospace, Menlo, monospace;
     letter-spacing: .16em; text-transform: uppercase; color: #756e68; }
   .recent-row { display: flex; width: 100%; justify-content: space-between; align-items: center;
@@ -75,11 +77,11 @@
   <div class="sub" id="sub"></div>
   <input id="title" placeholder="session title (optional)">
   <div class="row">
-    <button class="primary" id="start">● Start recording</button>
+    <button class="primary" id="start"><svg data-icon="circle-dot"></svg> Start recording</button>
   </div>
   <div class="row hidden" id="recRow">
-    <button class="ghost" id="pause">⏸ Pause</button>
-    <button class="primary" id="stop">■ Stop</button>
+    <button class="ghost" id="pause"><svg data-icon="pause"></svg> Pause</button>
+    <button class="primary" id="stop"><svg data-icon="stop"></svg> Stop</button>
   </div>
 
   <!-- Stop drain progress (D2): real per-lane numbers, never a bare spinner. -->
@@ -101,7 +103,7 @@
   <!-- Board readiness (D3): reaching the board is a separate, deliberate act. -->
   <div class="panel hidden" id="boardPanel">
     <div class="stat"><span id="boardState">Board building…</span><b id="boardMeta"></b></div>
-    <a class="boardbtn hidden" id="boardOpen" target="_blank" rel="noopener">⧉ Open board</a>
+    <a class="boardbtn hidden" id="boardOpen" target="_blank" rel="noopener"><svg data-icon="external"></svg> Open board</a>
   </div>
 
   <div class="err hidden" id="err"></div>
@@ -113,6 +115,8 @@
     <span id="conn"></span>
   </div>
 </div>
+<!-- classic first: the manifest icons popup.js hydrates <svg data-icon> with -->
+<script src="vendor/vitrinka-icons.js"></script>
 <!-- module: popup.js imports the version compare it shares with the worker -->
 <script type="module" src="popup.js"></script>
 </body>
