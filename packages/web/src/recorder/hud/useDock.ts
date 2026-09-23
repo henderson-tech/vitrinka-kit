@@ -125,6 +125,19 @@ export function useDock(onMoveStart: () => void): Dock {
     return () => ro.disconnect();
   }, []);
 
+  // A press on a handle (capsule, puck or tab) belongs to the HUD alone. On
+  // the first move the browser hit-tests the press point again for a native
+  // drag source. By then the dock has moved off that point, so a link or image
+  // of the page underneath would start a native drag, which cancels the
+  // pointer and drops the throw. Cancel any dragstart while a press is live.
+  useEffect(() => {
+    const guard = (e: DragEvent) => {
+      if (press.current) e.preventDefault();
+    };
+    document.addEventListener('dragstart', guard, true);
+    return () => document.removeEventListener('dragstart', guard, true);
+  }, []);
+
   const release = useCallback(
     (e: PointerEvent<HTMLElement>, cancelled: boolean) => {
       const p = press.current;

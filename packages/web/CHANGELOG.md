@@ -1,5 +1,13 @@
 # @vitrinka/web
 
+## 0.1.3
+
+- **A throw over a page link or image lands.** Grabbing the HUD where the
+  page has a link or image underneath could start the browser's native drag
+  of that element. The browser then cancelled the pointer, and the HUD snapped
+  back to its spot. A press on the capsule, the puck or the tab now blocks
+  native drags until it ends.
+
 ## 0.1.2
 
 - **A HUD that is barely there.** Idle, it is a 28px glass puck (a hollow
