@@ -9,6 +9,7 @@
         "artifact",
         "publish",
         "brainstorming",
+        "make-idea",
         "listen",
         "resolve"
       ]
@@ -21,7 +22,8 @@
         "release",
         "pickup",
         "spot",
-        "handoff"
+        "handoff",
+        "cleanup"
       ]
     },
     {

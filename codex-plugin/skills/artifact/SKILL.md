@@ -91,8 +91,9 @@ line.
   what a board belongs to.
 - **Hand back only server-returned URLs**: a board's `url` field carries
   `/w/<workspace>` — never hand-compose `{base}/boards/<slug>`; a standalone
-  artifact hands back the URL `vitrinka board push` prints. The link goes in
-  your final summary, always.
+  artifact hands back the URL `vitrinka board push` prints — the element's
+  solo view (`/a/<id>`, for doc.json and `index.html` alike; there is no set
+  page). The link goes in your final summary, always.
 - **Delegation**: compose-heavy authoring (standalone doc.json/components,
   docs-board narrative) can run in the `vitrinka-publisher` agent, dispatched
   in the background — brief it with this skill's base directory and the

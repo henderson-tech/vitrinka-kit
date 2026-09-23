@@ -38,6 +38,8 @@ notification carries the result.
 - **Stays inline**: the one-command initial import (`board-from-set` /
   `journey-from-set`) — a single idempotent CLI call; run it yourself so the
   user gets the URL the moment the board exists. Incremental re-runs too.
+  A screenshots push already lands on the `<project>-<branch>-<key>` journey
+  board and prints that board's URL; the import is for a custom slug/title.
 - **Brief the agent fully** — it starts with zero context: the intent, this
   skill's base directory (so it Reads the intent's section +
   `references/card-kinds.md` itself), repo root + set root, what was captured
