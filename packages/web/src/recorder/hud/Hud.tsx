@@ -1,22 +1,37 @@
 /**
  * The HUD tree, rendered into the shadow host by its own React root. Owns
- * the sheet (open/title/ctx/pick + the surviving draft), annotate mode, the
- * keyboard shortcuts and the Esc-anywhere / click-outside close.
+ * the dock (where the HUD rests), the sheet (open/title/ctx/pick + the
+ * surviving draft) and where it opens, annotate mode, the keyboard
+ * shortcuts, the Esc-anywhere / click-outside close and the status line a
+ * screen reader hears while the capsule is folded.
  */
-import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { colOf, rowOf } from '@vitrinka/link/dock';
+import {
+  type CSSProperties,
+  type ReactElement,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { createPortal } from 'react-dom';
 
 import { readLink, recorderConfig, vitrinkaLinked } from '../config';
 import { forgetLink, linkDevice, LinkExpired, type DeviceLink } from '../link';
-import { getState } from '../queue';
+import { getState, health } from '../queue';
 import { addAnnotation, addNote, startSession, stopSession, togglePause } from '../session';
 import { annotateState, setAnnotating, subscribe } from '../state';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
 import { createSheetHost, insideHud, sheetTarget } from './host';
+import { anchoredLayer, hostOrigin, PHONE_QUERY, phoneLayer, restingBox, useMedia, usePresence, useViewportTick } from './layer';
 import { type LinkPhase, LinkSheet } from './LinkSheet';
 import { RecorderPill } from './RecorderPill';
 import { Sheet } from './Sheet';
 import { HUD_CSS } from './styles';
+import { useDock } from './useDock';
 
 interface SheetState {
   title: string;
@@ -95,6 +110,9 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
   }, [closeLink]);
 
   const closeSheet = useCallback(() => setSheet(null), []);
+  // A drag closes the composer (its draft survives); the link sheet follows the dock.
+  const dock = useDock(closeSheet);
+  const phone = useMedia(PHONE_QUERY);
   const openNote = useCallback(() => {
     if (!getState()) return;
     setAnnotating(false);
@@ -152,7 +170,9 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
     void togglePause();
   }, []);
 
-  // Shortcuts (window keydown): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause.
+  // Shortcuts (window keydown, CAPTURE — the host's shield stops a keydown
+  // from a focused HUD control before it could bubble to window, and a drag
+  // leaves the handle focused): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!e.altKey || !e.shiftKey || e.metaKey || e.ctrlKey) return;
@@ -162,8 +182,8 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
       else return;
       e.preventDefault();
     };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
   }, [toggleAnnotate, openNote, onPause]);
 
   // Esc anywhere and click-outside close the sheet (capture-phase, so the
@@ -188,39 +208,87 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
     };
   }, [sheet, link, closeSheet, closeLink]);
 
+  // Sheets enter and leave (presence) with their last content kept for the
+  // closing frames.
+  const sheetP = usePresence(sheet !== null, 150);
+  const linkP = usePresence(link !== null, 150);
+  const lastSheet = useRef<SheetState | null>(null);
+  const lastLink = useRef<typeof link>(null);
+  if (sheet) lastSheet.current = sheet;
+  if (link) lastLink.current = link;
+  const shownSheet = sheet ?? lastSheet.current;
+  const shownLink = link ?? lastLink.current;
+
   // The sheet's portal target (D4): a host inside the topmost open dialog
-  // when one exists, else the HUD host. Resolved per open.
+  // when one exists, else the HUD host. Resolved per open, kept while it closes.
   const portal = useMemo(() => {
-    if (!sheet) return null;
+    if (!sheetP.mounted) return null;
     const target = sheetTarget();
     if (!target) return { mount: hostMount, destroy: () => undefined, own: false };
     const h = createSheetHost(target);
     return { ...h, own: true };
-  }, [sheet, hostMount]);
+  }, [sheetP.mounted, hostMount]);
   useEffect(() => () => portal?.destroy(), [portal]);
 
-  const sheetEl = sheet && portal ? (
-    <>
-      {portal.own ? <style>{HUD_CSS}</style> : null}
-      <div className="sheetwrap" style={portal.own ? undefined : { position: 'absolute', right: 0, bottom: 52 }}>
-        <Sheet
-          title={sheet.title}
-          ctx={sheet.ctx}
-          pick={sheet.pick !== null}
-          draft={draft}
-          onDraft={setDraft}
-          onSend={onSend}
-          onClose={closeSheet}
-        />
+  // Where the open layer sits (D5): anchored to the dock's resting box and
+  // opening toward the centre, or a phone bottom sheet over the visual viewport.
+  const layerOpen = sheet !== null || link !== null;
+  const vvTick = useViewportTick(layerOpen && phone);
+  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom-right' });
+  useLayoutEffect(() => {
+    const el = dock.ref.current;
+    if (!layerOpen || !el) return;
+    const o = hostOrigin(sheet && portal ? portal.mount : hostMount);
+    setLayer(phone ? { style: phoneLayer(o), origin: 'bottom-center' } : anchoredLayer(restingBox(el), dock.place, o));
+  }, [layerOpen, sheet, portal, hostMount, dock.place, dock.ref, phone, vvTick]);
+  const layerCls = phone ? 'phone' : 'anchor';
+  const motionCls = phone ? 'rise' : 'grow';
+
+  const sheetEl =
+    shownSheet && portal ? (
+      <div className="hud">
+        {portal.own ? <style>{HUD_CSS}</style> : null}
+        <div className={layerCls} style={layer.style}>
+          <Sheet
+            className={`${motionCls} ${sheetP.cls}`}
+            origin={layer.origin}
+            title={shownSheet.title}
+            ctx={shownSheet.ctx}
+            pick={shownSheet.pick !== null}
+            draft={draft}
+            onDraft={setDraft}
+            onSend={onSend}
+            onClose={closeSheet}
+          />
+        </div>
       </div>
-    </>
-  ) : null;
+    ) : null;
+
+  // Stable phrases only: a live region re-announces on every text change.
+  const hs = rec ? health().state : null;
+  const status = !rec
+    ? linked
+      ? 'Recorder ready'
+      : 'Recorder not linked'
+    : hs === 'dead'
+      ? 'Recording ended on the server'
+      : hs === 'offline'
+        ? 'Recorder offline, retrying'
+        : rec.paused
+          ? 'Recording paused'
+          : 'Recording';
+
+  const place = dock.place;
+  const dockAttrs =
+    'tuck' in place
+      ? { 'data-tuck': place.tuck, style: { '--ty': String(place.y) } as CSSProperties }
+      : { 'data-row': rowOf(place.spot), 'data-col': colOf(place.spot) };
 
   return (
-    <>
+    <div className="hud" data-spot={'spot' in place ? place.spot : undefined}>
       <style>{HUD_CSS}</style>
       {annotating && rec ? <AnnotateOverlay onPick={onPick} onCancel={cancelAnnotate} /> : null}
-      <div style={{ position: 'relative' }}>
+      <div ref={dock.ref} className={dock.dragging ? 'dock dragging' : 'dock'} {...dockAttrs} onClickCapture={dock.onClickCapture}>
         <RecorderPill
           rec={rec}
           composing={sheet !== null}
@@ -229,6 +297,10 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
           starting={starting}
           linked={linked}
           canUnlink={canUnlink}
+          place={place}
+          dragging={dock.dragging}
+          handle={dock.handle}
+          onMove={dock.moveTo}
           onLink={beginLink}
           onUnlink={onUnlink}
           onStart={onStart}
@@ -237,13 +309,24 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
           onAnnotate={toggleAnnotate}
           onStop={onStop}
         />
-        {sheetEl && portal ? createPortal(sheetEl, portal.mount) : null}
-        {link ? (
-          <div className="sheetwrap" style={{ position: 'absolute', right: 0, bottom: 52 }}>
-            <LinkSheet phase={link.phase} start={link.flow?.start ?? null} error={link.error} onRetry={beginLink} onClose={closeLink} />
-          </div>
-        ) : null}
       </div>
-    </>
+      {sheetEl && portal ? createPortal(sheetEl, portal.mount) : null}
+      {linkP.mounted && shownLink ? (
+        <div className={layerCls} style={layer.style}>
+          <LinkSheet
+            className={`${motionCls} ${linkP.cls}`}
+            origin={layer.origin}
+            phase={shownLink.phase}
+            start={shownLink.flow?.start ?? null}
+            error={shownLink.error}
+            onRetry={beginLink}
+            onClose={closeLink}
+          />
+        </div>
+      ) : null}
+      <div className="sr" role="status" aria-live="polite">
+        {status}
+      </div>
+    </div>
   );
 }

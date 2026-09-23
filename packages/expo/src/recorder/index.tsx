@@ -71,9 +71,9 @@ export function VitrinkaRecorderRoot({
  * under KeyboardProvider (KeyboardStickyView needs it), and the pill drawing
  * after it keeps the ⌖/✕ chip tappable above the dim.
  *
- * `hideIdleGripOn`: pathnames where the idle grip must not mount because the
- * host app owns competing right-edge UI there (the grip's invisible hit target
- * is deliberately wide). A live recording stays visible on those routes.
+ * `hideIdleGripOn`: pathnames where the idle puck must not mount because the
+ * host app owns competing UI at its spot. A live recording stays visible on
+ * those routes (and can be dragged elsewhere or tucked).
  */
 export function VitrinkaRecorderPill({
   hideIdleGripOn,

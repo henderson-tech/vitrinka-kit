@@ -143,7 +143,7 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
         />
       ) : null}
       <div className="hint">
-        <AnnotateIcon /> annotate — click an element or drag an area · enter sends · esc cancels
+        <AnnotateIcon /> Click an element or drag an area<span className="keys"> · esc cancels</span>
       </div>
     </>
   );

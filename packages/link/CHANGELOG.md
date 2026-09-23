@@ -1,5 +1,12 @@
 # @vitrinka/link
 
+## 0.1.2
+
+- **`@vitrinka/link/dock`.** The recorder HUD's snap math, shared by the
+  web and Expo recorders: `settle` (six spots, velocity-projected flick,
+  side-edge tuck), `spotRect`, `neighbour` (arrow keys), `untuck`,
+  `parsePlace` (validated stored position).
+
 ## 0.1.1
 
 - **Workspace hint.** `linkWorkspace(base)` reads the `<slug>` of a

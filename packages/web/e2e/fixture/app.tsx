@@ -28,7 +28,7 @@ function App(): ReactElement {
     ),
     createElement(
       'div',
-      { id: 'target', style: { marginTop: 40, width: 400, height: 200, background: '#eee' } },
+      { id: 'target', style: { marginTop: 40, width: 400, maxWidth: '100%', height: 200, background: '#eee' } },
       'Drag a region over me',
     ),
   );

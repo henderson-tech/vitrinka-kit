@@ -1,5 +1,23 @@
 # @vitrinka/expo
 
+## 0.2.2
+
+- **The web HUD's design, native.** The right-edge rail, grip and mini tab
+  give way to the same shapes as `@vitrinka/web` 0.1.2: a 32pt glass puck at
+  idle (tap links or records, long-press for unlink and move), a dot-and-clock
+  capsule while recording that a tap unfolds into the tools (frames · sync ·
+  pause · note · annotate · more) and that folds back 4s after the last touch.
+  Annotate lives in the tray (held open while the mode is on) instead of a
+  permanent chip.
+- **Move it anywhere.** Drag it to one of six spots, flick it where you want
+  it, or push it past a side edge to tuck it into a 6pt tab (`Show recorder`);
+  the menu's **Move to** picker is the no-drag alternative. The spot is
+  remembered (`vitrinka.recorder.dock`) and respects the safe area.
+- Link, note and the menu are bottom sheets riding the keyboard; state
+  changes are announced to VoiceOver/TalkBack. No new native dependency (core
+  `PanResponder` + `Animated`). Needs `@vitrinka/link` 0.1.2.
+- `hideIdleGripOn` still hides the idle puck on the listed routes.
+
 ## 0.2.1
 
 - **Link into the right workspace**: an `EXPO_PUBLIC_VITRINKA_URL` addressing

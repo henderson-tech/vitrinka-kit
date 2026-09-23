@@ -13,34 +13,36 @@
     html, body { margin:0; background:transparent; }
     * { box-sizing:border-box; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     svg { width:1em; height:1em; vertical-align:-.125em; }
-    .pop { width:360px; padding:14px; background:#1d1a1b; border:1px solid #292526; border-radius:14px;
-      box-shadow:0 8px 30px rgba(0,0,0,.35); color:#f0eae4; }
+    /* recorder-hud-subtle: the kit sheet's look. A frame cannot blur the page
+       behind it, so the ink is near-opaque instead of glass. */
+    .pop { width:288px; padding:12px; background:rgba(26,22,23,.94); border-radius:14px; color:#f4efea;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.11), 0 0 0 .5px rgba(0,0,0,.30), 0 10px 28px -10px rgba(0,0,0,.5); }
     .pop-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    label { display:flex; align-items:center; gap:7px; font:700 9.5px/1 ui-monospace, Menlo, monospace;
-      letter-spacing:.18em; text-transform:uppercase; color:#756e68; }
-    label i { width:3px; height:10px; background:#ff3b57; }
+    label { display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; color:#f4efea; }
+    label i { width:3px; height:11px; border-radius:1px; background:#ff3b57; }
     button { all:unset; cursor:pointer; }
-    .closeb { width:24px; height:24px; border-radius:6px; color:#756e68; font-size:13px; text-align:center; line-height:24px; }
-    .closeb:hover { color:#f0eae4; background:#252122; }
+    .closeb { width:24px; height:24px; border-radius:7px; color:rgba(244,239,234,.44); font-size:12px; text-align:center; line-height:24px; }
+    .closeb:hover { color:#f4efea; background:rgba(255,255,255,.08); }
     button:focus-visible { outline:2px solid #ff3b57; outline-offset:2px; }
-    textarea { width:100%; margin-top:10px; padding:10px 12px; min-height:72px; resize:vertical;
-      background:#141213; border:1px solid #363132; border-radius:8px; color:#f0eae4;
-      font:400 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    textarea:focus { outline:none; border-color:#756e68; }
-    .row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; margin-top:10px; }
+    textarea { width:100%; margin-top:10px; padding:9px 11px; min-height:64px; resize:vertical;
+      background:rgba(0,0,0,.28); border:0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.11); border-radius:9px; color:#f4efea;
+      font:400 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    textarea::placeholder { color:rgba(244,239,234,.44); }
+    textarea:focus { outline:none; box-shadow:inset 0 0 0 1px rgba(244,239,234,.44); }
+    .row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; margin-top:10px; }
     .row.nodest { grid-template-columns:minmax(0,1fr) auto; }
-    .ctx { font:500 10px/1.35 ui-monospace, Menlo, monospace; color:#756e68; text-align:center;
+    .ctx { font-size:11px; line-height:1.35; color:rgba(244,239,234,.44); text-align:center;
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .row.nodest .ctx { text-align:left; }
-    .dest { display:none; align-items:center; gap:9px; }
-    .dest.show { display:flex; }
-    .dest button { padding:2px 0; color:#756e68; font:600 9px/1 ui-monospace, Menlo, monospace;
-      letter-spacing:.12em; text-transform:uppercase; border-bottom:1px solid transparent; }
-    .dest button[aria-pressed="true"] { color:#f0eae4; border-bottom-color:#ff3b57; }
-    .sendb { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:8px;
-      background:#ff3b57; color:#fff; font-size:13px; font-weight:600; line-height:1; }
+    .dest { display:none; padding:2px; border-radius:8px; background:rgba(0,0,0,.28); box-shadow:inset 0 0 0 1px rgba(255,255,255,.11); }
+    .dest.show { display:inline-flex; }
+    .dest button { padding:5px 8px; min-height:24px; box-sizing:border-box; border-radius:6px; color:rgba(244,239,234,.44);
+      font-size:11.5px; font-weight:600; line-height:14px; }
+    .dest button[aria-pressed="true"] { background:rgba(255,255,255,.08); color:#f4efea; }
+    .sendb { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 12px; box-sizing:border-box; border-radius:8px;
+      background:#ff3b57; color:#fff; font-size:12.5px; font-weight:600; line-height:1; }
     .sendb:hover { background:#ff5670; }
-    .hints { margin-top:8px; font:500 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing:.06em; color:#756e68; }
+    .hints { margin-top:9px; font-size:11px; line-height:1; color:rgba(244,239,234,.44); }
   </style>
 </head>
 <body>

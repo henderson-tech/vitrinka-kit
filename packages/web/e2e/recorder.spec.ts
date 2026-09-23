@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -125,7 +125,7 @@ test.beforeAll(async () => {
     }
     res.setHeader('content-type', 'text/html');
     res.end(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title></head><body>` +
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixture</title></head><body>` +
         `<div id="root"></div>` +
         `<script>window.__VT_CFG=${JSON.stringify({ url: stubUrl, key: (req.url ?? '').includes('nokey') ? '' : 'vkr_e2e' })}</script>` +
         `<script src="/app.js"></script></body></html>`,
@@ -145,13 +145,19 @@ test('records a journey: create · click · nav · note · region annotation · 
   await page.getByRole('button', { name: 'Start recording' }).click();
   const pill = page.locator('[data-e2e="recorder-pill"]');
   await expect(pill).toBeVisible();
-  await expect(pill).toContainText('e2e journey');
+  // At rest the capsule is the dot and the clock; the tools unfold on intent.
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  await expect(pill).toHaveText(/^\d\d:\d\d/);
+  await page.mouse.move(600, 400);
+  await expect(handle).toHaveAttribute('aria-expanded', 'false', { timeout: 5_000 });
 
   await page.locator('#buy').click();
   await page.locator('#go').click();
   await expect(page).toHaveURL(/\/orders\/42$/);
 
   // ✎ note: Enter sends.
+  await handle.hover();
+  await expect(handle).toHaveAttribute('aria-expanded', 'true');
   await page.getByRole('button', { name: 'Note' }).click();
   const ta = page.getByPlaceholder("what's wrong / what to refine…");
   await expect(ta).toBeFocused();
@@ -160,6 +166,7 @@ test('records a journey: create · click · nav · note · region annotation · 
   await expect(ta).toBeHidden();
 
   // ⌖ annotate: drag a region over the target.
+  await handle.hover();
   await page.getByRole('button', { name: 'Annotate' }).click();
   await expect(page.locator('[data-e2e="annotate-dim"]')).toBeVisible();
   const box = (await page.locator('#target').boundingBox())!;
@@ -173,6 +180,7 @@ test('records a journey: create · click · nav · note · region annotation · 
   await expect(ta).toBeHidden();
 
   // Stop from the menu; the drain must reach a PATCH done.
+  await handle.hover();
   await page.getByRole('button', { name: 'More' }).click();
   await page.getByRole('menuitem', { name: 'Stop recording' }).click();
   await expect.poll(() => seen.some((s) => s.method === 'PATCH' && (s.body as { status?: string })?.status === 'done'), {
@@ -233,8 +241,93 @@ test('links the device from the pill, then records with the minted token', async
   expect(create.headers.authorization).toBe('Bearer vkr_test');
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toContain('vkr_test');
   // Unlink from the menu → back to the unlinked pill.
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
   await page.getByRole('button', { name: 'More' }).click();
   await page.getByRole('menuitem', { name: 'Unlink' }).click();
   await expect(page.getByRole('button', { name: 'Link recorder' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
+});
+
+/** Drag the element's centre to (x, y) with a real pointer, then let the spring settle. */
+async function dragTo(page: Page, el: Locator, x: number, y: number): Promise<void> {
+  const b = (await el.boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, y, { steps: 12 });
+  await page.mouse.up();
+}
+
+test('the capsule folds after the pointer leaves; a throw lands on its spot and survives a reload', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  await page.mouse.move(600, 400);
+  await handle.hover();
+  await expect(handle).toHaveAttribute('aria-expanded', 'true');
+  await page.mouse.move(600, 400);
+  await expect(handle).toHaveAttribute('aria-expanded', 'false', { timeout: 5_000 });
+
+  const dock = page.locator('.dock');
+  await expect(dock).toHaveAttribute('data-col', 'r');
+  await dragTo(page, handle, 120, 90);
+  await expect(dock).toHaveAttribute('data-row', 't');
+  await expect(dock).toHaveAttribute('data-col', 'l');
+  await page.reload();
+  await expect(page.locator('.dock')).toHaveAttribute('data-row', 't');
+  await expect(page.locator('.dock')).toHaveAttribute('data-col', 'l');
+});
+
+test('pushed past an edge it tucks into a tab; the tab brings it back', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const vw = page.viewportSize()!.width;
+  await dragTo(page, page.getByRole('button', { name: 'Recorder controls' }), vw - 4, 300);
+  const tab = page.getByRole('button', { name: 'Show recorder' });
+  await expect(tab).toBeVisible();
+  await expect(page.locator('.dock')).toHaveAttribute('data-tuck', 'right');
+  await tab.click();
+  await expect(page.getByRole('button', { name: 'Recorder controls' })).toBeVisible();
+  await expect(page.locator('.dock')).toHaveAttribute('data-col', 'r');
+});
+
+test('moves without a drag: arrow keys on the handle and the Move to picker', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const dock = page.locator('.dock');
+  await handle.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(dock).toHaveAttribute('data-row', 't');
+  await page.keyboard.press('ArrowLeft');
+  await expect(dock).toHaveAttribute('data-col', 'c');
+  await handle.hover();
+  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('menuitemradio', { name: 'Move to bottom left' }).click();
+  await expect(dock).toHaveAttribute('data-row', 'b');
+  await expect(dock).toHaveAttribute('data-col', 'l');
+});
+
+test('reduced motion stills the recording ripple', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const dot = page.locator('[data-e2e="recorder-pill"] .dot');
+  await expect(dot).toBeVisible();
+  expect(await dot.evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('none');
+});
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('the link sheet is a bottom sheet without the QR', async ({ page }) => {
+    await page.goto(`${pageUrl}/?nokey=1`);
+    await page.getByRole('button', { name: 'Link recorder' }).tap();
+    const sheet = page.locator('[data-e2e="link-sheet"]');
+    await expect(page.locator('[data-e2e="link-code"]')).toHaveText('WXYZ-1234');
+    await expect(page.getByRole('link', { name: 'Open vitrinka' })).toBeVisible();
+    await expect(page.getByAltText('Scan to link')).toHaveCount(0);
+    const b = (await sheet.boundingBox())!;
+    expect(b.width).toBeGreaterThan(360);
+    expect(844 - (b.y + b.height)).toBeLessThan(24);
+  });
 });
