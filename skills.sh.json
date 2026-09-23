@@ -22,7 +22,8 @@
         "release",
         "pickup",
         "spot",
-        "handoff"
+        "handoff",
+        "cleanup"
       ]
     },
     {

@@ -306,6 +306,19 @@ log(`review-loop: ${allRoutes.length} routes, ${allJourneys.length} journeys`)
 
 const captureRoot = (pass, device) => `.vitrinka/screenshots/review-loop/pass-${pass}/${device}`
 const devLine = d => d.width ? `${d.name} ${d.width}×${d.height}@${d.scale} ${d.input}${d.safeArea ? ' with safe-area insets emulated' : ''}` : `${d.name} (${d.platform} simulator ${d.sim})`
+// A viewport device is shot in the browser and adopted with --file; a simulator
+// device (expo matrix: platform, no width) is captured natively by the CLI.
+const captureStep = (d, pass) => {
+  const tail = `--label pass${pass}/${d.name}/<route-slug> --title "<title>" --note "<what is on screen>" --src <implementing file> --root ${captureRoot(pass, d.name)} --yes`
+  return d.width
+    ? `open it at exactly this viewport, wait for it to settle, scroll the whole page once so lazy content is present, then capture 2× and adopt it with \`vitrinka board capture web --file <png> --route <path> --device ${d.name} --viewport ${d.width}x${d.height}@${d.scale || 2} ${tail}\``
+    : `open it in the ${d.sim} simulator through its deep link and capture it with \`vitrinka board capture ${d.platform} --open <deep link> --route <path> --device ${d.name} ${tail}\``
+}
+// The usertest runs on the matrix's first device when the matrix is all simulators.
+const native = matrix.every(d => !d.width)
+const utPlatform = native ? matrix[0].platform : 'web'
+const utDevice = native ? matrix[0].name : 'desktop'
+const utWhere = native ? `on the ${matrix[0].name} simulator (${matrix[0].sim})` : `on a desktop viewport and on a touch phone viewport (${matrix[0].name})`
 
 let routes = allRoutes
 let journeys = allJourneys
@@ -323,13 +336,13 @@ for (let pass = 1; pass <= cap; pass++) {
   const shooters = matrix.map(d => () => agent(withPreamble(
     `Shoot pass ${pass} of a review loop on device ${devLine(d)} against ${prep.baseUrl}.\n` +
     `Routes (shoot every one, with data on screen; a route needing setup says how):\n${JSON.stringify(routes)}\n` +
-    `Read \`docs {topic: "guide:publish-capture"}\` first. For each route: open it at exactly this viewport, wait for it to settle, scroll the whole page once so lazy content is present, then capture 2× and adopt it with \`vitrinka board capture web --file <png> --route <path> --device ${d.name} --viewport ${d.width || ''}x${d.height || ''}@${d.scale || 2} --label pass${pass}/${d.name}/<route-slug> --title "<title>" --note "<what is on screen>" --src <implementing file> --root ${captureRoot(pass, d.name)} --yes\`. On a touch device also capture one screen with a menu/sheet open when the route has one. Read each saved image back and re-shoot a blank or half-loaded one. Return every shot; a route you could not reach is a \`problems\` line naming why.`
+    `Read \`docs {topic: "guide:publish-capture"}\` first. For each route: ${captureStep(d, pass)}. On a touch device also capture one screen with a menu/sheet open when the route has one. Read each saved image back and re-shoot a blank or half-loaded one. Return every shot; a route you could not reach is a \`problems\` line naming why.`
   ), { label: `shoot:${d.name}`, phase: ph, schema: SHOOT_SCHEMA }))
 
   const tester = () => agent(withPreamble(
-    `Exploratory usertest, pass ${pass}, against ${prep.baseUrl} on a desktop viewport and on a touch phone viewport (${matrix[0].name}).\n` +
+    `Exploratory usertest, pass ${pass}, against ${prep.baseUrl} ${utWhere}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
-    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform web --device desktop --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device; a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
+    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device; a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: ph, schema: USERTEST_SCHEMA })
 
   const results = (await parallel([...shooters, tester])).filter(Boolean)
