@@ -64,10 +64,11 @@ they become reviewable testing boards.
 - [ ] Listing links: homepage → https://vitrinka.ai, support → vitrinka-kit
       repo issues (repo must be public first — the description links it as
       the source)
-- [ ] `dist.sh` **store** zip uploaded (`vitrinka-recorder-store-*.zip` — the
-      `key`-stripped variant; the Web Store rejects a first upload whose
+- [ ] `dist.sh` **store** zip uploaded (`dist/webstore/vitrinka-recorder-store-*.zip`
+      — the `key`-stripped variant; the Web Store rejects a first upload whose
       manifest contains `key`); store version == `manifest.json` version
-- [ ] Post-approval: fill the store URL into `apps/extension/INSTALL.md`
+- [ ] Post-approval: fill the store URL into `apps/extension/INSTALL.md` in the
+      product repo (the kit copy is generated from it)
 - [ ] Post-approval: the store install has its own extension ID (the store
       signs with its own key, so it differs from the pinned unpacked ID) —
       add it to the vitrinka CLI native-messaging host `allowed_origins` if

@@ -20,7 +20,7 @@
     background: #ff3b57; color: #fff; font-size: 13px; font-weight: 600; }
   #status { margin-left: 12px; font: 500 11px/1 ui-monospace, Menlo, monospace; }
   .ok { color: #53c07e; } .bad { color: #ff3b57; }
-  /* Recorder data (honest-retention design): nothing is auto-deleted while it is
+  /* Recorder data (recorder-live D9): nothing is auto-deleted while it is
      live, so the usage always has a visible home and a manual escape hatch. */
   hr { margin: 34px 0 0; border: 0; border-top: 1px solid #292526; }
   h2 { margin: 24px 0 4px; font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
@@ -34,21 +34,45 @@
   .btns { display: flex; align-items: center; gap: 10px; }
   .btns button { margin-top: 14px; }
   .ghost { background: transparent; border: 1px solid #363132; color: #a8a099; }
+  .bigcode { display: block; font: 500 26px/1.4 ui-monospace, Menlo, monospace; letter-spacing: .15em; margin: 8px 0 12px; }
+  #linkQr { display: block; background: #fff; border-radius: 8px; padding: 6px; }
+  #advanced { margin-top: 18px; }
+  #advanced summary { cursor: pointer; color: #a8a099; font-size: 12px; }
+  /* manifest icons (vendor/vitrinka-icons.js): 1em, currentColor, sized by the host's font */
+  svg { width: 1em; height: 1em; vertical-align: -.125em; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="kicker"><i></i>Vitrinka recorder</div>
   <h1>Settings</h1>
-  <p>The recorder talks only to the vitrinka instance you set here. The token is a
-     <code>vkp_</code> personal access token (or the instance write token);
-     project ↔ domain mapping lives in each vitrinka project's settings.
-     If the <code>vitrinka</code> CLI is set up on this machine these are filled
-     in for you — you only need this page to override them.</p>
+  <p>The recorder talks to your vitrinka instance. The simplest way in is
+     <strong>Link this browser</strong>: vitrinka shows a code, you approve it
+     in a signed-in tab, and this browser receives a recorder token that can
+     only create sessions in the workspace you pick — nothing else. A
+     <code>vkp_</code> personal token still works for an account that records
+     into several workspaces. Project ↔ domain mapping lives in each vitrinka
+     project's settings. If the <code>vitrinka</code> CLI is set up on this
+     machine these are filled in for you.</p>
   <label for="base">Base URL</label>
-  <input id="base" placeholder="https://vitrinka.ai">
-  <label for="token">Token</label>
-  <input id="token" type="password" placeholder="vkp_…">
+  <input id="base" placeholder="https://app.vitrinka.ai">
+  <div class="btns">
+    <button id="link">Link this browser</button>
+    <span id="linkStatus"></span>
+  </div>
+  <div id="linkBox" hidden>
+    <p>Approve this code in vitrinka — <a id="linkOpen" href="#" target="_blank" rel="noopener">open the approval page</a>
+       or scan the QR with a phone that is signed in:</p>
+    <code id="linkCode" class="bigcode"></code>
+    <img id="linkQr" alt="Scan to link" width="160" height="160">
+  </div>
+  <details id="advanced">
+    <summary>Advanced — workspace and token by hand</summary>
+    <label for="workspace">Workspace</label>
+    <input id="workspace" placeholder="acme" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label for="token">Token</label>
+    <input id="token" type="password" placeholder="vkp_… or vkr_…">
+  </details>
   <div class="btns">
     <button id="save">Save &amp; test</button>
     <button class="ghost" id="fromCli">Fill from the vitrinka CLI</button>
@@ -68,6 +92,7 @@
     <span id="dataStatus"></span>
   </div>
 </div>
-<script src="options.js"></script>
+<script src="vendor/vitrinka-icons.js"></script>
+<script type="module" src="options.js"></script>
 </body>
 </html>

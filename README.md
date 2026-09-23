@@ -21,7 +21,7 @@ your device and what data it collects.
 | [`packages/expo`](packages/expo) | `@vitrinka/expo` — the Expo / React Native toolkit. Today: the journey recorder (`@vitrinka/expo/recorder`). |
 | [`packages/web`](packages/web) | `@vitrinka/web` — the React DOM toolkit (Next, Vite, …). Today: the journey recorder (`@vitrinka/web/recorder`) — rrweb DOM stream, clicks, navigation, network, console, notes — and the `withVitrinkaRecorder` build guard for Next. |
 | [`packages/link`](packages/link) | `@vitrinka/link` — the device link (code + approval → ingest-only `vkr_` token) both recorders authenticate with. Zero deps. |
-| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. |
+| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. Generated from the product repo like `skills/`; changes land there. |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | What the recorders capture and where it is sent. |
 | [`skills/`](skills) | Agent skills for working with vitrinka — generated from the product repo, installable as the `vitrinka` plugin (Claude Code / Codex) or via the skills CLI. |
 | [`agents/`](agents) | Companion agents used by the skills, generated from the same product-repo source. |

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- The recorder's composer sheet (recorder-iframe vt-2985). It lives in an
+     extension-origin iframe, not in the page's shadow root, because a page's
+     focus trap (Radix FocusScope and friends) yanks focus back the moment it
+     leaves the dialog for another element of the SAME document — but stands
+     down when focus moves to another document (relatedTarget is null). The
+     content script owns placement, open/close and pick mode; this page owns
+     the textarea, the draft, the destination and Send. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body { margin:0; background:transparent; }
+    * { box-sizing:border-box; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    svg { width:1em; height:1em; vertical-align:-.125em; }
+    .pop { width:360px; padding:14px; background:#1d1a1b; border:1px solid #292526; border-radius:14px;
+      box-shadow:0 8px 30px rgba(0,0,0,.35); color:#f0eae4; }
+    .pop-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    label { display:flex; align-items:center; gap:7px; font:700 9.5px/1 ui-monospace, Menlo, monospace;
+      letter-spacing:.18em; text-transform:uppercase; color:#756e68; }
+    label i { width:3px; height:10px; background:#ff3b57; }
+    button { all:unset; cursor:pointer; }
+    .closeb { width:24px; height:24px; border-radius:6px; color:#756e68; font-size:13px; text-align:center; line-height:24px; }
+    .closeb:hover { color:#f0eae4; background:#252122; }
+    button:focus-visible { outline:2px solid #ff3b57; outline-offset:2px; }
+    textarea { width:100%; margin-top:10px; padding:10px 12px; min-height:72px; resize:vertical;
+      background:#141213; border:1px solid #363132; border-radius:8px; color:#f0eae4;
+      font:400 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    textarea:focus { outline:none; border-color:#756e68; }
+    .row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; margin-top:10px; }
+    .row.nodest { grid-template-columns:minmax(0,1fr) auto; }
+    .ctx { font:500 10px/1.35 ui-monospace, Menlo, monospace; color:#756e68; text-align:center;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .row.nodest .ctx { text-align:left; }
+    .dest { display:none; align-items:center; gap:9px; }
+    .dest.show { display:flex; }
+    .dest button { padding:2px 0; color:#756e68; font:600 9px/1 ui-monospace, Menlo, monospace;
+      letter-spacing:.12em; text-transform:uppercase; border-bottom:1px solid transparent; }
+    .dest button[aria-pressed="true"] { color:#f0eae4; border-bottom-color:#ff3b57; }
+    .sendb { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:8px;
+      background:#ff3b57; color:#fff; font-size:13px; font-weight:600; line-height:1; }
+    .sendb:hover { background:#ff5670; }
+    .hints { margin-top:8px; font:500 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing:.06em; color:#756e68; }
+  </style>
+</head>
+<body>
+  <div class="pop" role="dialog" aria-labelledby="pop-title">
+    <div class="pop-head">
+      <label><i></i><span class="pop-title" id="pop-title">Note</span></label>
+      <button class="closeb" aria-label="Close"></button>
+    </div>
+    <textarea placeholder="what's wrong / what to refine…"></textarea>
+    <div class="row">
+      <span class="dest" role="group" aria-label="Where this snap lands">
+        <button class="d-board" aria-pressed="true">board</button>
+        <button class="d-task" aria-pressed="false">task</button>
+      </span>
+      <span class="ctx"></span><button class="sendb"><span class="sendb-icon"></span><span>Send</span></button>
+    </div>
+    <div class="hints">↩ send · ⇧↩ newline · esc cancel</div>
+  </div>
+  <script src="vendor/vitrinka-icons.js"></script>
+  <script src="hud.js"></script>
+</body>
+</html>
