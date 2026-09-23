@@ -193,7 +193,10 @@
       .tray-in > * { pointer-events:auto; }
       .pill:hover .tray, .pill:focus-within .tray, .pill.composing .tray { grid-template-columns:1fr; transition-delay:0s; }
       .pill:hover .tray-in, .pill:focus-within .tray-in, .pill.composing .tray-in { opacity:1; transition-duration:.25s; transition-delay:60ms; }
-      :host(.dragging) .tray { grid-template-columns:0fr; transition-delay:0s; }
+      /* Grabbing folds the tray at once: the pill you drag is the capsule,
+         and the release settles on the capsule's rect, never a half-fold. */
+      :host(.dragging) .tray { grid-template-columns:0fr; }
+      :host(.dragging) .tray, :host(.dragging) .tray-in { transition:none; }
       .sep { width:1px; height:14px; margin:0 5px; background:var(--edge); }
       .dot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--rec); }
       .dot::after { content:""; position:absolute; inset:0; border-radius:50%; animation:ripple 2s ease-out infinite; }
@@ -901,6 +904,12 @@
     press = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, samples: [] };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
+  // A grip press is the HUD's alone. On the first move the browser hit-tests
+  // the press point again for a native drag source, and by then the pill has
+  // already moved off it. A link or image of the page under that point then
+  // starts a native drag, which cancels the pointer and drops the throw
+  // (seen on CI: dragstart on the app's header link under the top-left spot).
+  addEventListener("dragstart", (e) => { if (press) e.preventDefault(); }, true);
   const onMove = (e) => {
     if (!press || press.id !== e.pointerId) return;
     const dx = e.clientX - press.x, dy = e.clientY - press.y;
