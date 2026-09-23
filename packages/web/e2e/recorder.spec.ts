@@ -335,8 +335,62 @@ test('reduced motion stills the recording ripple', async ({ page }) => {
   expect(await dot.evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('none');
 });
 
+test('a click pick never presses the page: the button under it stays untouched', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Annotate' }).click();
+  await expect(page.locator('[data-e2e="annotate-dim"]')).toBeVisible();
+  await page.locator('#buy').click();
+  await expect(page.getByText('Annotate element')).toBeVisible();
+  await expect(page.locator('#buy')).toHaveText('Buy now (0)');
+});
+
+/** Start recording and enter annotate mode by finger, the way a phone does it. */
+async function annotateByTap(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Start recording' }).tap();
+  await page.getByRole('button', { name: 'Recorder controls' }).tap();
+  await page.getByRole('button', { name: 'Annotate' }).tap();
+  await expect(page.locator('[data-e2e="annotate-dim"]')).toBeVisible();
+}
+
+/** One finger from `a` to `b` through CDP touch input (Playwright's touchscreen only taps), a frame per step. */
+async function touchDrag(page: Page, a: { x: number; y: number }, b: { x: number; y: number }): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  const at = (t: number) => [{ id: 1, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(0) });
+  for (let i = 1; i <= 12; i++) {
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(i / 12) });
+  }
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('annotate: a finger drag draws a region instead of scrolling the page', async ({ page }) => {
+    await page.goto(`${pageUrl}/`);
+    await page.evaluate(() => {
+      document.body.style.minHeight = '3000px';
+    });
+    await annotateByTap(page);
+    const box = (await page.locator('#target').boundingBox())!;
+    // Finger up the screen: on the page that is a scroll down.
+    await touchDrag(page, { x: box.x + 40, y: box.y + 170 }, { x: box.x + 220, y: box.y + 30 });
+    await expect(page.getByText('Annotate region')).toBeVisible();
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+  });
+
+  test('annotate: tapping a button picks it without pressing it', async ({ page }) => {
+    await page.goto(`${pageUrl}/`);
+    await annotateByTap(page);
+    await page.locator('#buy').tap();
+    await expect(page.getByText('Annotate element')).toBeVisible();
+    await expect(page.locator('#buy')).toHaveText('Buy now (0)');
+  });
 
   test('the link sheet is a bottom sheet without the QR', async ({ page }) => {
     await page.goto(`${pageUrl}/?nokey=1`);

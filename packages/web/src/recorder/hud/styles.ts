@@ -248,6 +248,20 @@ export const HOST_STYLE =
 /** Inline style of a sheet host portaled into a dialog — the same 0×0 origin box. */
 export const SHEET_HOST_STYLE = HOST_STYLE;
 
+/**
+ * The PAGE (light-DOM) sheet while annotate mode owns the pointer — one
+ * <style> in the page head, removed on exit. `touch-action:none` on every
+ * element, not just the root: Chromium re-enables panning inside each inner
+ * scroller, and it keeps a finger's drag a marquee even where a touchstart
+ * cannot be cancelled (a tap that stops a fling). The rest (callout,
+ * selection, tap flash) only matters to a finger, so a mouse-only desktop
+ * renders exactly as before.
+ */
+export const ANNOTATE_PAGE_CSS =
+  '*{touch-action:none!important}' +
+  '@media (any-pointer:coarse){*{-webkit-touch-callout:none!important;-webkit-user-select:none!important;' +
+  'user-select:none!important;-webkit-tap-highlight-color:transparent!important}}';
+
 /** Link-sheet additions (appended to HUD_CSS). */
 export const LINK_CSS = `
 .linkgrid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; margin-top:10px; }

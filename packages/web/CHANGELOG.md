@@ -1,5 +1,23 @@
 # @vitrinka/web
 
+## 0.1.4
+
+- **Annotate works by finger.** On a phone or tablet, a drag in annotate
+  mode used to scroll the page: the browser took the gesture and the
+  marquee froze where it was. The next tap then quit annotate mode without
+  picking anything. Now annotate mode owns every touch on the page, so a
+  drag draws the region, and the page no longer pans, zooms, selects text
+  or opens a long-press menu. Leaving annotate mode gives all of that back.
+  If the browser does take a gesture, the marquee clears and you stay in
+  annotate mode.
+- **A pick never presses the page.** Tapping or clicking a button to
+  annotate it also pressed the button, on desktop too, and the journey
+  recorded the pick as a click. The pick's click is now swallowed, even
+  after annotate mode has closed.
+- Finger taps get a 12px slop before they become a marquee (a mouse keeps
+  6px). A slip that draws only a sliver stays in annotate mode instead of
+  quitting it, and a second finger never moves the marquee.
+
 ## 0.1.3
 
 - **A throw over a page link or image lands.** Grabbing the HUD where the

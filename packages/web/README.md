@@ -122,7 +122,7 @@ you leave (keycaps show on hover):
 |---|---|---|
 | ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
 | ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel) |
-| ⌖ Annotate | ⌥⇧A | click an element or drag a region, then describe it; `board` (an annotation on the board) or `task` (also filed as an intake draft) |
+| ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too — the page does not scroll or press while annotating), then describe it; `board` (an annotation on the board) or `task` (also filed as an intake draft) |
 | ⋯ | | **Open board** (the server-minted link) · **Stop recording** · **Unlink** · **Move to** |
 
 Move it anywhere: drag the puck or capsule and it lands on one of six spots
