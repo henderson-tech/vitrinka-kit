@@ -1,5 +1,27 @@
 # @vitrinka/web
 
+## 0.1.2
+
+- **A HUD that is barely there.** Idle, it is a 28px glass puck (a hollow
+  ring until the device is linked) whose label slides out on hover or focus.
+  While recording it rests as a dot-and-timer capsule and unfolds into the
+  tools (sync · pause · note · annotate · more) on hover, focus or tap,
+  folding back 2.5s after you leave; the health line still opens by itself
+  when something is wrong. Smoked-glass surface, readable on light and dark
+  pages. Accessible names are unchanged; the capsule is `Recorder controls`
+  (`aria-expanded`), and a polite status line tells screen readers whether
+  it is recording, paused or offline.
+- **Move it anywhere.** Drag the capsule or puck and it lands on one of six
+  spots (corners, top and bottom centre); a flick lands where it is thrown.
+  Push it past a side edge and it tucks into a 6px tab (`Show recorder`).
+  Arrow keys on the focused handle and the menu's **Move to** picker move it
+  without dragging. The spot is remembered per site.
+- **Sheets open toward the page centre** from wherever the HUD sits, at most
+  288px wide; on a phone they are a bottom sheet above the keyboard, and the
+  link sheet drops the QR on touch devices (a phone cannot scan itself).
+- `prefers-reduced-motion` stills the ripple, the springs and the slides.
+- Needs `@vitrinka/link` 0.1.2 (`@vitrinka/link/dock`).
+
 ## 0.1.1
 
 - **The recorder never changes the page under test**: rrweb records images by
