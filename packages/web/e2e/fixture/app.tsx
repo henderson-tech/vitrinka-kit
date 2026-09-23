@@ -31,6 +31,13 @@ function App(): ReactElement {
       { id: 'target', style: { marginTop: 40, width: 400, maxWidth: '100%', height: 200, background: '#eee' } },
       'Drag a region over me',
     ),
+    // ?underlink: a page link right under the HUD's resting spot (bottom right).
+    new URLSearchParams(location.search).has('underlink') &&
+      createElement(
+        'a',
+        { id: 'under-link', href: '/help', style: { position: 'fixed', right: 0, bottom: 0, width: 360, height: 160, background: '#dde' } },
+        'Help centre',
+      ),
   );
 }
 

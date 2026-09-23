@@ -290,6 +290,25 @@ test('pushed past an edge it tucks into a tab; the tab brings it back', async ({
   await expect(page.locator('.dock')).toHaveAttribute('data-col', 'r');
 });
 
+test('a throw over a page link lands: the link underneath never starts a native drag', async ({ page }) => {
+  await page.goto(`${pageUrl}/?underlink=1`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const dock = page.locator('.dock');
+  await expect(dock).toHaveAttribute('data-col', 'r');
+  // The press point is over the page's link: once the dock moves off it, the
+  // browser's drag-source hit test finds the link, not the HUD.
+  const b = (await handle.boundingBox())!;
+  const under = await page.evaluate(
+    ([x, y]) => document.elementsFromPoint(x!, y!).some((el) => el.id === 'under-link'),
+    [b.x + b.width / 2, b.y + b.height / 2],
+  );
+  expect(under).toBe(true);
+  await dragTo(page, handle, 120, 90);
+  await expect(dock).toHaveAttribute('data-row', 't');
+  await expect(dock).toHaveAttribute('data-col', 'l');
+});
+
 test('moves without a drag: arrow keys on the handle and the Move to picker', async ({ page }) => {
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();
