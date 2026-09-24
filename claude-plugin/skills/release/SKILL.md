@@ -7,57 +7,94 @@ metadata:
 
 # /vitrinka:release — sweep, watch, cut
 
-A project's releases live on `releases` boards: a rolling **next-release** board accumulates everything merged
-since the last cut, Eve's release-writer turns the PR window into the page
-(hero + ✨/🐛/🔧 sections + stats + linked boards), and **cut** freezes the
-board and opens the next window. The server does all of it — this skill just
-drives the three verbs from the terminal and knows the project's identity.
+A project's releases live on `releases` boards. The rolling **next release**
+spans every repository in the release — on a new track, every GitHub
+repository bound to the project (Settings → Projects → Repositories) — each
+contributing the PRs merged into its **branch** since its own window start.
+Eve writes the page from that window; **cut** freezes it and opens the next,
+each repository starting where its part ended.
 
-Base URL: `VITRINKA_URL` (self-hosted deployments) or `https://app.vitrinka.ai`.
-Vitrinka is an authenticated service: all calls are the raw API with the
-workspace token (`vitrinka auth login` mints it; `VITRINKA_TOKEN` or the OS
-keyring is always required — the same auth the publish skill uses).
-Resolve the project the way the publish skill does: the repo-root
-`vitrinka.config.json` or the directory name — ask only when genuinely ambiguous.
+Drive it with `vitrinka project release` from a checkout bound to the project
+(`vitrinka.config.json` names project and workspace); `--json` for the
+envelope. An unknown command means an old CLI: `vitrinka update`.
+
+## The page
+
+- Hero (title, headline, story): Eve's prose.
+- Stats strip (PRs merged, contributors, days in window) and merge timeline:
+  computed by the server from the sweep, never by the model.
+- ✨ New / 🐛 Fixed / 🔧 Improved: one entry per feature, grouping PRs across
+  repositories; each entry links only PRs the server swept (each to its own
+  repository), shows at most ONE screenshot, and links up to three boards.
+- Made this sprint: portals to up to 24 boards the window touched (boards
+  named `pr-<n>` first).
+- Screenshot candidates are the project's newest shots inside the window, one
+  per route, up to 24 — publish current screens (publish/usertest skills)
+  BEFORE refreshing.
 
 ## status (default verb)
 
-`GET {base}/api/v1/projects/{project}/release` → print the window compactly:
-PR count, base→head short SHAs, last sweep time, board link (the `boardUrl`
-field — server-authoritative, never hand-compose), plus cut history one line
-each. No state (404/empty): say the project has no release track yet and offer
-the first refresh.
+`vitrinka project release` — per repository: branch, start..head, PR count;
+last sweep, board URL, cut history. No release yet: offer the first refresh.
 
 ## refresh
 
-`POST {base}/api/v1/projects/{project}/release/refresh` body `{}`.
+`vitrinka project release --refresh` re-sweeps every repository in the
+release and asks Eve to rewrite her cards (never human ones). It returns once
+the sweep is stored; Eve answers asynchronously — hand over the board URL, do
+not poll.
 
-- **First ever run** (no release row yet): the server needs a window start —
-  pass `{"baseSha": "<sha>"}` (a released commit, e.g. the last version-bump
-  tag/commit) or `{"since": "<RFC3339>"}`. Suggest a sensible start from
-  `git log` (the newest `release(...)`/version-bump commit) rather than asking
-  cold.
-- The response is the swept state (202): the sweep is stored and Eve is
-  writing asynchronously. Do NOT poll in a loop — check once after ~a minute
-  if the user wants confirmation, or just hand over the board URL; the page
-  appears when Eve answers.
-- A refresh REGENERATES Eve's cards in place (it deletes exactly its own
-  previous cards, never human ones) — safe to re-run whenever the window grew.
+- **First refresh** names each repository with its branch and start:
+  `--repo <owner>/<name>:<branch>@<start>`, once per repository. Branch = the
+  branch PRs merge INTO (omitted: the GitHub default branch). Start = a commit
+  SHA or an RFC3339 instant.
+- **Choosing the start.** Trunk flow: the commit the last shipped release was
+  cut from. Integration branch: its first-parent fork point from the branch it
+  was cut from — the line the release is compared against (ask the user when
+  that line is unclear). In EACH repository:
 
-Requires the project's repo to be GitHub-App-bound (the commit-pills
-connection). A 4xx naming a missing repo/installation means that binding is
-absent — point the user at the GitHub connect flow, don't improvise.
+  ```bash
+  f=$(git rev-list --first-parent --reverse origin/<branch> ^origin/<from> | head -1) && git rev-parse "$f^1"
+  ```
+
+  Never `git merge-base`: once `<from>` is merged back into the branch, the
+  merge-base jumps forward and every earlier PR silently drops out. After the
+  first refresh, show the user each repository's start and PR count.
+- Branches and starts are stored on the release: later refreshes, and the
+  next release after a cut, need no flags.
+- Until the first cut, `--repo …@<start>` again corrects a start; after a cut
+  every start is the previous release's end and passing one is refused (409).
+- A repository bound after the track started joins only when a refresh lists
+  every repository with `--repo`; the refresh output names bound repositories
+  not in the release.
+- Failures name the repository: 422 `release_start_required` (no start), 422
+  not bound (bind it under Settings → Projects), 404 GitHub App not connected,
+  502 a repository the GitHub App cannot read.
+
+pin: internal/web/releases_pipeline_test.go#TestReleaseMultiRepoSweepPersistsBranchAndStarts
+pin: internal/web/releases_pipeline_test.go#TestReleaseRefreshRefusesBeforeCreatingState
+pin: internal/web/releases_pipeline_test.go#TestReleaseFirstWindowStartCorrectable
 
 ## cut
 
-Confirm with the user before cutting — it freezes the page and starts a new
-window; cutting twice is rejected, not idempotent.
+Confirm with the user first — it freezes the page and opens the next window;
+cutting twice is refused. `vitrinka project release --cut --yes [--title …]
+[--version …]` prints the frozen board and the fresh one. Refused (409) until
+a sweep has completed and while any repository's listing was truncated. Share
+the frozen board without sign-in: `vitrinka board share <slug>`.
 
-`POST {base}/api/v1/projects/{project}/release/cut` body `{}` (or
-`{"title": "...", "version": "..."}` to override the document's own naming).
-Print both returned boards: the frozen release (share it with
-`shareAllowed`/vkl_ if the user wants it readable without a sign-in) and the fresh
-next-release board.
+pin: internal/web/releases_pipeline_test.go#TestReleaseCutChainsEveryRepo
+
+## Without the CLI
+
+`GET {base}/api/v1/projects/{project}/release`, `POST …/release/refresh`
+(body `{}` or `{"repos":[{"repo":"o/n","base":"<branch>","baseSha":"<sha>"}]}`),
+`POST …/release/cut` (`{"title"?,"version"?}`). A token spanning several
+workspaces also needs `X-Vitrinka-Workspace` (401 `workspace_required`
+otherwise). Pipe the headers, never put the token in argv:
+`printf 'Authorization: Bearer %s\nX-Vitrinka-Workspace: %s\n' "$(vitrinka auth token)" <workspace> | curl -sS -H @- …`.
+No release yet: GET answers 200 `{"release":null,"history":[]}`. Refresh
+answers 202, or 200 with `pushed:false` when Eve is not configured.
 
 ## After any verb
 
