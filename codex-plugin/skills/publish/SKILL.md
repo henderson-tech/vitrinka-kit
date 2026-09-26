@@ -73,8 +73,10 @@ notification carries the result.
   components as repo-relative paths; an annotation on the shot then
   dispatches with exact file targets. `--state` records what a reproducer
   needs.
-- **Web captures are 2× — always.** Native sim/device captures are already
-  native-res — never downscale them.
+- **Web captures are 2× device scale** unless the repo sets
+  `capture.hidpi` off (`vitrinka config hidpi`); `board capture web
+  --viewport WxH` refuses a 1× file and names the recapture. Native
+  sim/device captures are already native-res — never downscale them.
 - `--open <deeplink>` does navigate + wait + capture — never chain shell
   sleeps. Snap pushes detached — never wait or poll.
 - **Read the saved image to verify** — right screen, right state.

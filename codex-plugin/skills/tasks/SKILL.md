@@ -56,12 +56,15 @@ carries only the laws the verbs do not print.
 
 - **Intake is the ONLY way a draft becomes a task**: `propose_tasks`
   (deduped, `list {kind:"intake"}` shows the verdict) → a human's `intake_verdict`.
+  The pending queue reads uncapped across every project or one, by `group`
+  (`stale` · `plan` · a source kind), with `view: "summary"` for the counts
+  alone; a batch verdict is ONE `intake_verdict {ids}` call.
   Never file a task and a draft for the same finding; never accept your own
   drafts unless the user asked you to triage — but DO withdraw one you filed
   once it is moot (`intake_verdict {verdict: "decline"}` from the same
-  credential; accept and merge stay an admin's or agent token's). Eve's plan
-  proposals (`list {kind:"proposal"}` / `proposal_verdict`) follow the same
-  rule.
+  credential; accept and merge stay an admin's or agent token's). Plan
+  proposals (`list {kind:"intake", group:"plan"}` / `proposal_verdict`) follow
+  the same rule.
 - **Pickup · spot · hand back** keep the tree true without end-of-session
   bookkeeping: `get {kind:"task", view: "pickup"}` before touching code (pickup
   skill), `spot` the moment you will not do something (spot skill),
