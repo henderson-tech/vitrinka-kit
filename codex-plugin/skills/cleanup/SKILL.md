@@ -47,7 +47,9 @@ drafted · report-only), never a chat retelling of the page.
   the human's verdict is `proposal_verdict`; new work ("we should really do
   this") rides as intake drafts with source `{kind: "cleanup"}` and keeps
   its dedupe verdict. A 409 on a proposal means the same change is already
-  pending — a receipt, never a retry.
+  pending — a receipt, never a retry. The pending ones read uncapped as
+  `list {kind: "intake", project, group: "plan"}` (`"stale"` once their
+  target moved on, `"cleanup"` for the drafts).
 - **Scope.** Types task · bug · story · epic in groups backlog · unstarted ·
   started. `todo` (the me skill's), `qa`, `journey` and `meeting` are never
   touched. `focus` narrows in prose. The repo's standing override is
