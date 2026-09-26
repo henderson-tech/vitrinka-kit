@@ -651,6 +651,15 @@ async function flushInner() {
       noteSync();
     } catch (e) {
       const st = statusOf(e);
+      if (st === 401 || st === 403) {
+        // A verdict on the CREDENTIAL, never on this item: the token was
+        // revoked, or it is not the one that started this session (a re-link
+        // mid-session — the server answers 403 for a session another
+        // credential started). Keep every queued item, same as phase 2's
+        // terminal verdict; only the reaper's 404/done may discard them.
+        await markSessionDead(rec, `server refused this recorder for the session (${st})`);
+        return false;
+      }
       if (permanentStatus(st)) {
         // Retrying forever would wedge the FIFO behind one bad item.
         console.warn(`vitrinka: ${item.kind} seq ${item.seq} rejected permanently (${st}) — dropped`, e);

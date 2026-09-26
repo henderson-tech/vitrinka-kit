@@ -52,6 +52,10 @@ the rendered hand-back block: print it verbatim as the closing message.
   iPhone, iPad, desktop; expo: iOS + Android simulators). A repo overrides
   them in `.claude/vitrinka-workflows.json` (`projectType`, `matrix`,
   `checklist`, `exclude`, `board`, `baseUrl`) — never in the invocation.
+  The same file's `run: {web: "auto" | "devbox" | "local"}` is the run
+  target the Exp flows (`vitrinka-experimental:*`) honour: `auto` starts the
+  app on the branch's devbox when one resolves, else locally; simulators
+  always run locally.
 - Standalone use: `vitrinka:review-loop` alone is a responsivity/UX pass
   over an existing surface (`args.scope` names what to focus on);
   `vitrinka:code-loop` alone reviews and PRs a finished branch.

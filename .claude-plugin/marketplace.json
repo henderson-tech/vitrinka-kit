@@ -18,6 +18,19 @@
         "ui-review",
         "qa"
       ]
+    },
+    {
+      "name": "vitrinka-experimental",
+      "displayName": "Vitrinka Experimental",
+      "source": "./claude-plugin-experimental",
+      "description": "Exp — flows still proving themselves, beside the core plugin (which stays required): build-idea hands a feature to the human after ONE quick \"does it work\" check and a draft PR; test asks which lanes, breakpoints and iOS 26 Simulator checks to run and how thorough, then shoots, reviews, fixes and files results into device tabs and the task engine. Claude Code only. Opt in with `vitrinka setup --experimental`.",
+      "category": "productivity",
+      "keywords": [
+        "experimental",
+        "workflows",
+        "device-testing",
+        "ios-simulator"
+      ]
     }
   ]
 }
