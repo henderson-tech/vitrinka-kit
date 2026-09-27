@@ -79,8 +79,15 @@ carries only the laws the verbs do not print.
 - **Reading**: `summarize_tasks` for counts; `list {kind:"task", f}` with the
   filter document (states, groups, types, priorities, assignees, labels,
   sprint, milestone, parent, intake, spans, text, order) for rows;
-  to FIND, one door per need — title words (an epic by name) → `search {q,
-  groups:["tasks"], type}`; body text → `search {kind:"task"}`; an epic's
+  to FIND, one door per need — ONE task by any reference (a name, any id
+  spelling, a URL, "bugs under X") → `search {q, mode:"resolve"}`, whose
+  verdict says whether to act on the lead or pick; title words (an epic by name) → `search {q,
+  groups:["tasks"], type}`; body, field, ref or comment text → `search
+  {kind:"task"}`, narrowed by type, state, parent or `epic` (any depth);
+  every match in one task's tree, a row each → `search {kind:"task",
+  within:"<ws>/<id>"}`; a
+  refused type, state or project names the allowed values — retry with
+  one; an epic's
   children → `get {kind:"task", id:"<ws>/<id>", include:["children"]}`; a
   pasted link → `resolve_url` — never CLI `--json` piped into guessed jq
   paths; `get {kind:"brief"}` before

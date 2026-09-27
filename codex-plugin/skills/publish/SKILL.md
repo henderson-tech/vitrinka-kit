@@ -160,7 +160,9 @@ Per-kind payload contracts: the `docs` MCP tool; kind index + doctrine:
 
 ## Gotchas
 
-- `VITRINKA_TOKEN` or the OS keyring is always required. A failed push writes
-  `.vitrinka/screenshots/.vitrinka-offline` — warn once, keep capturing.
+- `VITRINKA_TOKEN` or the OS keyring is always required. Each capture
+  uploads only its new files and the board fills live; a failed upload writes
+  `.vitrinka/screenshots/.vitrinka-offline` (diagnosis + fix) — warn once,
+  keep capturing; the next push sends only what is missing.
 - Desktop app: test the `~/.config/vitrinka/desktop-app` flag file, never
   probe /Applications.
