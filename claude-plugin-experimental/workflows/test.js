@@ -243,9 +243,23 @@ const HEADS_SCHEMA = {
   type: 'object',
   properties: {
     head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' },
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
     prHead: { type: 'string', description: "the full sha of the pull request's head commit" },
   },
   required: ['head', 'prHead'],
+}
+
+// A PR-state step (prOutcome): the PR it acted on and its draft state before
+// and after the call — a state it could not read is left out, never guessed.
+const PR_STATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
+    wasDraft: { type: 'boolean', description: 'whether it was a draft before the call; omitted when it could not be read' },
+    isDraft: { type: 'boolean', description: 'whether it is a draft after the call; omitted when it could not be read' },
+    why: { type: 'string', description: 'why a call failed' },
+  },
+  required: ['url'],
 }
 // ---- lib/matrix.js — device matrix, review checklist and the iOS 26 checks
 // A repo overrides the defaults in `.claude/vitrinka-workflows.json`
@@ -377,10 +391,14 @@ function parseCap(raw) {
 // the last pass still fixes what it accepted and only the reshoot that would
 // verify it is dropped. 'clean' — nothing left to fix, retried carried
 // findings included (see fixListFor); 'reshoot' — fix, gate, shoot again;
-// 'last' — fix and gate, then stop.
-function passEnd(pass, cap, toFix) {
-  if (!toFix) return 'clean'
-  return pass < cap ? 'reshoot' : 'last'
+// 'last' — fix and gate, then stop; 'rewalk' — nothing to fix, but a fixed
+// usertest failure no walk confirmed yet (`unwalked`, see unwalkedFixes: its
+// tester died or skipped it) and a pass left: the next pass only walks it
+// again — no shots, no review. At the cap it ends 'clean' with the fix
+// unverified, which keeps the draft.
+function passEnd(pass, cap, toFix, unwalked = 0) {
+  if (toFix) return pass < cap ? 'reshoot' : 'last'
+  return unwalked && pass < cap ? 'rewalk' : 'clean'
 }
 
 // A pass's fix list: what it filed and accepted (new findings, functional
@@ -401,6 +419,52 @@ function fixListFor(fresh, carried) {
 // later pass is the carried finding — fixing it there closes that one.
 function usertestKey(title, lane) {
   return `usertest-${slugify(lane)}-${slugify(title)}`
+}
+
+// The journeys the next pass walks: every one whose steps pass a route still
+// open or just touched, and every one whose failure a fixer claimed fixed
+// (`fixed`: those functional findings, still unwalked — see unwalkedFixes),
+// matched by its stable usertestKey, never by route: a fixed journey is no
+// longer open and its steps need not name a route, so only walking it again
+// verifies the fix. A fixed failure no journey matches (an exploratory case)
+// adds none — the tester walks it under its own title (rewalkCases). With
+// nothing picked, the journeys that failed this pass, and all of them when a
+// failure matches none.
+function journeysToRerun(allJourneys, openRoutes, fixed, cases) {
+  const walks = (j, f) => f.key === usertestKey(j.title, f.lane)
+  const picked = allJourneys.filter(j => (j.steps || []).some(s => openRoutes.some(p => p && s.includes(p))) || fixed.some(f => walks(j, f)))
+  if (picked.length) return picked
+  const failed = cases.filter(c => c.verdict === 'fail')
+  const byTitle = allJourneys.filter(j => failed.some(c => c.title === j.title))
+  return byTitle.length || !failed.length ? byTitle : allJourneys
+}
+
+// The fixed usertest failures still waiting for a walk to confirm them. A
+// case the pass walked for the journey on its lane settles one — a pass, or
+// a fail refiled as a fresh finding under the same key; a skipped case or
+// none leaves it waiting, and a run that ends with one waiting keeps its
+// draft (notReadyReasons).
+function unwalkedFixes(pending, cases, lane) {
+  const walked = new Set(cases.filter(c => c.verdict !== 'skip').map(c => usertestKey(c.title, c.lane || lane)))
+  return pending.filter(f => !walked.has(f.key))
+}
+
+// A pass's failed usertest cases as functional findings, keyed by lane (none
+// named: the usertest lane) and title, and carrying the title itself — the
+// one handle a later walk settles it by (unwalkedFixes).
+function functionalFindings(cases, lane) {
+  return cases.filter(c => c.verdict === 'fail').map(c => ({
+    key: usertestKey(c.title, c.lane || lane), title: c.title, route: '', lane: c.lane || lane, area: (c.files && c.files[0]) || 'functional',
+    kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [], inScope: true,
+  }))
+}
+
+// The fixed failures the next tester walks again, each as ONE case under its
+// own title: a case no journey matches (an exploratory one) is walked only
+// because it is handed over here, and the walk under that title is what
+// settles it.
+function rewalkCases(fixed) {
+  return fixed.map(f => ({ title: f.title, failed: f.summary }))
 }
 
 // The case a route gets on one lane where the run leaves no finding open. A
@@ -498,17 +562,11 @@ function openWithoutFixing(filed, functional) {
 // push from prm's first round — postdates every capture and names no files
 // to place it: a change nobody can place unverifies every route
 // (affectedRoutes). So the PR head and the checkout's HEAD must still be the
-// commit the record was filed at (`recordSha`, `heads`).
-function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases, recordSha, heads }) {
-  const why = []
-  if (!fixes) why.push('thoroughness is not "fix"')
-  if (open.length) why.push(`${open.length} findings open`)
-  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
-  for (const k of lanes) {
-    const cases = routeCases[k] || []
-    const unearned = cases.filter(c => c.verdict !== 'pass').length
-    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
-  }
+// commit the record was filed at (`recordSha`, `heads`). A fixed usertest
+// failure no later walk of its journey confirmed (`unwalked`) is no pass.
+function notReadyReasons(run) {
+  const { fixes, code, recordSha, heads } = run
+  const why = recordReasons(run)
   if (fixes) {
     const last = code && code.rounds.length ? code.rounds[code.rounds.length - 1] : null
     if (!last) why.push('the code loop did not review the diff')
@@ -523,8 +581,61 @@ function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases
       }
     }
   }
+  return why
+}
+
+// The part of notReadyReasons the device record alone decides — known once
+// the run door has filed it, before the code loop runs, so a run whose record
+// already fails returns a PR ready for review to draft before code-loop's prm
+// pushes to it (a ready PR with auto-merge armed, or under MERGE_POLICY=self,
+// can merge on that push).
+function recordReasons({ fixes, open, lanes, report, gateRed, routeCases, unwalked = [] }) {
+  const why = []
+  if (!fixes) why.push('thoroughness is not "fix"')
+  if (open.length) why.push(`${open.length} findings open`)
+  if (unwalked.length) why.push(`${unwalked.length} fixed journeys never walked again`)
+  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
+  for (const k of lanes) {
+    const cases = routeCases[k] || []
+    const unearned = cases.filter(c => c.verdict !== 'pass').length
+    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
+  }
   if (gateRed) why.push('a pass gate stayed red')
   return why
+}
+
+// What a PR-state step left: `want` is the state the run earned ('ready' when
+// notReadyReasons is empty, else 'draft'); the step ran the idempotent
+// `gh pr ready` or `gh pr ready --undo` whatever state it found — a guessed
+// "already a draft" never skips the call — and read the state before
+// (wasDraft) and after (isDraft), leaving out one it could not read. The
+// earned state holds only when the read-back says so; `demoted` is a PR the
+// run took back from ready for review, which the hand-back says.
+function prOutcome(want, step) {
+  const after = step && typeof step.isDraft === 'boolean' ? step.isDraft : null
+  const held = after === (want === 'draft')
+  return {
+    ready: want === 'ready' && held,
+    draft: want === 'draft' && held,
+    demoted: want === 'draft' && held && step.wasDraft === false,
+    problem: held ? '' : `${want === 'ready' ? 'readying' : 'returning to draft'} failed: ${(step && step.why) || (step ? 'its state could not be read back' : 'no result')}`,
+  }
+}
+
+// Why the code loop must not push — '' when it may. Its PR phase is prm
+// pushing the branch to its PR, and a PR ready for review with auto-merge
+// armed (or under MERGE_POLICY=self) can merge on that push. A record that
+// passes (`recordWhy` empty) leaves the PR as it is until the step after the
+// loop. One that fails pushes only where the early PR-state step (`early`)
+// proved no ready PR takes the push: the PR reads back a draft, or the branch
+// has none (url "", no PR `named`, no failed call) and the loop opens its own
+// as a draft. A missing result, an unread state or a PR still ready holds
+// the push: the loop reviews and gates, and its commits stay local.
+function codeLoopPushHold(recordWhy, early, named) {
+  if (!recordWhy.length) return ''
+  if (!early || early.url) return prOutcome('draft', early).problem
+  if (named) return `pull request ${named} could not be read${early.why ? `: ${early.why}` : ''}`
+  return early.why ? `the branch's pull request could not be read: ${early.why}` : ''
 }
 
 // Each lane manifest's stamp, keyed by lane: the ONE head the record is filed
@@ -699,7 +810,14 @@ let offScopeFindings = []
 // Fixed in the pass the cap ended: gated, but no reshoot confirmed them — the
 // routes they touched earn no pass, so the draft stays a draft.
 let unverified = []
+// Fixed usertest failures no later walk of their journey has confirmed yet
+// (unwalkedFixes): each next pass walks them (journeysToRerun), and one still
+// waiting when the run ends keeps the draft.
+let unwalked = []
 let clean = false
+// A 'rewalk' pass end (passEnd): the next pass only walks the unwalked fixes
+// again — nothing changed since the last shots, so it shoots and reviews nothing.
+let walkOnly = false
 let gateRed = false
 let lastPub = {}
 // What the run actually judged, for the report's per-route verdicts: every
@@ -713,22 +831,24 @@ const problems = {}
 for (let pass = 1; pass <= cap; pass++) {
   const ph = `Pass ${pass}`
   phase(ph)
-  log(`${ph}: shooting ${routes.length} routes on ${lanes.length} lanes${reviews ? `, ${journeys.length} journeys` : ''}`)
+  log(walkOnly ? `${ph}: walking ${unwalked.length} fixed journeys again, nothing to shoot` : `${ph}: shooting ${routes.length} routes on ${lanes.length} lanes${reviews ? `, ${journeys.length} journeys` : ''}`)
 
-  const shooters = lanes.map(l => () => agent(withPreamble(shootPrompt(l, pass, routes)), { label: `shoot:${l.key}`, phase: ph, schema: SHOOT_SCHEMA }))
+  const shooters = walkOnly ? [] : lanes.map(l => () => agent(withPreamble(shootPrompt(l, pass, routes)), { label: `shoot:${l.key}`, phase: ph, schema: SHOOT_SCHEMA }))
   const tester = () => agent(withPreamble(
     `Exploratory usertest, pass ${pass}${prep.baseUrl ? ` against ${prep.baseUrl}` : ''} on ${utLane.label}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
+    (unwalked.length ? `Fixed failures to walk again — each is ONE case under exactly this title (a journey above with the same title is that case), so the run can tell the fix held:\n${JSON.stringify(rewalkCases(unwalked))}\n` : '') +
     `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start --task ${task} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: ph, schema: USERTEST_SCHEMA })
 
-  const results = (await parallel(reviews && journeys.length ? [...shooters, tester] : shooters)).filter(Boolean)
+  const results = (await parallel(reviews && (journeys.length || unwalked.length) ? [...shooters, tester] : shooters)).filter(Boolean)
   const shots = results.filter(r => r.shots)
   const ut = results.find(r => r.cases) || { cases: [], bugs: [] }
   const shotCount = shots.reduce((n, s) => n + s.shots.length, 0)
-  if (!shotCount) throw new Error(`${ph}: no screenshots captured — the app, the browser or the simulator is not reachable`)
+  if (!shotCount && !walkOnly) throw new Error(`${ph}: no screenshots captured — the app, the browser or the simulator is not reachable`)
+  unwalked = unwalkedFixes(unwalked, ut.cases, utLane.key)
 
-  const pubs = (await parallel(lanes.map(l => () => {
+  const pubs =(await parallel(lanes.map(l => () => {
     const set = shots.find(s => s.lane === l.key)
     if (!set) return Promise.resolve(null)
     const lb = laneBoard(l.key)
@@ -738,7 +858,7 @@ for (let pass = 1; pass <= cap; pass++) {
       `Structure: section "Pass ${pass}" — ${l.kind === 'ios-safari' ? 'one row per route, the states of that route side by side in this order: ' + l.states.join(', ') : 'shots in route order, one row'}; a summary card at the section head naming the pass, the lane, the shot count${l.kind === 'ios-safari' ? ' and the measured safe-area insets from the ledger' : ''}. Earlier pass sections stay untouched. Return the board's server url, its slug, the section title and every shot card id with its route, lane and state.`
     ), { label: `publish:${l.key}`, phase: ph, agentType: 'vitrinka:vitrinka-publisher', schema: PUBLISH_SCHEMA })
   }))).filter(Boolean)
-  if (!pubs.length) throw new Error(`${ph}: publishing failed on every lane`)
+  if (!pubs.length && !walkOnly) throw new Error(`${ph}: publishing failed on every lane`)
   for (const p of pubs) lastPub[p.boardSlug] = p
 
   let filed = []
@@ -787,10 +907,7 @@ for (let pass = 1; pass <= cap; pass++) {
     for (const route of uniq(pub.cards.map(c => c.route))) captures.push({ pass, lane: l.key, route, judged: judgedLanes.has(l.key) })
   }
   const regressed = regressList.filter(f => regressions.some(r => r.key === f.key && r.fixed === false))
-  const functional = ut.cases.filter(c => c.verdict === 'fail').map(c => ({
-    key: usertestKey(c.title, c.lane || utLane.key), route: '', lane: c.lane || utLane.key, area: (c.files && c.files[0]) || 'functional',
-    kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [], inScope: true,
-  }))
+  const functional = functionalFindings(ut.cases, utLane.key)
   const accepted = fixes ? autoAcceptable(filed, threshold) : []
   const fixList = fixListFor([...accepted, ...functional, ...regressed], [...carried.values()])
   const parked = filed.length - accepted.length
@@ -804,12 +921,18 @@ for (let pass = 1; pass <= cap; pass++) {
 
   if (!fixes) { openFindings = openWithoutFixing(filed, functional); offScopeFindings = openFindings.filter(f => f.inScope === false); break }
   for (const f of fixList) if (!carried.has(f.key)) carried.set(f.key, f)
-  const end = passEnd(pass, cap, fixList.length)
+  const end = passEnd(pass, cap, fixList.length, unwalked.length)
   if (end === 'clean') {
     clean = true
     openFindings = [...carried.values()]
-    log(`${ph}: clean — no new fixable findings${openFindings.length ? `; ${openFindings.length} carried from earlier passes stay open` : ' — loop converged'}`)
+    log(`${ph}: clean — no new fixable findings${openFindings.length ? `; ${openFindings.length} carried from earlier passes stay open` : unwalked.length ? `; ${unwalked.length} fixed journeys never walked again` : ' — loop converged'}`)
     break
+  }
+  if (end === 'rewalk') {
+    walkOnly = true
+    journeys = journeysToRerun(allJourneys, [], unwalked, ut.cases)
+    log(`${ph}: nothing to fix, ${unwalked.length} fixed journeys never walked again — the next pass only walks them`)
+    continue
   }
 
   // Only this pass's accepted findings are still staged: the door refuses the
@@ -847,6 +970,7 @@ for (let pass = 1; pass <= cap; pass++) {
   if (!gate || !gate.green) log(`${ph}: gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}${end === 'last' ? '' : '; the next pass shoots anyway so the board shows the state'}`)
 
   regressList = fixList.filter(f => fixedKeys.has(f.key))
+  unwalked = [...unwalked.filter(f => !fixedKeys.has(f.key)), ...regressList.filter(f => f.rule === 'functional')]
   // The gate's repairs postdate the captures too; unnamed ones reach every route.
   const repairFiles = gateRepairFiles(gate)
   if (!repairFiles || repairFiles.length) log(`${ph}: the gate repaired ${repairFiles ? repairFiles.length + ' files' : 'files it did not name — every route is unverified'}`)
@@ -863,16 +987,17 @@ for (let pass = 1; pass <= cap; pass++) {
     log(`${ph}: cap reached — ${unverified.length} fixed with no reshoot to verify them, ${openFindings.length} findings open — they stay on the board and reach the task engine as bugs`)
     break
   }
+  walkOnly = false
   const openRoutes = uniq([...touchedRoutes, ...openFindings.map(f => f.route)])
   routes = allRoutes.filter(r => changed.includes(r.path) || openRoutes.some(p => p && (r.path === p || r.path.startsWith(p))))
   if (!routes.length) routes = allRoutes
-  journeys = allJourneys.filter(j => j.steps.some(s => openRoutes.some(p => p && s.includes(p))))
-  if (!journeys.length) journeys = allJourneys.filter(j => ut.cases.some(c => c.verdict === 'fail' && c.title === j.title))
-  if (!journeys.length && functional.length) journeys = allJourneys
+  journeys = journeysToRerun(allJourneys, openRoutes, unwalked, ut.cases)
   log(`${ph}: next pass reshoots ${routes.length} routes, reruns ${journeys.length} journeys`)
 }
 
 phase('Report')
+// A fixed journey no later walk confirmed is as unverified as a last-pass fix.
+unverified = [...unverified, ...unwalked.filter(f => !unverified.some(u => u.key === f.key))]
 const bugCandidates = uniq([...openFindings, ...offScopeFindings].map(f => f.key)).map(k => [...openFindings, ...offScopeFindings].find(f => f.key === k))
 // Every route with no open finding on a lane takes the verdict its coverage
 // earned — never a pass for a route that lane did not capture and judge.
@@ -896,34 +1021,65 @@ const report = recordSha ? await agent(withPreamble(
 ), { label: 'run-door', phase: 'Report', schema: RUNDOOR_SCHEMA }) : null
 log(`test: run door — ${report ? `${report.lanes.filter(l => l.published).length}/${lanes.length} lanes published, ${report.bugs.length} bugs` : 'failed'}`)
 
-let code = null
-if (fixes) {
-  try {
-    // A PR the loop opens is a draft: only this run's gate below may ready it.
-    code = await workflow('vitrinka:code-loop', { base: A.base || 'main', task, cap: 2, draft: true })
-    log(`test: code loop ${code.rounds.length} round(s), ${code.remaining.length} for the human, PR ${code.pr || A.pr || 'none'}`)
-  } catch (e) {
-    log(`test: code loop failed (${e && e.message}) — the PR stays a draft`)
-  }
-}
-const prUrl = (code && code.pr) || A.pr || ''
-// Whatever the code loop committed or prm pushed moved the head past the record.
-const heads = fixes && code && prUrl ? await agent(withPreamble(
-  `Read-only: return head, the full \`git rev-parse HEAD\` of this checkout, and prHead, the head commit of pull request ${prUrl} (\`gh pr view ${prUrl} --json headRefOid --jq .headRefOid\`). Change nothing.`
-), { label: 'heads', phase: 'Report', effort: 'low', schema: HEADS_SCHEMA }) : null
+// A fix run's ONE PR-state step (prOutcome): `gh pr ready` or `gh pr ready
+// --undo` runs whatever state the PR is in — both are idempotent, so no
+// guessed "already a draft" skips the call — with the state read before and
+// after. No PR named: the branch's own, when it has one.
+const setPrState = (pr, want, why, label) => agent(withPreamble(
+  `${pr ? `Pull request ${pr}` : "This branch's open pull request (`gh pr view` with no argument — when there is none, return url \"\" and change nothing)"}: read its url and draft state as url and wasDraft (\`gh pr view${pr ? ` ${pr}` : ''} --json url,isDraft\`), then ` +
+  (want === 'ready'
+    ? `mark it ready for review (\`gh pr ready <url>\`) — the device run earned it (${passes.length} pass(es), nothing open, every route on every lane passed) and the code loop reviewed the diff.`
+    : `convert it to a draft (\`gh pr ready <url> --undo\`; a draft stays one) — this device run did not earn ready for review: ${why.join('; ')}.`) +
+  ` Never merge or close it. Read isDraft back after the call. Return url, wasDraft and isDraft — leave out a state you could not read, never guess one — plus why when a call failed.`
+), { label, phase: 'Report', effort: 'low', schema: PR_STATE_SCHEMA })
+
 // The PR leaves draft only when the run actually earned it: every pass gated
 // green, no finding left open, every route on every lane earned a pass, the
 // run door filed the record, and the code loop reviewed the diff without
 // moving the branch past the record (its commits postdate every capture).
-// Anything less stays a draft and the hand-back says why.
-const notReady = notReadyReasons({ fixes, open: openFindings, lanes: lanes.map(l => l.key), report, code, gateRed, routeCases, recordSha, heads })
-let ready = false
-if (prUrl && !notReady.length) {
-  const r = await agent(withPreamble(
-    `Mark the pull request ${prUrl} ready for review (\`gh pr ready <number-or-url>\`) — the device pass ran (${passes.length} pass(es), ${openFindings.length} findings open, ${report ? report.bugs.length : 0} bugs filed) and the code loop reviewed the diff. Never merge. Return {"ready": true} or {"ready": false, "why": "..."}.`
-  ), { label: 'pr-ready', phase: 'Report', effort: 'low', schema: { type: 'object', properties: { ready: { type: 'boolean' }, why: { type: 'string' } }, required: ['ready'] } })
-  ready = !!(r && r.ready)
+// Anything less ends a draft — a PR ready for review goes back to draft — and
+// the hand-back says why. A record that already fails the run does so NOW,
+// before code-loop's prm pushes to a PR that could merge on that push; a draft
+// it cannot prove holds that push (codeLoopPushHold).
+const laneKeys = lanes.map(l => l.key)
+const recordWhy = recordReasons({ fixes, open: openFindings, lanes: laneKeys, report, gateRed, routeCases, unwalked })
+const early = fixes && recordWhy.length ? await setPrState(A.pr || '', 'draft', recordWhy, 'pr-draft:record') : null
+const earlyOut = early && early.url ? prOutcome('draft', early) : null
+if (earlyOut) log(`test: the device record fails the run — ${early.url} ${earlyOut.draft ? `is a draft${earlyOut.demoted ? ' again' : ''}` : `could stay ready (${earlyOut.problem})`} before the code loop`)
+// A failing record never pushes to a PR it could not prove a draft.
+const pushHold = fixes ? codeLoopPushHold(recordWhy, early, A.pr || '') : ''
+if (pushHold) log(`test: the code loop runs without its PR phase — ${pushHold}; its commits stay local`)
+
+let code = null
+if (fixes) {
+  try {
+    // A PR the loop opens is a draft; one it adopts keeps its state — the
+    // step below readies or demotes either to the state this run earned.
+    code = await workflow('vitrinka:code-loop', { base: A.base || 'main', task, cap: 2, draft: true, pr: !pushHold })
+    log(`test: code loop ${code.rounds.length} round(s), ${code.remaining.length} for the human, PR ${code.pr || A.pr || 'none'}`)
+  } catch (e) {
+    log(`test: code loop failed (${e && e.message}) — the PR ends a draft`)
+  }
 }
+// Whatever the code loop committed or prm pushed moved the head past the
+// record. A code loop that threw or opened nothing names no PR; the branch's
+// own is found here.
+const knownPr = (code && code.pr) || A.pr || (early && early.url) || ''
+const heads = fixes ? await agent(withPreamble(
+  `Read-only: return head, the full \`git rev-parse HEAD\` of this checkout, and from ${knownPr ? `pull request ${knownPr}` : "this branch's open pull request (`gh pr view` with no argument)"} its url and prHead, its head commit (\`gh pr view${knownPr ? ` ${knownPr}` : ''} --json url,headRefOid\`) — url and prHead "" when there is none. Change nothing.`
+), { label: 'heads', phase: 'Report', effort: 'low', schema: HEADS_SCHEMA }) : null
+const prUrl = knownPr || (heads && heads.url) || ''
+const notReady = notReadyReasons({ fixes, open: openFindings, lanes: laneKeys, report, code, gateRed, routeCases, recordSha, heads, unwalked })
+const want = notReady.length ? 'draft' : 'ready'
+// The step runs after the loop even when the record already forced a draft:
+// prm and anyone else may have moved the PR since, so the early read-back
+// proves only the order, never the state the run ends in.
+const prOut = !fixes || !prUrl ? { ready: false, draft: false, demoted: false, problem: '' }
+  : prOutcome(want, await setPrState(prUrl, want, notReady, `pr-${want}`))
+const ready = prOut.ready
+const demoted = prOut.demoted || !!(earlyOut && earlyOut.demoted && prOut.draft)
+const prProblem = prOut.problem
+const converged = clean && openFindings.length === 0 && unwalked.length === 0
 
 const handback = await agent(withPreamble(
   `Hand task ${task} back through the vitrinka handoff skill (Skill tool: vitrinka:handoff). Facts, one per line, for the summary:\n` +
@@ -932,15 +1088,15 @@ const handback = await agent(withPreamble(
     lanes: board.lanes,
     thoroughness, cap, threshold,
     passes,
-    converged: clean && openFindings.length === 0,
+    converged,
     open: openFindings.map(f => ({ key: f.key, lane: f.lane, summary: f.summary })),
     unverified: unverified.map(f => ({ key: f.key, lane: f.lane, summary: f.summary })),
     qaTask: report && report.qaTaskUrl,
     bugs: report && report.bugs,
-    codeLoop: code ? { rounds: code.rounds, remaining: code.remaining.length } : null,
-    pr: prUrl, ready, notReady,
+    codeLoop: code ? { rounds: code.rounds, remaining: code.remaining.length, ...(pushHold ? { unposted: code.remaining } : {}) } : null,
+    pr: prUrl, ready, notReady, demoted, prProblem, pushHeld: pushHold,
   }) +
-  `\nThe run board url goes first, bare on its own line. Open findings are already bugs on the qa task — never spot them as children. Next steps hold only what is the human's: ${ready ? 'the merge' : prUrl ? 'marking the PR ready and the merge' : 'opening or readying the PR'}${openFindings.length ? ', the open findings on the lane boards' : ''}. Return the rendered hand-back block verbatim.`
+  `\nThe run board url goes first, bare on its own line.${demoted ? ' The PR was returned to draft: say so, with the notReady reasons.' : ''}${fixes && !recordWhy.length && notReady.length ? ' The device record itself was clean: say the PR stays a draft only because of the code loop (notReady), not a device defect.' : ''}${prProblem ? ' The PR is not in the state the run earned (prProblem): say so.' : ''}${pushHold ? ' The code loop pushed nothing (pushHeld): the device record fails the run and the PR could not be proven a draft first, so its commits are local only and its remaining findings (codeLoop.unposted) reached no PR comment — say so, and carry those findings in full.' : ''} Open findings are already bugs on the qa task — never spot them as children. Next steps hold only what is the human's: ${ready ? 'the merge' : !fixes ? `the PR, which a ${thoroughness} run leaves as it was` : prUrl ? 'marking the PR ready and the merge' : 'opening or readying the PR'}${pushHold ? ", pushing the code loop's local commits once the PR is a draft" : ''}${openFindings.length ? ', the open findings on the lane boards' : ''}. Return the rendered hand-back block verbatim.`
 ), { label: 'handback', phase: 'Report' })
 
 return {
@@ -949,12 +1105,13 @@ return {
   branch: prep.branch,
   task,
   passes,
-  converged: clean && openFindings.length === 0,
+  converged,
   open: openFindings.map(f => ({ key: f.key, id: f.id, lane: f.lane, summary: f.summary })),
   unverified: unverified.map(f => ({ key: f.key, id: f.id, lane: f.lane, summary: f.summary })),
   qaTask: report && report.qaTaskUrl,
   bugs: report ? report.bugs : [],
   pr: prUrl,
   ready,
+  demoted,
   handback,
 }

@@ -223,10 +223,14 @@ function autoAcceptable(findings, threshold) {
 // the last pass still fixes what it accepted and only the reshoot that would
 // verify it is dropped. 'clean' — nothing left to fix, carried findings
 // included (see fixListFor), so the loop converged;
-// 'reshoot' — fix, gate, shoot again; 'last' — fix and gate, then stop.
-function passEnd(pass, cap, toFix) {
-  if (!toFix) return 'clean'
-  return pass < cap ? 'reshoot' : 'last'
+// 'reshoot' — fix, gate, shoot again; 'last' — fix and gate, then stop;
+// 'rewalk' — nothing to fix, but a fixed usertest failure no walk confirmed
+// yet (`unwalked`, see unwalkedFixes: its tester died or skipped it) and a
+// pass left: the next pass only walks it again — no shots, no review. At the
+// cap it ends 'clean' with the fix unverified, never converged.
+function passEnd(pass, cap, toFix, unwalked = 0) {
+  if (toFix) return pass < cap ? 'reshoot' : 'last'
+  return unwalked && pass < cap ? 'rewalk' : 'clean'
 }
 
 // The accepted findings still open after a pass, ACROSS passes: every one
@@ -258,6 +262,52 @@ function fixListFor(fresh, open) {
 function usertestKey(title, device) {
   const slug = s => String(s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase()
   return `usertest-${slug(device)}-${slug(title)}`
+}
+
+// The journeys the next pass walks: every one whose steps pass a route still
+// open or just touched, and every one whose failure a fixer claimed fixed
+// (`fixed`: those functional findings, still unwalked — see unwalkedFixes),
+// matched by its stable usertestKey, never by route: a fixed journey is no
+// longer open and its steps need not name a route, so only walking it again
+// verifies the fix. A fixed failure no journey matches (an exploratory case)
+// adds none — the tester walks it under its own title (rewalkCases). With
+// nothing picked, the journeys that failed this pass, and all of them when a
+// failure matches none.
+function journeysToRerun(allJourneys, openRoutes, fixed, cases) {
+  const walks = (j, f) => f.key === usertestKey(j.title, f.device)
+  const picked = allJourneys.filter(j => (j.steps || []).some(s => openRoutes.some(p => p && s.includes(p))) || fixed.some(f => walks(j, f)))
+  if (picked.length) return picked
+  const failed = cases.filter(c => c.verdict === 'fail')
+  const byTitle = allJourneys.filter(j => failed.some(c => c.title === j.title))
+  return byTitle.length || !failed.length ? byTitle : allJourneys
+}
+
+// The fixed usertest failures still waiting for a walk to confirm them. A
+// case the pass walked for the journey on its device (none named: desktop,
+// as the functional finding's key) settles one — a pass, or a fail refiled
+// under the same key; a skipped case or none leaves it waiting, and one
+// still waiting when the loop ends is unverified.
+function unwalkedFixes(pending, cases) {
+  const walked = new Set(cases.filter(c => c.verdict !== 'skip').map(c => usertestKey(c.title, c.device || 'desktop')))
+  return pending.filter(f => !walked.has(f.key))
+}
+
+// A pass's failed usertest cases as functional findings, keyed by device
+// (none named: desktop) and title, and carrying the title itself — the one
+// handle a later walk settles it by (unwalkedFixes).
+function functionalFindings(cases) {
+  return cases.filter(c => c.verdict === 'fail').map(c => ({
+    key: usertestKey(c.title, c.device || 'desktop'), title: c.title, route: '', device: c.device || 'desktop', area: (c.files && c.files[0]) || 'functional',
+    kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [],
+  }))
+}
+
+// The fixed failures the next tester walks again, each as ONE case under its
+// own title on its own device: a case no journey matches (an exploratory one)
+// is walked only because it is handed over here, and the walk under that
+// title is what settles it.
+function rewalkCases(fixed) {
+  return fixed.map(f => ({ title: f.title, device: f.device, failed: f.summary }))
 }
 
 // Group findings by area into at most `max` disjoint fix lists. A finding
@@ -373,18 +423,25 @@ let boardUrl = ''
 let stillOpen = []
 // Fixed in the pass the cap ended: gated, but no reshoot confirmed them.
 let unverified = []
+// Fixed usertest failures no later walk of their journey has confirmed yet
+// (unwalkedFixes): each next pass walks them (journeysToRerun), and one still
+// waiting when the loop ends is unverified.
+let unwalked = []
 // A red gate is a fact of the loop, not of one pass: the last pass has no
 // reshoot to show it, so the caller hears it here.
 let gateRed = false
 let converged = false
+// A 'rewalk' pass end (passEnd): the next pass only walks the unwalked fixes
+// again — nothing changed since the last shots, so it shoots and reviews nothing.
+let walkOnly = false
 
 for (let pass = 1; pass <= cap; pass++) {
   const ph = `Pass ${pass}`
   phase(ph)
   const isFirst = pass === 1
-  log(`${ph}: shooting ${routes.length} routes on ${matrix.length} devices, ${journeys.length} journeys`)
+  log(walkOnly ? `${ph}: walking ${unwalked.length} fixed journeys again, nothing to shoot` : `${ph}: shooting ${routes.length} routes on ${matrix.length} devices, ${journeys.length} journeys`)
 
-  const shooters = matrix.map(d => () => agent(withPreamble(
+  const shooters = walkOnly ? [] : matrix.map(d => () => agent(withPreamble(
     `Shoot pass ${pass} of a review loop on device ${devLine(d)} against ${prep.baseUrl}.\n` +
     `Routes (shoot every one, with data on screen; a route needing setup says how):\n${JSON.stringify(routes)}\n` +
     `Read \`docs {topic: "guide:publish-capture"}\` first. For each route: ${captureStep(d, pass)}. On a touch device also capture one screen with a menu/sheet open when the route has one. Read each saved image back and re-shoot a blank or half-loaded one. Return every shot; a route you could not reach is a \`problems\` line naming why.`
@@ -393,6 +450,7 @@ for (let pass = 1; pass <= cap; pass++) {
   const tester = () => agent(withPreamble(
     `Exploratory usertest, pass ${pass}, against ${prep.baseUrl} ${utWhere}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
+    (unwalked.length ? `Fixed failures to walk again — each is ONE case on its device under exactly this title (a journey above with the same title is that case), so the loop can tell the fix held:\n${JSON.stringify(rewalkCases(unwalked))}\n` : '') +
     `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: ph, schema: USERTEST_SCHEMA })
 
@@ -400,18 +458,19 @@ for (let pass = 1; pass <= cap; pass++) {
   const shots = results.filter(r => r.shots)
   const ut = results.find(r => r.cases) || { cases: [], bugs: [] }
   const shotCount = shots.reduce((n, s) => n + s.shots.length, 0)
-  if (!shotCount) throw new Error(`${ph}: no screenshots captured — the app or the browser is not reachable`)
+  if (!shotCount && !walkOnly) throw new Error(`${ph}: no screenshots captured — the app or the browser is not reachable`)
+  unwalked = unwalkedFixes(unwalked, ut.cases)
 
-  const pub = await agent(withPreamble(
+  const pub = walkOnly ? null : await agent(withPreamble(
     `Compose pass ${pass} of a review loop onto ONE run board (slug ${boardSlug}${project ? `, project ${project}` : ''}${task ? `, task ${task}` : ''}).\n` +
     `Sets captured this pass (one capture root per device): ${JSON.stringify(shots.map(s => ({ device: s.device, root: captureRoot(pass, s.device), shots: s.shots })))}.\n` +
     `Usertest record: ${JSON.stringify({ qaTaskUrl: ut.qaTaskUrl, boardUrl: ut.boardUrl, cases: ut.cases })}.\n` +
     `Structure: section "Pass ${pass}" with one row per device in matrix order, shots ordered by route; a summary card at the section head naming the pass, the device matrix, the shot count and the usertest verdict tally, with a portal link to the usertest board when it is a different board. Earlier pass sections stay untouched. Return the board's server url, its slug, the section title and every shot card id with its route and device.`
   ), { label: 'publish', phase: ph, agentType: 'vitrinka:vitrinka-publisher', schema: PUBLISH_SCHEMA })
-  if (!pub) throw new Error(`${ph}: publishing failed`)
-  boardUrl = pub.boardUrl
+  if (!pub && !walkOnly) throw new Error(`${ph}: publishing failed`)
+  if (pub) boardUrl = pub.boardUrl
 
-  const reviewers = matrix.map(d => () => agent(withPreamble(
+  const reviewers = walkOnly ? [] : matrix.map(d => () => agent(withPreamble(
     `Local review (you are the reviewer, no server-side judge) of pass ${pass}, device ${d.name}, on board ${pub.boardSlug} (${pub.boardUrl}).\n` +
     `Cards in scope: ${JSON.stringify(pub.cards.filter(c => !c.device || c.device === d.name))}.\n` +
     `Read \`review_brief${project ? ` {project: "${project}"}` : ''}\` and judge against it PLUS this checklist:\n- ${checklist.join('\n- ')}\n` +
@@ -425,18 +484,23 @@ for (let pass = 1; pass <= cap; pass++) {
   const filed = reviews.flatMap(r => r.findings).filter(f => { const k = key(f); if (seen.has(k)) return false; seen.add(k); return true })
   const regressions = reviews.flatMap(r => r.regressions || [])
   const regressed = regressList.filter(f => regressions.some(r => r.key === f.key && r.fixed === false))
-  const functional = ut.cases.filter(c => c.verdict === 'fail').map(c => ({
-    key: usertestKey(c.title, c.device || 'desktop'), route: '', device: c.device || 'desktop', area: (c.files && c.files[0]) || 'functional',
-    kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [],
-  }))
+  const functional = functionalFindings(ut.cases)
   const accepted = autoAcceptable(filed, threshold)
   const fixList = fixListFor([...accepted, ...functional, ...regressed], stillOpen)
   const parked = filed.length - accepted.length
   passes.push({ pass, shots: shotCount, filed: filed.length, functionalFails: functional.length, regressed: regressed.length, toFix: fixList.length, parked })
   log(`${ph}: ${shotCount} shots, ${filed.length} findings filed (${parked} left staged for the human), ${functional.length} functional fails, ${regressed.length} regressions, ${stillOpen.length} carried open`)
 
-  const end = passEnd(pass, cap, fixList.length)
-  if (end === 'clean') { converged = true; log(`${ph}: clean — loop converged`); break }
+  const end = passEnd(pass, cap, fixList.length, unwalked.length)
+  // A fixed journey no walk confirmed (its tester died or skipped it) is no
+  // convergence, even on a pass with nothing left to fix.
+  if (end === 'clean') { converged = !unwalked.length; log(`${ph}: clean — ${converged ? 'loop converged' : `${unwalked.length} fixed journeys never walked again`}`); break }
+  if (end === 'rewalk') {
+    walkOnly = true
+    journeys = journeysToRerun(allJourneys, [], unwalked, ut.cases)
+    log(`${ph}: nothing to fix, ${unwalked.length} fixed journeys never walked again — the next pass only walks them`)
+    continue
+  }
 
   // Only this pass's accepted findings are still staged: the door refuses the
   // whole batch over one carried or regressed id it accepted in an earlier pass.
@@ -470,21 +534,23 @@ for (let pass = 1; pass <= cap; pass++) {
   if (!gate || !gate.green) log(`${ph}: gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}${end === 'last' ? '' : '; the next pass shoots anyway so the board shows the state'}`)
 
   regressList = fixList.filter(f => fixedKeys.has(f.key))
+  unwalked = [...unwalked.filter(f => !fixedKeys.has(f.key)), ...regressList.filter(f => f.rule === 'functional')]
   stillOpen = openAfterPass(stillOpen, fixList, fixedKeys)
   if (end === 'last') {
     unverified = regressList
     log(`${ph}: cap reached — ${unverified.length} fixed with no reshoot to verify them, ${stillOpen.length} open on the board (raise cap to continue)`)
     break
   }
+  walkOnly = false
   const openRoutes = uniq([...touchedRoutes, ...fixList.filter(f => !fixedKeys.has(f.key)).map(f => f.route)])
   routes = allRoutes.filter(r => openRoutes.some(p => p && (r.path === p || r.path.startsWith(p))))
   if (!routes.length) routes = allRoutes.filter(r => touchedFiles.some(f => r.file && f === r.file))
   if (!routes.length) routes = allRoutes
-  journeys = allJourneys.filter(j => j.steps.some(s => openRoutes.some(p => p && s.includes(p))))
-  if (!journeys.length) journeys = allJourneys.filter(j => ut.cases.some(c => c.verdict === 'fail' && c.title === j.title))
-  if (!journeys.length && functional.length) journeys = allJourneys
+  journeys = journeysToRerun(allJourneys, openRoutes, unwalked, ut.cases)
   log(`${ph}: next pass reshoots ${routes.length} routes, reruns ${journeys.length} journeys`)
 }
+// A fixed journey no later walk confirmed is as unverified as a last-pass fix.
+unverified = [...unverified, ...unwalked.filter(f => !unverified.some(u => u.key === f.key))]
 
 return {
   boardUrl,

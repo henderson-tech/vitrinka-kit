@@ -242,9 +242,23 @@ const HEADS_SCHEMA = {
   type: 'object',
   properties: {
     head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' },
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
     prHead: { type: 'string', description: "the full sha of the pull request's head commit" },
   },
   required: ['head', 'prHead'],
+}
+
+// A PR-state step (prOutcome): the PR it acted on and its draft state before
+// and after the call — a state it could not read is left out, never guessed.
+const PR_STATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
+    wasDraft: { type: 'boolean', description: 'whether it was a draft before the call; omitted when it could not be read' },
+    isDraft: { type: 'boolean', description: 'whether it is a draft after the call; omitted when it could not be read' },
+    why: { type: 'string', description: 'why a call failed' },
+  },
+  required: ['url'],
 }
 // ---- lib/helpers.js — plain-code helpers shared by the Exp flows (no agents here)
 const SEVERITY_RANK = { blocker: 3, major: 2, minor: 1 }
@@ -271,10 +285,14 @@ function parseCap(raw) {
 // the last pass still fixes what it accepted and only the reshoot that would
 // verify it is dropped. 'clean' — nothing left to fix, retried carried
 // findings included (see fixListFor); 'reshoot' — fix, gate, shoot again;
-// 'last' — fix and gate, then stop.
-function passEnd(pass, cap, toFix) {
-  if (!toFix) return 'clean'
-  return pass < cap ? 'reshoot' : 'last'
+// 'last' — fix and gate, then stop; 'rewalk' — nothing to fix, but a fixed
+// usertest failure no walk confirmed yet (`unwalked`, see unwalkedFixes: its
+// tester died or skipped it) and a pass left: the next pass only walks it
+// again — no shots, no review. At the cap it ends 'clean' with the fix
+// unverified, which keeps the draft.
+function passEnd(pass, cap, toFix, unwalked = 0) {
+  if (toFix) return pass < cap ? 'reshoot' : 'last'
+  return unwalked && pass < cap ? 'rewalk' : 'clean'
 }
 
 // A pass's fix list: what it filed and accepted (new findings, functional
@@ -295,6 +313,52 @@ function fixListFor(fresh, carried) {
 // later pass is the carried finding — fixing it there closes that one.
 function usertestKey(title, lane) {
   return `usertest-${slugify(lane)}-${slugify(title)}`
+}
+
+// The journeys the next pass walks: every one whose steps pass a route still
+// open or just touched, and every one whose failure a fixer claimed fixed
+// (`fixed`: those functional findings, still unwalked — see unwalkedFixes),
+// matched by its stable usertestKey, never by route: a fixed journey is no
+// longer open and its steps need not name a route, so only walking it again
+// verifies the fix. A fixed failure no journey matches (an exploratory case)
+// adds none — the tester walks it under its own title (rewalkCases). With
+// nothing picked, the journeys that failed this pass, and all of them when a
+// failure matches none.
+function journeysToRerun(allJourneys, openRoutes, fixed, cases) {
+  const walks = (j, f) => f.key === usertestKey(j.title, f.lane)
+  const picked = allJourneys.filter(j => (j.steps || []).some(s => openRoutes.some(p => p && s.includes(p))) || fixed.some(f => walks(j, f)))
+  if (picked.length) return picked
+  const failed = cases.filter(c => c.verdict === 'fail')
+  const byTitle = allJourneys.filter(j => failed.some(c => c.title === j.title))
+  return byTitle.length || !failed.length ? byTitle : allJourneys
+}
+
+// The fixed usertest failures still waiting for a walk to confirm them. A
+// case the pass walked for the journey on its lane settles one — a pass, or
+// a fail refiled as a fresh finding under the same key; a skipped case or
+// none leaves it waiting, and a run that ends with one waiting keeps its
+// draft (notReadyReasons).
+function unwalkedFixes(pending, cases, lane) {
+  const walked = new Set(cases.filter(c => c.verdict !== 'skip').map(c => usertestKey(c.title, c.lane || lane)))
+  return pending.filter(f => !walked.has(f.key))
+}
+
+// A pass's failed usertest cases as functional findings, keyed by lane (none
+// named: the usertest lane) and title, and carrying the title itself — the
+// one handle a later walk settles it by (unwalkedFixes).
+function functionalFindings(cases, lane) {
+  return cases.filter(c => c.verdict === 'fail').map(c => ({
+    key: usertestKey(c.title, c.lane || lane), title: c.title, route: '', lane: c.lane || lane, area: (c.files && c.files[0]) || 'functional',
+    kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [], inScope: true,
+  }))
+}
+
+// The fixed failures the next tester walks again, each as ONE case under its
+// own title: a case no journey matches (an exploratory one) is walked only
+// because it is handed over here, and the walk under that title is what
+// settles it.
+function rewalkCases(fixed) {
+  return fixed.map(f => ({ title: f.title, failed: f.summary }))
 }
 
 // The case a route gets on one lane where the run leaves no finding open. A
@@ -392,17 +456,11 @@ function openWithoutFixing(filed, functional) {
 // push from prm's first round — postdates every capture and names no files
 // to place it: a change nobody can place unverifies every route
 // (affectedRoutes). So the PR head and the checkout's HEAD must still be the
-// commit the record was filed at (`recordSha`, `heads`).
-function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases, recordSha, heads }) {
-  const why = []
-  if (!fixes) why.push('thoroughness is not "fix"')
-  if (open.length) why.push(`${open.length} findings open`)
-  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
-  for (const k of lanes) {
-    const cases = routeCases[k] || []
-    const unearned = cases.filter(c => c.verdict !== 'pass').length
-    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
-  }
+// commit the record was filed at (`recordSha`, `heads`). A fixed usertest
+// failure no later walk of its journey confirmed (`unwalked`) is no pass.
+function notReadyReasons(run) {
+  const { fixes, code, recordSha, heads } = run
+  const why = recordReasons(run)
   if (fixes) {
     const last = code && code.rounds.length ? code.rounds[code.rounds.length - 1] : null
     if (!last) why.push('the code loop did not review the diff')
@@ -417,8 +475,61 @@ function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases
       }
     }
   }
+  return why
+}
+
+// The part of notReadyReasons the device record alone decides — known once
+// the run door has filed it, before the code loop runs, so a run whose record
+// already fails returns a PR ready for review to draft before code-loop's prm
+// pushes to it (a ready PR with auto-merge armed, or under MERGE_POLICY=self,
+// can merge on that push).
+function recordReasons({ fixes, open, lanes, report, gateRed, routeCases, unwalked = [] }) {
+  const why = []
+  if (!fixes) why.push('thoroughness is not "fix"')
+  if (open.length) why.push(`${open.length} findings open`)
+  if (unwalked.length) why.push(`${unwalked.length} fixed journeys never walked again`)
+  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
+  for (const k of lanes) {
+    const cases = routeCases[k] || []
+    const unearned = cases.filter(c => c.verdict !== 'pass').length
+    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
+  }
   if (gateRed) why.push('a pass gate stayed red')
   return why
+}
+
+// What a PR-state step left: `want` is the state the run earned ('ready' when
+// notReadyReasons is empty, else 'draft'); the step ran the idempotent
+// `gh pr ready` or `gh pr ready --undo` whatever state it found — a guessed
+// "already a draft" never skips the call — and read the state before
+// (wasDraft) and after (isDraft), leaving out one it could not read. The
+// earned state holds only when the read-back says so; `demoted` is a PR the
+// run took back from ready for review, which the hand-back says.
+function prOutcome(want, step) {
+  const after = step && typeof step.isDraft === 'boolean' ? step.isDraft : null
+  const held = after === (want === 'draft')
+  return {
+    ready: want === 'ready' && held,
+    draft: want === 'draft' && held,
+    demoted: want === 'draft' && held && step.wasDraft === false,
+    problem: held ? '' : `${want === 'ready' ? 'readying' : 'returning to draft'} failed: ${(step && step.why) || (step ? 'its state could not be read back' : 'no result')}`,
+  }
+}
+
+// Why the code loop must not push — '' when it may. Its PR phase is prm
+// pushing the branch to its PR, and a PR ready for review with auto-merge
+// armed (or under MERGE_POLICY=self) can merge on that push. A record that
+// passes (`recordWhy` empty) leaves the PR as it is until the step after the
+// loop. One that fails pushes only where the early PR-state step (`early`)
+// proved no ready PR takes the push: the PR reads back a draft, or the branch
+// has none (url "", no PR `named`, no failed call) and the loop opens its own
+// as a draft. A missing result, an unread state or a PR still ready holds
+// the push: the loop reviews and gates, and its commits stay local.
+function codeLoopPushHold(recordWhy, early, named) {
+  if (!recordWhy.length) return ''
+  if (!early || early.url) return prOutcome('draft', early).problem
+  if (named) return `pull request ${named} could not be read${early.why ? `: ${early.why}` : ''}`
+  return early.why ? `the branch's pull request could not be read: ${early.why}` : ''
 }
 
 // Each lane manifest's stamp, keyed by lane: the ONE head the record is filed

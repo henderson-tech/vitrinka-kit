@@ -82,11 +82,15 @@ or the terrain when known; the flow inventories inline otherwise.
 - **The PR**: after every `fix` run the core `vitrinka:code-loop` reviews
   the final diff; the draft is marked ready only when no finding is open,
   every route on every lane earned a pass (a last-pass fix the cap left
-  unreshot keeps the draft), every gate ended green, the code loop left
+  unreshot keeps the draft), every fixed usertest journey was walked again,
+  every gate ended green, the code loop left
   nothing for the human, and the PR head is still the commit the record was
   filed at (a code-loop fix or prm push after it was never reshot) —
-  otherwise the hand-back says why. `shots` and `review` runs leave it as it
-  was.
+  otherwise it ends a draft (a PR already ready for review goes back to
+  draft — before the code loop pushes, when the device record alone
+  fails the run; a draft it cannot confirm holds that push and the
+  loop's commits stay local) and the hand-back says why. `shots` and `review` runs
+  leave it as it was.
 
 ## Contracts
 
