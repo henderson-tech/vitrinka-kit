@@ -251,7 +251,7 @@ try {
 } catch (e) {
   log(`build-idea: map workflow unavailable (${e && e.message}); the review loop inventories inline`)
 }
-let loop = { boardUrl: '', passes: [], converged: false, open: [], error: '' }
+let loop = { boardUrl: '', passes: [], converged: false, gateRed: false, open: [], unverified: [], error: '' }
 try {
   loop = await workflow('vitrinka:review-loop', {
     routes: terrain ? terrain.routes : undefined,
@@ -259,7 +259,7 @@ try {
     projectType: terrain ? terrain.projectType : undefined,
     task: A.task, project: A.project, cap: A.cap || 3, severity: A.severity || 'minor', matrix: A.matrix, scope: plan.scope,
   })
-  log(`build-idea: review loop ${loop.converged ? 'converged' : `stopped with ${loop.open.length} open`} after ${loop.passes.length} pass(es) → ${loop.boardUrl}`)
+  log(`build-idea: review loop ${loop.converged ? 'converged' : `stopped with ${loop.open.length} open${loop.gateRed ? ' and a red gate' : ''}`} after ${loop.passes.length} pass(es) → ${loop.boardUrl}`)
 } catch (e) {
   loop.error = (e && e.message) || String(e)
   log(`build-idea: review loop failed (${loop.error}) — the UI is UNVERIFIED; continuing to the code loop so the hand-back says so`)
@@ -275,7 +275,7 @@ const handback = await agent(withPreamble(
     brief: A.brief,
     slices: built.map(b => ({ slice: b.slice, done: b.done.length, left: b.left.length })),
     implementationGate: gate && gate.green,
-    reviewLoop: { board: loop.boardUrl, passes: loop.passes, converged: loop.converged, open: loop.open, error: loop.error },
+    reviewLoop: { board: loop.boardUrl, passes: loop.passes, converged: loop.converged, gateRed: !!loop.gateRed, open: loop.open, unverified: loop.unverified || [], error: loop.error },
     codeLoop: { rounds: code.rounds, remaining: code.remaining.length },
     pr: code.pr,
   }) +

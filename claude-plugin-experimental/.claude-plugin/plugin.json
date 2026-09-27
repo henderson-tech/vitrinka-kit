@@ -1,0 +1,20 @@
+{
+  "name": "vitrinka-experimental",
+  "version": "5.9.0",
+  "displayName": "Vitrinka Experimental",
+  "description": "Exp — the split build-idea that hands a feature to the human after one quick \"does it work\" check, and the ask-first device test skill that runs only the lanes, breakpoints and iOS checks you pick, then files results into device tabs and the task engine. Claude Code only; the core vitrinka plugin stays required.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "experimental",
+    "workflows",
+    "device-testing",
+    "ios-simulator",
+    "qa"
+  ]
+}

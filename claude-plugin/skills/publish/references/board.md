@@ -88,6 +88,14 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
   run as a QA session (template 1): steps flip `status` via `update_cards` as
   the run progresses — never stack retest cards — and close with ONE summary
   callout.
+- **A run that must read per device is ONE run board with lanes** (device
+  tabs): `create {kind: "board", slug, lanes: [{key, label?}]}` mints the
+  run board (the Overview tab) and one child board per lane in the SAME
+  call and answers `lanes: [{key, slug, url}]` — idempotent on the slug.
+  Each lane is a whole board: compose its passes there as sections
+  (`Pass N`), the parent holds the summary and one portal per lane; the
+  page renders the tab strip on the parent and on every lane. Doctrine:
+  `docs {topic: "board:lanes"}`.
 - **Iterating a journey** after code changes = the suite section's NEXT PASS
   (`compose_board {journey, pass:"next"}`, template 2) — the old pass stays
   for comparison and `request_review {journey}` reviews the delta.

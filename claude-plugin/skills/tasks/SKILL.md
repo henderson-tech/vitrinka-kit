@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: "Use when working a project's task engine from the repo — '/vitrinka:tasks [list|intake|file|epic|rule]' from the app's repo, 'file a task', 'plan the epic', 'triage intake', 'sprint start', 'add an automation rule'."
+description: "Use when working a project's task engine from the repo — '/vitrinka:tasks [list|intake|file|epic|rule]' from the app's repo, 'file a task', 'find the X epic', 'file this under the X epic', 'plan the epic', 'triage intake', 'sprint start', 'add an automation rule'."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
@@ -51,6 +51,10 @@ carries only the laws the verbs do not print.
   PRs, a repo path (`internal/web/foo.go:64`), an attachment's filename.
 - **Unknown arguments are a 400** naming the key and the accepted set —
   read the error, fix the call, never retry the same shape.
+- **CLI reads describe their own shape**: `<verb> --help --json` →
+  `.data.dataShape`; every task verb takes any spelling (`42`, `VIT-42`,
+  `<ws>/42`, the URL); an epic's children are `task list --parent <id>`.
+  Never pipe `--json` into a guessed jq path.
 
 ## The doors
 
@@ -75,7 +79,11 @@ carries only the laws the verbs do not print.
 - **Reading**: `summarize_tasks` for counts; `list {kind:"task", f}` with the
   filter document (states, groups, types, priorities, assignees, labels,
   sprint, milestone, parent, intake, spans, text, order) for rows;
-  `search {kind:"task"}` / `search` / `search {kind:"project"}` to find; `get {kind:"brief"}` before
+  to FIND, one door per need — title words (an epic by name) → `search {q,
+  groups:["tasks"], type}`; body text → `search {kind:"task"}`; an epic's
+  children → `get {kind:"task", id:"<ws>/<id>", include:["children"]}`; a
+  pasted link → `resolve_url` — never CLI `--json` piped into guessed jq
+  paths; `get {kind:"brief"}` before
   planning anything in a project; `read_task_ref` under a `budget` or with
   a `question` — never a transcript blind; `ask_task` for a cited answer
   over the whole corpus (relay the citation).

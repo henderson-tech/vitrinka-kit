@@ -42,6 +42,14 @@
       "skills": [
         "me"
       ]
+    },
+    {
+      "title": "Experimental",
+      "description": "Exp — the split build-idea that hands the feature over after one quick check, and the ask-first device test skill. Opt in with `vitrinka setup --experimental`.",
+      "skills": [
+        "build-idea",
+        "test"
+      ]
     }
   ]
 }

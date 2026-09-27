@@ -164,7 +164,7 @@ const PUBLISH_SCHEMA = {
   },
   required: ['boardUrl', 'boardSlug', 'section', 'cards'],
 }
-// args: { cap?: 2, base?: 'main', pr?: boolean (default true), task?, title?: string }
+// args: { cap?: 2, base?: 'main', pr?: boolean (default true), draft?: boolean (a PR it opens is a draft; an adopted one keeps its state), task?, title?: string }
 const A = args || {}
 const cap = Math.max(1, Math.min(4, A.cap || 2))
 const base = A.base || 'main'
@@ -203,7 +203,7 @@ let pr = ''
 if (A.pr !== false) {
   phase('PR')
   const opened = await agent(withPreamble(
-    `Open the PR for this branch against ${base} through the prm skill (Skill tool: prm) — create and watch, never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
+    `Open the PR for this branch against ${base} through the prm skill (Skill tool: prm)${A.draft ? ' with `--draft` — a DRAFT; never mark it ready' : ''} — create and watch, never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
     (remaining.length ? `Post these unresolved review findings as ONE PR comment for the human, each with file:line and the reviewer's reason it was not applied:\n${JSON.stringify(remaining)}\n` : '') +
     `Return the PR's full https url on the first line and its CI state on the second.`
   ), { label: 'prm', phase: 'PR' })
