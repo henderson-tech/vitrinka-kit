@@ -87,9 +87,9 @@ or the terrain when known; the flow inventories inline otherwise.
   nothing for the human, and the PR head is still the commit the record was
   filed at (a code-loop fix or prm push after it was never reshot) —
   otherwise it ends a draft (a PR already ready for review goes back to
-  draft — before the code loop pushes, when the device record alone
-  fails the run; a draft it cannot confirm holds that push and the
-  loop's commits stay local) and the hand-back says why. `shots` and `review` runs
+  draft before the code loop pushes, clean record or not — the review
+  is still ahead; a draft it cannot confirm, or a branch PR it cannot
+  prove absent, holds that push and the loop's commits stay local) and the hand-back says why. `shots` and `review` runs
   leave it as it was.
 
 ## Contracts

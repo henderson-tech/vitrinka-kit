@@ -233,6 +233,14 @@ function passEnd(pass, cap, toFix, unwalked = 0) {
   return unwalked && pass < cap ? 'rewalk' : 'clean'
 }
 
+// Whether the loop converged: it ended on a 'clean' pass (passEnd) with no
+// finding left open, no fixed journey left unwalked, and no pass gate red. A
+// red gate is sticky — the clean pass fixes nothing, so it runs no gate that
+// could clear it — and a loop whose gate went red never claims convergence.
+function convergedAfter({ clean, open = [], unwalked = [], gateRed }) {
+  return !!clean && !open.length && !unwalked.length && !gateRed
+}
+
 // The accepted findings still open after a pass, ACROSS passes: every one
 // carried from earlier passes plus this pass's fix list, minus the keys it
 // fixed. A finding a fixer skipped stays open until a later pass fixes it —
@@ -492,9 +500,14 @@ for (let pass = 1; pass <= cap; pass++) {
   log(`${ph}: ${shotCount} shots, ${filed.length} findings filed (${parked} left staged for the human), ${functional.length} functional fails, ${regressed.length} regressions, ${stillOpen.length} carried open`)
 
   const end = passEnd(pass, cap, fixList.length, unwalked.length)
-  // A fixed journey no walk confirmed (its tester died or skipped it) is no
-  // convergence, even on a pass with nothing left to fix.
-  if (end === 'clean') { converged = !unwalked.length; log(`${ph}: clean — ${converged ? 'loop converged' : `${unwalked.length} fixed journeys never walked again`}`); break }
+  // A fixed journey no walk confirmed (its tester died or skipped it), or a
+  // gate an earlier pass left red, is no convergence, even on a pass with
+  // nothing left to fix.
+  if (end === 'clean') {
+    converged = convergedAfter({ clean: true, open: stillOpen, unwalked, gateRed })
+    log(`${ph}: clean — ${converged ? 'loop converged' : [unwalked.length ? `${unwalked.length} fixed journeys never walked again` : '', gateRed ? 'a pass gate stayed red' : ''].filter(Boolean).join('; ') + ', so it did not converge'}`)
+    break
+  }
   if (end === 'rewalk') {
     walkOnly = true
     journeys = journeysToRerun(allJourneys, [], unwalked, ut.cases)

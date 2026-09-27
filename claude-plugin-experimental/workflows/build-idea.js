@@ -43,11 +43,12 @@ function resolveRun(override) {
 }
 
 // The rule the Prepare stage applies, as prompt text. It reads the file
-// itself (a script cannot), so the whole ladder travels with the prompt.
+// itself (a script cannot), so the whole ladder travels with the prompt. It
+// decides WHERE only; whether and when the app starts is the caller's line.
 const RUN_RULE =
-  'Run target: read `.claude/vitrinka-workflows.json` and take `run.web` (`auto` when the file or the key is absent). ' +
-  '`auto`: start the app on this branch\'s devbox workspace when `devbox` resolves one (`devbox run -- \'<cmd>\'`), otherwise locally on this machine. ' +
-  '`devbox`: the devbox only — an unresolved devbox is a `problems` entry with `baseUrl` empty, never a silent local fallback. ' +
+  'Run target — where this run\'s web app runs: read `.claude/vitrinka-workflows.json` and take `run.web` (`auto` when the file or the key is absent). ' +
+  '`auto`: this branch\'s devbox workspace when `devbox` resolves one (`devbox run -- \'<cmd>\'`), otherwise this machine. ' +
+  '`devbox`: the devbox only — an unresolved devbox is a `problems` entry and no app, never a silent local fallback. ' +
   '`local`: this machine only, never a devbox. Return `where` as devbox | local and the file\'s content as `override` ({} when absent).'
 // ---- lib/schemas.js — structured-output schemas shared by the Exp flows
 const ROUTE = {
@@ -166,10 +167,11 @@ const GATE_SCHEMA = {
   required: ['green', 'ran'],
 }
 
-const PREPARE_SCHEMA = {
+// The test run's Prepare: the checkout and the run target, never the app —
+// which apps start hangs on the lanes this answer resolves (appStarts).
+const TARGET_SCHEMA = {
   type: 'object',
   properties: {
-    baseUrl: { type: 'string', description: 'reachable app url; empty only when no web lane needs one or the run target could not be honoured' },
     where: { type: 'string', enum: ['devbox', 'local'] },
     branch: { type: 'string' },
     sha: { type: 'string', description: 'short HEAD sha' },
@@ -180,6 +182,36 @@ const PREPARE_SCHEMA = {
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['where', 'branch', 'projectType'],
+}
+
+// A Prepare that also starts the app at the run target (build-idea's quick check).
+const PREPARE_SCHEMA = {
+  ...TARGET_SCHEMA,
+  properties: {
+    baseUrl: { type: 'string', description: 'reachable app url; empty only when the run target could not be honoured' },
+    ...TARGET_SCHEMA.properties,
+  },
+}
+
+// The test run's web app start, once its lanes are known to need it.
+const APP_SCHEMA = {
+  type: 'object',
+  properties: {
+    baseUrl: { type: 'string', description: 'reachable app url; empty only when the run target could not be honoured' },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['baseUrl'],
+}
+
+// The test run's native app start, once a simulator lane needs it.
+const NATIVE_SCHEMA = {
+  type: 'object',
+  properties: {
+    ready: { type: 'boolean', description: 'the app itself opened on every simulator — not a dev-client launcher, an error screen or a blank one' },
+    scheme: { type: 'string', description: 'the deep-link scheme routes open with, e.g. "myapp"' },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['ready'],
 }
 
 const PUBLISH_SCHEMA = {
@@ -249,11 +281,13 @@ const HEADS_SCHEMA = {
 }
 
 // A PR-state step (prOutcome): the PR it acted on and its draft state before
-// and after the call — a state it could not read is left out, never guessed.
+// and after the call — a state it could not read is left out, never guessed —
+// or `none`, the lookup's proof the branch has no PR (codeLoopPushHold).
 const PR_STATE_SCHEMA = {
   type: 'object',
   properties: {
-    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none or it could not be read" },
+    none: { type: 'boolean', description: 'true only when the lookup answered that the branch has no open pull request (gh exits 1: "no pull requests found")' },
     wasDraft: { type: 'boolean', description: 'whether it was a draft before the call; omitted when it could not be read' },
     isDraft: { type: 'boolean', description: 'whether it is a draft after the call; omitted when it could not be read' },
     why: { type: 'string', description: 'why a call failed' },
@@ -293,6 +327,14 @@ function parseCap(raw) {
 function passEnd(pass, cap, toFix, unwalked = 0) {
   if (toFix) return pass < cap ? 'reshoot' : 'last'
   return unwalked && pass < cap ? 'rewalk' : 'clean'
+}
+
+// Whether the run converged: it ended on a 'clean' pass (passEnd) with no
+// finding left open, no fixed journey left unwalked, and no pass gate red. A
+// red gate is sticky — the clean pass fixes nothing, so it runs no gate that
+// could clear it — and a run whose gate went red never claims convergence.
+function convergedAfter({ clean, open = [], unwalked = [], gateRed }) {
+  return !!clean && !open.length && !unwalked.length && !gateRed
 }
 
 // A pass's fix list: what it filed and accepted (new findings, functional
@@ -479,10 +521,10 @@ function notReadyReasons(run) {
 }
 
 // The part of notReadyReasons the device record alone decides — known once
-// the run door has filed it, before the code loop runs, so a run whose record
-// already fails returns a PR ready for review to draft before code-loop's prm
-// pushes to it (a ready PR with auto-merge armed, or under MERGE_POLICY=self,
-// can merge on that push).
+// the run door has filed it, before the code loop runs: the reasons the early
+// PR-state step names when it returns a PR ready for review to draft before
+// code-loop's prm pushes to it (codeLoopPushHold). A clean record has none,
+// but the step runs anyway — the code loop's review is still ahead.
 function recordReasons({ fixes, open, lanes, report, gateRed, routeCases, unwalked = [] }) {
   const why = []
   if (!fixes) why.push('thoroughness is not "fix"')
@@ -518,18 +560,21 @@ function prOutcome(want, step) {
 
 // Why the code loop must not push — '' when it may. Its PR phase is prm
 // pushing the branch to its PR, and a PR ready for review with auto-merge
-// armed (or under MERGE_POLICY=self) can merge on that push. A record that
-// passes (`recordWhy` empty) leaves the PR as it is until the step after the
-// loop. One that fails pushes only where the early PR-state step (`early`)
+// armed (or under MERGE_POLICY=self) can merge on that push. No fix run has
+// earned ready before the code loop — even a clean record still awaits its
+// review — so every one pushes only where the early PR-state step (`early`)
 // proved no ready PR takes the push: the PR reads back a draft, or the branch
-// has none (url "", no PR `named`, no failed call) and the loop opens its own
-// as a draft. A missing result, an unread state or a PR still ready holds
-// the push: the loop reviews and gates, and its commits stay local.
-function codeLoopPushHold(recordWhy, early, named) {
-  if (!recordWhy.length) return ''
+// has none (url "" with `none` — the lookup answered "no pull requests found",
+// which `gh pr view` reports by exiting 1, so a `why` beside it is that answer,
+// not a failure; no PR `named`) and the loop opens its own as a draft. A
+// missing result, an unread state, a PR still ready or a url "" nothing
+// proved absent holds the push: the loop reviews and gates, and its commits
+// stay local.
+function codeLoopPushHold(early, named) {
   if (!early || early.url) return prOutcome('draft', early).problem
   if (named) return `pull request ${named} could not be read${early.why ? `: ${early.why}` : ''}`
-  return early.why ? `the branch's pull request could not be read: ${early.why}` : ''
+  if (early.none) return ''
+  return `the branch's pull request could not be read: ${early.why || 'no lookup proved it has none'}`
 }
 
 // Each lane manifest's stamp, keyed by lane: the ONE head the record is filed

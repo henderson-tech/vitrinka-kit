@@ -44,11 +44,12 @@ function resolveRun(override) {
 }
 
 // The rule the Prepare stage applies, as prompt text. It reads the file
-// itself (a script cannot), so the whole ladder travels with the prompt.
+// itself (a script cannot), so the whole ladder travels with the prompt. It
+// decides WHERE only; whether and when the app starts is the caller's line.
 const RUN_RULE =
-  'Run target: read `.claude/vitrinka-workflows.json` and take `run.web` (`auto` when the file or the key is absent). ' +
-  '`auto`: start the app on this branch\'s devbox workspace when `devbox` resolves one (`devbox run -- \'<cmd>\'`), otherwise locally on this machine. ' +
-  '`devbox`: the devbox only — an unresolved devbox is a `problems` entry with `baseUrl` empty, never a silent local fallback. ' +
+  'Run target — where this run\'s web app runs: read `.claude/vitrinka-workflows.json` and take `run.web` (`auto` when the file or the key is absent). ' +
+  '`auto`: this branch\'s devbox workspace when `devbox` resolves one (`devbox run -- \'<cmd>\'`), otherwise this machine. ' +
+  '`devbox`: the devbox only — an unresolved devbox is a `problems` entry and no app, never a silent local fallback. ' +
   '`local`: this machine only, never a devbox. Return `where` as devbox | local and the file\'s content as `override` ({} when absent).'
 // ---- lib/schemas.js — structured-output schemas shared by the Exp flows
 const ROUTE = {
@@ -167,10 +168,11 @@ const GATE_SCHEMA = {
   required: ['green', 'ran'],
 }
 
-const PREPARE_SCHEMA = {
+// The test run's Prepare: the checkout and the run target, never the app —
+// which apps start hangs on the lanes this answer resolves (appStarts).
+const TARGET_SCHEMA = {
   type: 'object',
   properties: {
-    baseUrl: { type: 'string', description: 'reachable app url; empty only when no web lane needs one or the run target could not be honoured' },
     where: { type: 'string', enum: ['devbox', 'local'] },
     branch: { type: 'string' },
     sha: { type: 'string', description: 'short HEAD sha' },
@@ -181,6 +183,36 @@ const PREPARE_SCHEMA = {
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['where', 'branch', 'projectType'],
+}
+
+// A Prepare that also starts the app at the run target (build-idea's quick check).
+const PREPARE_SCHEMA = {
+  ...TARGET_SCHEMA,
+  properties: {
+    baseUrl: { type: 'string', description: 'reachable app url; empty only when the run target could not be honoured' },
+    ...TARGET_SCHEMA.properties,
+  },
+}
+
+// The test run's web app start, once its lanes are known to need it.
+const APP_SCHEMA = {
+  type: 'object',
+  properties: {
+    baseUrl: { type: 'string', description: 'reachable app url; empty only when the run target could not be honoured' },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['baseUrl'],
+}
+
+// The test run's native app start, once a simulator lane needs it.
+const NATIVE_SCHEMA = {
+  type: 'object',
+  properties: {
+    ready: { type: 'boolean', description: 'the app itself opened on every simulator — not a dev-client launcher, an error screen or a blank one' },
+    scheme: { type: 'string', description: 'the deep-link scheme routes open with, e.g. "myapp"' },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['ready'],
 }
 
 const PUBLISH_SCHEMA = {
@@ -250,11 +282,13 @@ const HEADS_SCHEMA = {
 }
 
 // A PR-state step (prOutcome): the PR it acted on and its draft state before
-// and after the call — a state it could not read is left out, never guessed.
+// and after the call — a state it could not read is left out, never guessed —
+// or `none`, the lookup's proof the branch has no PR (codeLoopPushHold).
 const PR_STATE_SCHEMA = {
   type: 'object',
   properties: {
-    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none" },
+    url: { type: 'string', description: "the pull request's full https url; \"\" when the branch has none or it could not be read" },
+    none: { type: 'boolean', description: 'true only when the lookup answered that the branch has no open pull request (gh exits 1: "no pull requests found")' },
     wasDraft: { type: 'boolean', description: 'whether it was a draft before the call; omitted when it could not be read' },
     isDraft: { type: 'boolean', description: 'whether it is a draft after the call; omitted when it could not be read' },
     why: { type: 'string', description: 'why a call failed' },
@@ -366,6 +400,21 @@ function resolveLanes(requested, projectType, override) {
   }
   return { type, lanes, checklist, exclude }
 }
+
+// What a run's RESOLVED lanes need started: `web` when a viewport lane
+// browses the web app or the ios-safari lane loads it in Mobile Safari, and
+// per simulator a lane opens by deep link, the native app — installed on that
+// simulator and, for a development build, its bundler (Metro) serving it from
+// this machine, where the simulators live. Asked lanes cannot decide it —
+// "iphone" is a viewport on web and a simulator on expo, and no lanes at all
+// means the matrix Prepare reads — so the apps start only after resolveLanes.
+function appStarts(lanes) {
+  const native = []
+  for (const l of lanes) {
+    if (l.kind === 'simulator' && !native.some(n => n.platform === l.platform && n.sim === l.sim)) native.push({ platform: l.platform, sim: l.sim })
+  }
+  return { web: lanes.some(l => l.kind !== 'simulator'), native }
+}
 // ---- lib/helpers.js — plain-code helpers shared by the Exp flows (no agents here)
 const SEVERITY_RANK = { blocker: 3, major: 2, minor: 1 }
 
@@ -399,6 +448,14 @@ function parseCap(raw) {
 function passEnd(pass, cap, toFix, unwalked = 0) {
   if (toFix) return pass < cap ? 'reshoot' : 'last'
   return unwalked && pass < cap ? 'rewalk' : 'clean'
+}
+
+// Whether the run converged: it ended on a 'clean' pass (passEnd) with no
+// finding left open, no fixed journey left unwalked, and no pass gate red. A
+// red gate is sticky — the clean pass fixes nothing, so it runs no gate that
+// could clear it — and a run whose gate went red never claims convergence.
+function convergedAfter({ clean, open = [], unwalked = [], gateRed }) {
+  return !!clean && !open.length && !unwalked.length && !gateRed
 }
 
 // A pass's fix list: what it filed and accepted (new findings, functional
@@ -585,10 +642,10 @@ function notReadyReasons(run) {
 }
 
 // The part of notReadyReasons the device record alone decides — known once
-// the run door has filed it, before the code loop runs, so a run whose record
-// already fails returns a PR ready for review to draft before code-loop's prm
-// pushes to it (a ready PR with auto-merge armed, or under MERGE_POLICY=self,
-// can merge on that push).
+// the run door has filed it, before the code loop runs: the reasons the early
+// PR-state step names when it returns a PR ready for review to draft before
+// code-loop's prm pushes to it (codeLoopPushHold). A clean record has none,
+// but the step runs anyway — the code loop's review is still ahead.
 function recordReasons({ fixes, open, lanes, report, gateRed, routeCases, unwalked = [] }) {
   const why = []
   if (!fixes) why.push('thoroughness is not "fix"')
@@ -624,18 +681,21 @@ function prOutcome(want, step) {
 
 // Why the code loop must not push — '' when it may. Its PR phase is prm
 // pushing the branch to its PR, and a PR ready for review with auto-merge
-// armed (or under MERGE_POLICY=self) can merge on that push. A record that
-// passes (`recordWhy` empty) leaves the PR as it is until the step after the
-// loop. One that fails pushes only where the early PR-state step (`early`)
+// armed (or under MERGE_POLICY=self) can merge on that push. No fix run has
+// earned ready before the code loop — even a clean record still awaits its
+// review — so every one pushes only where the early PR-state step (`early`)
 // proved no ready PR takes the push: the PR reads back a draft, or the branch
-// has none (url "", no PR `named`, no failed call) and the loop opens its own
-// as a draft. A missing result, an unread state or a PR still ready holds
-// the push: the loop reviews and gates, and its commits stay local.
-function codeLoopPushHold(recordWhy, early, named) {
-  if (!recordWhy.length) return ''
+// has none (url "" with `none` — the lookup answered "no pull requests found",
+// which `gh pr view` reports by exiting 1, so a `why` beside it is that answer,
+// not a failure; no PR `named`) and the loop opens its own as a draft. A
+// missing result, an unread state, a PR still ready or a url "" nothing
+// proved absent holds the push: the loop reviews and gates, and its commits
+// stay local.
+function codeLoopPushHold(early, named) {
   if (!early || early.url) return prOutcome('draft', early).problem
   if (named) return `pull request ${named} could not be read${early.why ? `: ${early.why}` : ''}`
-  return early.why ? `the branch's pull request could not be read: ${early.why}` : ''
+  if (early.none) return ''
+  return `the branch's pull request could not be read: ${early.why || 'no lookup proved it has none'}`
 }
 
 // Each lane manifest's stamp, keyed by lane: the ONE head the record is filed
@@ -729,17 +789,15 @@ const threshold = A.severity || 'major'
 if (!SEVERITY_RANK[threshold]) throw new Error(`test: args.severity must be blocker | major | minor, got ${JSON.stringify(A.severity)}`)
 
 phase('Prepare')
-const wantsApp = !A.lanes || !A.lanes.length || A.lanes.some(l => l.viewport || String(l.key).toLowerCase() === 'ios-safari' || ['desktop', 'ipad', 'iphone', 'tablet', 'phone'].indexOf(String(l.key).toLowerCase()) >= 0)
+// Which lanes a run has hangs on the project type and the repo's matrix, both
+// read here — so the apps start below, once the lanes are resolved (appStarts).
 const prep = await agent(withPreamble(
   `Prepare this checkout for a device test run (task ${A.task}).\n` +
   `1. Report the current branch, the short HEAD sha and the vitrinka project the repo is bound to (\`vitrinka status\` / the repo's .vitrinka descriptor).\n` +
-  `2. ${RUN_RULE}\n` +
+  `2. ${RUN_RULE} Start nothing here: the run starts what its lanes need once they are known.\n` +
   `3. Decide projectType (web | expo | cli | other) from the repo.\n` +
-  (wantsApp
-    ? `4. Start the app for this branch there; wait until it answers; return the reachable base URL${A.base ? ` (requested: ${A.base})` : ''}. A simulator lane opens the SAME url from this machine, so a devbox url must be reachable from here.\n`
-    : `4. Every lane is a native simulator: no web app is needed, leave baseUrl empty.\n`) +
   `Never create tasks, boards or commits here.`
-), { label: 'prepare', phase: 'Prepare', schema: PREPARE_SCHEMA })
+), { label: 'prepare', phase: 'Prepare', schema: TARGET_SCHEMA })
 if (!prep) throw new Error('test: prepare failed')
 const task = String(A.task)
 const project = A.project || prep.project || ''
@@ -747,8 +805,29 @@ const override = prep.override || {}
 const run = resolveRun(override)
 const { type, lanes, checklist, exclude } = resolveLanes(A.lanes, A.projectType || prep.projectType, override)
 if (!lanes.length) throw new Error(`test: no lanes to run — pass args.lanes or give project type ${type} a matrix`)
-if (wantsApp && !prep.baseUrl) throw new Error(`test: no app url — the run target (${run.web}) could not be honoured: ${JSON.stringify(prep.problems || [])}`)
-log(`test: ${type} on ${prep.branch} at ${prep.baseUrl || '(no web app)'} (${prep.where}, run.web=${run.web}); lanes ${lanes.map(l => l.key).join(', ')}; ${thoroughness}, cap ${cap}, threshold ${threshold}`)
+const starts = appStarts(lanes)
+prep.baseUrl = ''
+prep.scheme = ''
+if (starts.web) {
+  const app = await agent(withPreamble(
+    `Start the app for branch ${prep.branch} ${prep.where === 'devbox' ? `on this branch's devbox workspace (\`devbox run -- '<cmd>'\`) — never a local fallback` : 'on this machine, never a devbox'} the way CLAUDE.md prescribes; wait until it answers; return the reachable base URL${A.base ? ` (requested: ${A.base})` : ''}.${lanes.some(l => l.kind === 'ios-safari') ? ' The ios-safari lane opens the SAME url from this machine\'s simulator, so a devbox url must be reachable from here.' : ''} A url you cannot reach is baseUrl "" with a \`problems\` line naming why. Never create tasks, boards or commits here.`
+  ), { label: 'app', phase: 'Prepare', schema: APP_SCHEMA })
+  prep.baseUrl = (app && app.baseUrl) || ''
+  if (!prep.baseUrl) throw new Error(`test: no app url — the run target (${run.web}, ${prep.where}) could not be honoured: ${JSON.stringify([...(prep.problems || []), ...((app && app.problems) || ['no result'])])}`)
+}
+// A simulator lane opens the native app by deep link, and a development build
+// shows only its launcher without the bundler serving it — so the app is
+// installed and served before any shooter or tester opens it, always on this
+// machine (lib/run.js: the simulators live here).
+const sims = starts.native.map(s => `the ${s.sim} ${s.platform} simulator`).join(' and ')
+if (starts.native.length) {
+  const native = await agent(withPreamble(
+    `Make the ${type} app of branch ${prep.branch} openable by deep link on ${sims}, on THIS machine — never a devbox. Boot each simulator; build and install the branch's native app the way CLAUDE.md or the repo's scripts prescribe (its development build, or the build the repo ships); start the dev server that build loads its JavaScript from (Metro for Expo / React Native) and leave it running; then open the app once per simulator and confirm it shows the app itself — never a dev-client launcher ("No development servers found"), a red error screen or a blank one. Return ready, the deep-link scheme routes open with, and a \`problems\` line naming anything that failed. Never create tasks, boards or commits here.`
+  ), { label: 'native', phase: 'Prepare', schema: NATIVE_SCHEMA })
+  if (!native || !native.ready) throw new Error(`test: the native app does not open on ${sims}: ${JSON.stringify((native && native.problems) || ['no result'])}`)
+  prep.scheme = native.scheme || ''
+}
+log(`test: ${type} on ${prep.branch} at ${prep.baseUrl || '(no web app)'}${sims ? `, native app served to ${sims}` : ''} (${prep.where}, run.web=${run.web}); lanes ${lanes.map(l => l.key).join(', ')}; ${thoroughness}, cap ${cap}, threshold ${threshold}`)
 
 phase('Map')
 let terrain = A.routes ? { routes: A.routes, journeys: A.journeys || [] } : null
@@ -788,7 +867,7 @@ const shootPrompt = (l, pass, routes) => {
     return head + `For each route: open it at exactly ${l.width}×${l.height}@${l.scale} (${l.input}${l.safeArea ? ', safe-area insets emulated' : ''}), wait for it to settle, scroll the whole page once so lazy content is present, then capture 2× and adopt it with \`vitrinka board capture web --file <png> --route <path> --device ${l.key} --viewport ${l.width}x${l.height}@${l.scale} ${ledgerTail(pass, l.key)}\`.${l.mobile ? ' Also capture one screen with a menu/sheet open when the route has one.' : ''} Read each saved image back and re-shoot a blank or half-loaded one. Return every shot (state "default"); a route you could not reach is a \`problems\` line naming why.`
   }
   if (l.kind === 'simulator') {
-    return head + `For each route: open it in the ${l.sim} simulator through its deep link and capture it with \`vitrinka board capture ${l.platform} --open <deep link> --route <path> --device ${l.key} ${ledgerTail(pass, l.key)}\`. Read each saved image back and re-shoot a blank one. Return every shot (state "default"); a route you could not reach is a \`problems\` line naming why.`
+    return head + `For each route: open it in the ${l.sim} simulator through its deep link${prep.scheme ? ` (scheme \`${prep.scheme}://\`)` : ''} and capture it with \`vitrinka board capture ${l.platform} --open <deep link> --route <path> --device ${l.key} ${ledgerTail(pass, l.key)}\`. Read each saved image back and re-shoot a blank one. Return every shot (state "default"); a route you could not reach is a \`problems\` line naming why.`
   }
   return head + `This lane is Mobile Safari on the iOS 26 Simulator, driven through \`vitrinka board capture safari\` (Appium XCUITest — the verb boots the simulator and the driver itself). States to capture per route: ${JSON.stringify(l.states)}. For each route and each state: \`vitrinka board capture safari --url ${prep.baseUrl}<path> --state <state> --route <path> --device ios-safari ${ledgerTail(pass, 'ios-safari').replace('<route-slug>', '<route-slug>/<state>')}\`; for state "keyboard" add \`--type "<selector of the route's first text input>"\` (skip the state on a route without one and say so in problems); the verb writes the png, adopts it and stores the measured safe-area insets in the ledger. Return every shot with its state; a route or state you could not capture is a \`problems\` line naming why.`
 }
@@ -925,7 +1004,7 @@ for (let pass = 1; pass <= cap; pass++) {
   if (end === 'clean') {
     clean = true
     openFindings = [...carried.values()]
-    log(`${ph}: clean — no new fixable findings${openFindings.length ? `; ${openFindings.length} carried from earlier passes stay open` : unwalked.length ? `; ${unwalked.length} fixed journeys never walked again` : ' — loop converged'}`)
+    log(`${ph}: clean — no new fixable findings${openFindings.length ? `; ${openFindings.length} carried from earlier passes stay open` : unwalked.length ? `; ${unwalked.length} fixed journeys never walked again` : gateRed ? '; a pass gate stayed red, so the run did not converge' : ' — loop converged'}`)
     break
   }
   if (end === 'rewalk') {
@@ -962,7 +1041,7 @@ for (let pass = 1; pass <= cap; pass++) {
   log(`${ph}: ${fixedKeys.size} fixed, ${skipped.length} skipped (${offScopeFindings.length} off-scope), ${touchedFiles.length} files, ${touchedRoutes.length} routes touched`)
 
   const gate = await agent(withPreamble(
-    `Gate the fixes of pass ${pass}: run the repo's type/build/test gates from CLAUDE.md (the strict TS gate, the Go build, the unit suites; the e2e suite only for the specs covering ${JSON.stringify(touchedRoutes)}) where CLAUDE.md says they run (the run target is ${prep.where}). A failure caused by this pass's commits (${JSON.stringify(fixResults.flatMap(r => r.commits || []))}) you repair in place and commit, then return repaired true and touchedFiles: every file your repair commits changed; a failure that predates them is reported, not fixed.${prep.baseUrl ? ` Restart the app if the fixes need it and confirm ${prep.baseUrl} answers.` : ''} Return green, what ran, and failures.`
+    `Gate the fixes of pass ${pass}: run the repo's type/build/test gates from CLAUDE.md (the strict TS gate, the Go build, the unit suites; the e2e suite only for the specs covering ${JSON.stringify(touchedRoutes)}) where CLAUDE.md says they run (the run target is ${prep.where}). A failure caused by this pass's commits (${JSON.stringify(fixResults.flatMap(r => r.commits || []))}) you repair in place and commit, then return repaired true and touchedFiles: every file your repair commits changed; a failure that predates them is reported, not fixed.${prep.baseUrl ? ` Restart the app if the fixes need it and confirm ${prep.baseUrl} answers.` : ''}${sims ? ` Keep the dev server serving the native app on ${sims}; rebuild and reinstall it when the fixes changed native code or app config.` : ''} Return green, what ran, and failures.`
   ), { label: 'gate', phase: ph, schema: GATE_SCHEMA })
   // A red gate is a fact of the RUN, not of one pass: a later green gate
   // covers a different e2e subset (touched routes), so it never clears it.
@@ -1026,7 +1105,7 @@ log(`test: run door — ${report ? `${report.lanes.filter(l => l.published).leng
 // guessed "already a draft" skips the call — with the state read before and
 // after. No PR named: the branch's own, when it has one.
 const setPrState = (pr, want, why, label) => agent(withPreamble(
-  `${pr ? `Pull request ${pr}` : "This branch's open pull request (`gh pr view` with no argument — when there is none, return url \"\" and change nothing)"}: read its url and draft state as url and wasDraft (\`gh pr view${pr ? ` ${pr}` : ''} --json url,isDraft\`), then ` +
+  `${pr ? `Pull request ${pr}` : "This branch's open pull request (`gh pr view` with no argument — when it answers there is none, exiting 1 with \"no pull requests found\", that is the answer, not a failed call: return url \"\" and none true and change nothing; any other failure is url \"\" with why, never none)"}: read its url and draft state as url and wasDraft (\`gh pr view${pr ? ` ${pr}` : ''} --json url,isDraft\`), then ` +
   (want === 'ready'
     ? `mark it ready for review (\`gh pr ready <url>\`) — the device run earned it (${passes.length} pass(es), nothing open, every route on every lane passed) and the code loop reviewed the diff.`
     : `convert it to a draft (\`gh pr ready <url> --undo\`; a draft stays one) — this device run did not earn ready for review: ${why.join('; ')}.`) +
@@ -1038,16 +1117,19 @@ const setPrState = (pr, want, why, label) => agent(withPreamble(
 // run door filed the record, and the code loop reviewed the diff without
 // moving the branch past the record (its commits postdate every capture).
 // Anything less ends a draft — a PR ready for review goes back to draft — and
-// the hand-back says why. A record that already fails the run does so NOW,
-// before code-loop's prm pushes to a PR that could merge on that push; a draft
-// it cannot prove holds that push (codeLoopPushHold).
+// the hand-back says why. Nothing is earned before the code loop — a failing
+// record already fails the run, and a clean one still awaits the code
+// review — so every fix run returns the PR to draft NOW, before code-loop's
+// prm pushes to a PR that could merge on that push; a draft it cannot prove,
+// or a branch PR it cannot prove absent, holds that push (codeLoopPushHold).
 const laneKeys = lanes.map(l => l.key)
 const recordWhy = recordReasons({ fixes, open: openFindings, lanes: laneKeys, report, gateRed, routeCases, unwalked })
-const early = fixes && recordWhy.length ? await setPrState(A.pr || '', 'draft', recordWhy, 'pr-draft:record') : null
+const earlyWhy = recordWhy.length ? recordWhy : ['the code loop has not reviewed the diff yet']
+const early = fixes ? await setPrState(A.pr || '', 'draft', earlyWhy, 'pr-draft:early') : null
 const earlyOut = early && early.url ? prOutcome('draft', early) : null
-if (earlyOut) log(`test: the device record fails the run — ${early.url} ${earlyOut.draft ? `is a draft${earlyOut.demoted ? ' again' : ''}` : `could stay ready (${earlyOut.problem})`} before the code loop`)
-// A failing record never pushes to a PR it could not prove a draft.
-const pushHold = fixes ? codeLoopPushHold(recordWhy, early, A.pr || '') : ''
+if (earlyOut) log(`test: ${recordWhy.length ? 'the device record fails the run' : 'the device record is clean, the code review is still ahead'} — ${early.url} ${earlyOut.draft ? `is a draft${earlyOut.demoted ? ' again' : ''}` : `could stay ready (${earlyOut.problem})`} before the code loop`)
+// No fix run pushes where it could not prove the PR a draft or absent.
+const pushHold = fixes ? codeLoopPushHold(early, A.pr || '') : ''
 if (pushHold) log(`test: the code loop runs without its PR phase — ${pushHold}; its commits stay local`)
 
 let code = null
@@ -1079,7 +1161,7 @@ const prOut = !fixes || !prUrl ? { ready: false, draft: false, demoted: false, p
 const ready = prOut.ready
 const demoted = prOut.demoted || !!(earlyOut && earlyOut.demoted && prOut.draft)
 const prProblem = prOut.problem
-const converged = clean && openFindings.length === 0 && unwalked.length === 0
+const converged = convergedAfter({ clean, open: openFindings, unwalked, gateRed })
 
 const handback = await agent(withPreamble(
   `Hand task ${task} back through the vitrinka handoff skill (Skill tool: vitrinka:handoff). Facts, one per line, for the summary:\n` +
@@ -1096,7 +1178,7 @@ const handback = await agent(withPreamble(
     codeLoop: code ? { rounds: code.rounds, remaining: code.remaining.length, ...(pushHold ? { unposted: code.remaining } : {}) } : null,
     pr: prUrl, ready, notReady, demoted, prProblem, pushHeld: pushHold,
   }) +
-  `\nThe run board url goes first, bare on its own line.${demoted ? ' The PR was returned to draft: say so, with the notReady reasons.' : ''}${fixes && !recordWhy.length && notReady.length ? ' The device record itself was clean: say the PR stays a draft only because of the code loop (notReady), not a device defect.' : ''}${prProblem ? ' The PR is not in the state the run earned (prProblem): say so.' : ''}${pushHold ? ' The code loop pushed nothing (pushHeld): the device record fails the run and the PR could not be proven a draft first, so its commits are local only and its remaining findings (codeLoop.unposted) reached no PR comment — say so, and carry those findings in full.' : ''} Open findings are already bugs on the qa task — never spot them as children. Next steps hold only what is the human's: ${ready ? 'the merge' : !fixes ? `the PR, which a ${thoroughness} run leaves as it was` : prUrl ? 'marking the PR ready and the merge' : 'opening or readying the PR'}${pushHold ? ", pushing the code loop's local commits once the PR is a draft" : ''}${openFindings.length ? ', the open findings on the lane boards' : ''}. Return the rendered hand-back block verbatim.`
+  `\nThe run board url goes first, bare on its own line.${demoted ? ' The PR was returned to draft: say so, with the notReady reasons.' : ''}${fixes && !recordWhy.length && notReady.length ? ' The device record itself was clean: say the PR stays a draft only because of the code loop (notReady), not a device defect.' : ''}${prProblem ? ' The PR is not in the state the run earned (prProblem): say so.' : ''}${pushHold ? ' The code loop pushed nothing (pushHeld): the PR could not be proven a draft (or absent) before the code loop, so its commits are local only and its remaining findings (codeLoop.unposted) reached no PR comment — say so, and carry those findings in full.' : ''} Open findings are already bugs on the qa task — never spot them as children. Next steps hold only what is the human's: ${ready ? 'the merge' : !fixes ? `the PR, which a ${thoroughness} run leaves as it was` : prUrl ? 'marking the PR ready and the merge' : 'opening or readying the PR'}${pushHold ? ", pushing the code loop's local commits once the PR is a draft" : ''}${openFindings.length ? ', the open findings on the lane boards' : ''}. Return the rendered hand-back block verbatim.`
 ), { label: 'handback', phase: 'Report' })
 
 return {

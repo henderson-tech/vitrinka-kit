@@ -259,7 +259,7 @@ try {
     projectType: terrain ? terrain.projectType : undefined,
     task: A.task, project: A.project, cap: A.cap || 3, severity: A.severity || 'minor', matrix: A.matrix, scope: plan.scope,
   })
-  log(`build-idea: review loop ${loop.converged ? 'converged' : `stopped with ${loop.open.length} open`} after ${loop.passes.length} pass(es) → ${loop.boardUrl}`)
+  log(`build-idea: review loop ${loop.converged ? 'converged' : `stopped with ${loop.open.length} open${loop.gateRed ? ' and a red gate' : ''}`} after ${loop.passes.length} pass(es) → ${loop.boardUrl}`)
 } catch (e) {
   loop.error = (e && e.message) || String(e)
   log(`build-idea: review loop failed (${loop.error}) — the UI is UNVERIFIED; continuing to the code loop so the hand-back says so`)
