@@ -42,7 +42,7 @@ says so):
    reviewer per lane, findings staged on the board) · `fix` (plus accept ≥
    threshold, fixers, gate, reshoot, up to `cap` passes; recommended).
 4. **Loop bounds** (with `fix`) — `cap` 1–6 (default 2) and `severity`
-   threshold `minor | major | critical` (default `major`).
+   threshold `minor | major | blocker` (default `major`).
 
 ## Step 2 — launch
 
@@ -73,11 +73,20 @@ or the terrain when known; the flow inventories inline otherwise.
   fixed.
 - **The task engine**: one runner manifest per lane reaches
   `POST /tasks/{id}/run`, so the run's qa task lists the lanes and every
-  accepted finding is a bug task under the epic, linked to its lane. Open
-  findings stay on the board; the hand-back never spots them as children.
-- **The PR**: after a `fix` run the core `vitrinka:code-loop` reviews the
-  final diff and the draft PR is marked ready; `shots` and `review` runs
-  leave it as it was.
+  finding the run leaves open is a bug task under the epic, linked to its
+  lane — with `fix` an accepted one it did not fix, with `review` every
+  defect filed, at any severity (suggestions stay staged). A route passes
+  only where its lane captured it and a reviewer judged it after the last
+  fix; anything else is a skip naming why. Open findings stay on the
+  board; the hand-back never spots them as children.
+- **The PR**: after every `fix` run the core `vitrinka:code-loop` reviews
+  the final diff; the draft is marked ready only when no finding is open,
+  every route on every lane earned a pass (a last-pass fix the cap left
+  unreshot keeps the draft), every gate ended green, the code loop left
+  nothing for the human, and the PR head is still the commit the record was
+  filed at (a code-loop fix or prm push after it was never reshot) —
+  otherwise the hand-back says why. `shots` and `review` runs leave it as it
+  was.
 
 ## Contracts
 

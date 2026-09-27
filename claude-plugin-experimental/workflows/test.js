@@ -114,10 +114,12 @@ const FINDINGS_SCHEMA = {
     lane: { type: 'string' },
     findings: { type: 'array', items: FINDING },
     regressions: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, key: { type: 'string' }, fixed: { type: 'boolean' }, note: { type: 'string' } }, required: ['key', 'fixed'] } },
-    screensRead: { type: 'integer' },
+    // The card id of every card whose pixels the reviewer read: the evidence
+    // laneJudged checks against the lane's published cards.
+    screensRead: { type: 'array', items: { type: 'integer' } },
     boardUrl: { type: 'string' },
   },
-  required: ['findings'],
+  required: ['findings', 'screensRead'],
 }
 
 const SHOOT_SCHEMA = {
@@ -160,6 +162,7 @@ const GATE_SCHEMA = {
     ran: { type: 'array', items: { type: 'string' } },
     failures: { type: 'array', items: { type: 'string' } },
     repaired: { type: 'boolean' },
+    touchedFiles: { type: 'array', items: { type: 'string' }, description: 'every file a repair commit changed' },
   },
   required: ['green', 'ran'],
 }
@@ -226,6 +229,23 @@ const RUNDOOR_SCHEMA = {
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['lanes', 'bugs'],
+}
+
+// The commit the record is filed at, read once after every pass committed.
+const HEAD_SCHEMA = {
+  type: 'object',
+  properties: { head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' } },
+  required: ['head'],
+}
+
+// Where the branch stands after the code loop, compared with the record's sha.
+const HEADS_SCHEMA = {
+  type: 'object',
+  properties: {
+    head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' },
+    prHead: { type: 'string', description: "the full sha of the pull request's head commit" },
+  },
+  required: ['head', 'prHead'],
 }
 // ---- lib/matrix.js — device matrix, review checklist and the iOS 26 checks
 // A repo overrides the defaults in `.claude/vitrinka-workflows.json`
@@ -342,6 +362,197 @@ function autoAcceptable(findings, threshold) {
   return findings.filter(f => f.kind === 'finding' && (SEVERITY_RANK[f.severity] || 0) >= min)
 }
 
+// The pass cap a run asked for: absent is 2, a number or numeric string is
+// clamped to 1-6. Anything else (true, [], '', 'two') is null — the type is
+// checked before any coercion, because Number(true) and Number([]) are
+// finite and would pass as a cap nobody asked for.
+function parseCap(raw) {
+  if (raw === undefined || raw === null) return 2
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
+  return Number.isFinite(n) ? Math.max(1, Math.min(6, Math.floor(n))) : null
+}
+
+// How a pass ends once its fix list is known. A pass is shoot → review →
+// accept → fix → gate, the final one included: `cap` bounds the passes, so
+// the last pass still fixes what it accepted and only the reshoot that would
+// verify it is dropped. 'clean' — nothing left to fix, retried carried
+// findings included (see fixListFor); 'reshoot' — fix, gate, shoot again;
+// 'last' — fix and gate, then stop.
+function passEnd(pass, cap, toFix) {
+  if (!toFix) return 'clean'
+  return pass < cap ? 'reshoot' : 'last'
+}
+
+// A pass's fix list: what it filed and accepted (new findings, functional
+// fails, regressions) plus every carried finding still open from earlier
+// passes — a skipped finding goes back to a fixer each pass until one fixes
+// it or the cap ends the run, since reviewers never refile it. A carried
+// off-scope finding (inScope false: its first fixer already had the 2-file
+// allowance) is the report's bug, never another attempt. One entry per key,
+// the fresh ones first.
+function fixListFor(fresh, carried) {
+  const byKey = new Map()
+  for (const f of [...fresh, ...carried.filter(f => f.inScope !== false)]) if (!byKey.has(f.key)) byKey.set(f.key, f)
+  return [...byKey.values()]
+}
+
+// A failed usertest case's finding key: its lane and its title (the
+// journey's), never the pass or the case's index, so a failure refiled in a
+// later pass is the carried finding — fixing it there closes that one.
+function usertestKey(title, lane) {
+  return `usertest-${slugify(lane)}-${slugify(title)}`
+}
+
+// The case a route gets on one lane where the run leaves no finding open. A
+// pass is earned, never assumed: this lane captured the route, a reviewer
+// judged that capture, and no fix landed on the route after it. Anything
+// less — unreachable, a failed shooter or publish, a shots run, a fix the
+// cap left without a reshoot — is a skip naming why.
+// captures: [{pass, lane, route, judged}] · fixed: [{pass, route}] — a fix
+// has no lane (see affectedRoutes).
+function routeVerdict(path, lane, captures, fixed) {
+  const latest = list => list.reduce((a, x) => (!a || x.pass >= a.pass ? x : a), null)
+  const shot = latest(captures.filter(x => x.lane === lane && x.route === path))
+  if (!shot) return { verdict: 'skip', why: 'never captured on this lane' }
+  if (!shot.judged) return { verdict: 'skip', why: `captured in pass ${shot.pass}, never reviewed`, pass: shot.pass }
+  const fix = latest(fixed.filter(x => x.route === path))
+  if (fix && fix.pass >= shot.pass) return { verdict: 'skip', why: `fixed in pass ${fix.pass} after its last capture, never reshot`, pass: shot.pass }
+  return { verdict: 'pass', pass: shot.pass }
+}
+
+// Whether a lane's reviewer judged its capture: it returned the card ids it
+// read, and they cover every card the lane published this pass with a route
+// on it — the cards that count as captures; a route-less card (a section
+// summary) has no screen to judge. A reply alone — {findings: []} with
+// nothing read — proves no card was looked at, so the lane's routes stay
+// unjudged (a skip, never a pass).
+function laneJudged(review, cards) {
+  if (!review || !Array.isArray(review.screensRead)) return false
+  const read = new Set(review.screensRead)
+  return cards.filter(c => c.route).every(c => read.has(c.cardId))
+}
+
+// The routes a pass's fixes may have changed, on EVERY lane — a fix edits
+// code every lane renders. The routes they name (the fixed findings' own and
+// the fixers' touched ones, sub-routes included) together with the routes
+// whose implementing file they touched — a named route never hides a file
+// edit elsewhere. A change nobody can place is verified everywhere: a touched
+// file no route implements (a shared header, a route with no `file`) and a
+// change that places nowhere reach every route. Nothing touched changes
+// nothing. The next pass reshoots these, and each stays unverified until a
+// capture is judged.
+function affectedRoutes(allRoutes, paths, files) {
+  const named = paths.filter(Boolean)
+  const rel = f => String(f).replace(/^\.\//, '')
+  const touched = files.filter(Boolean).map(rel)
+  if (!named.length && !touched.length) return []
+  // The terrain's file is repo-relative; a fixer may report it absolute.
+  const implementsFile = (r, f) => !!r.file && (f === rel(r.file) || f.endsWith('/' + rel(r.file)))
+  if (touched.some(f => !allRoutes.some(r => implementsFile(r, f)))) return allRoutes.map(r => r.path)
+  const hit = allRoutes.filter(r => named.some(p => r.path === p || r.path.startsWith(p)) || touched.some(f => implementsFile(r, f)))
+  return (hit.length ? hit : allRoutes).map(r => r.path)
+}
+
+// The files a pass gate's repair commits changed — like the fixers' edits,
+// they postdate the pass's captures. [] when it repaired nothing; null when
+// it repaired without naming them: a change nobody can place.
+function gateRepairFiles(gate) {
+  if (!gate || !gate.repaired) return []
+  const files = (gate.touchedFiles || []).filter(Boolean)
+  return files.length ? files : null
+}
+
+// The keys a pass fixed where nobody can place the change: the finding has
+// no route of its own (a functional failure's is '', an unknown key has
+// none) and the fixer that reported it named no touched route and no
+// touched file. Its commit still postdates every capture — empty metadata is
+// no proof nothing changed — so, like a gate repair naming no files, it
+// unverifies every route (affectedRoutes' "a change nobody can place").
+function unplacedFixes(fixResults, fixList) {
+  const routeOf = k => (fixList.find(f => f.key === k) || {}).route
+  return fixResults
+    .filter(r => !(r.touchedRoutes || []).some(Boolean) && !(r.touchedFiles || []).some(Boolean))
+    .flatMap(r => (r.fixed || []).filter(k => !routeOf(k)))
+}
+
+// What a run that fixes nothing leaves open: every defect it filed, at any
+// severity — the threshold is a fix decision and a review-only run makes
+// none — and every usertest case that failed (`functional`: the usertest
+// stage files each through `finish --bugs direct`). Suggestions are taste,
+// never bugs: they stay staged on the board.
+function openWithoutFixing(filed, functional) {
+  return [...filed.filter(f => f.kind === 'finding'), ...functional]
+}
+
+// Why a run's draft PR stays a draft; empty means the run earned "ready".
+// Every fix run ends in the code loop's review of the final diff — a run
+// whose passes fixed nothing still carries the whole branch diff, and
+// nothing before the device pass reviewed it. Returning is not enough: the
+// loop must leave nothing for the human and end on a green gate (each round
+// gates the same suites, so its LAST round is the branch's state). `lanes`
+// are the run's lane keys: a lane the receipt leaves out was not published.
+// A published lane is not a judged one: every route case the record files
+// must be a pass (routeVerdict) — a lane nobody captured or reviewed, and a
+// fix the cap left without a reshoot, keep the draft. The code loop runs
+// after the record, so anything it commits — a review fix, a gate repair, a
+// push from prm's first round — postdates every capture and names no files
+// to place it: a change nobody can place unverifies every route
+// (affectedRoutes). So the PR head and the checkout's HEAD must still be the
+// commit the record was filed at (`recordSha`, `heads`).
+function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases, recordSha, heads }) {
+  const why = []
+  if (!fixes) why.push('thoroughness is not "fix"')
+  if (open.length) why.push(`${open.length} findings open`)
+  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
+  for (const k of lanes) {
+    const cases = routeCases[k] || []
+    const unearned = cases.filter(c => c.verdict !== 'pass').length
+    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
+  }
+  if (fixes) {
+    const last = code && code.rounds.length ? code.rounds[code.rounds.length - 1] : null
+    if (!last) why.push('the code loop did not review the diff')
+    else {
+      if (code.remaining.length) why.push(`${code.remaining.length} code-review findings left for the human`)
+      if (!last.green) why.push("the code loop's last gate is red")
+      const same = (a, b) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a))
+      if (!recordSha || !heads || !heads.head || !heads.prHead) why.push('the PR head could not be compared with the device record')
+      else {
+        const moved = [heads.prHead, heads.head].find(s => !same(s, recordSha))
+        if (moved) why.push(`the branch moved after the device record (${recordSha.slice(0, 9)} → ${moved.slice(0, 9)}) — no device pass verified the change`)
+      }
+    }
+  }
+  if (gateRed) why.push('a pass gate stayed red')
+  return why
+}
+
+// Each lane manifest's stamp, keyed by lane: the ONE head the record is filed
+// at — read after every pass fixer and gate repair committed, and the same
+// sha readiness compares (notReadyReasons' `recordSha`) — names both the
+// manifest's `sha` and its `runId`, which fits the run door's
+// ^[A-Za-z0-9._-]{1,64}$ whatever the run is called. `run` is the slug of
+// the run board this invocation minted: the door replaces the cards a
+// previous publish of the same runId left, so a second run on an unchanged
+// commit must never reuse the first one's ids.
+function manifestStamps(run, head, lanes) {
+  return Object.fromEntries(lanes.map(lane => {
+    const tail = `-${head.slice(0, 9)}-${boundedSlug(lane, 32)}`
+    return [lane, { runId: boundedSlug(run, 64 - tail.length) + tail, sha: head }]
+  }))
+}
+
+// A runId part of at most `max` chars: a longer slug keeps its head plus a
+// hash of the whole, so two run boards or custom lanes sharing a long prefix
+// still get distinct runIds.
+function boundedSlug(s, max) {
+  const slug = slugify(s)
+  if (slug.length <= max) return slug
+  let h = 0x811c9dc5
+  for (const c of slug) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0
+  return `${slug.slice(0, max - 9)}-${h.toString(16).padStart(8, '0')}`
+}
+
 // Group findings by area into at most `max` disjoint fix lists. A finding
 // whose files also appear in another area is `shared` and runs first, so
 // the parallel fixers never edit the same file.
@@ -400,7 +611,9 @@ const thoroughness = A.thoroughness || 'fix'
 if (THOROUGHNESS.indexOf(thoroughness) < 0) throw new Error(`test: args.thoroughness must be one of ${THOROUGHNESS.join(' | ')}, got ${JSON.stringify(A.thoroughness)}`)
 const reviews = thoroughness !== 'shots'
 const fixes = thoroughness === 'fix'
-const cap = fixes ? Math.max(1, Math.min(6, A.cap || 2)) : 1
+const capAsked = parseCap(A.cap)
+if (capAsked === null) throw new Error(`test: args.cap must be a number of passes 1-6, got ${JSON.stringify(A.cap)}`)
+const cap = fixes ? capAsked : 1
 const threshold = A.severity || 'major'
 if (!SEVERITY_RANK[threshold]) throw new Error(`test: args.severity must be blocker | major | minor, got ${JSON.stringify(A.severity)}`)
 
@@ -478,13 +691,24 @@ let regressList = []
 const passes = []
 let openFindings = []
 // carried: every accepted finding not yet fixed, by key, ACROSS passes — a
-// skipped or off-scope finding stays open until a later pass fixes it; a
-// clean later pass never forgets it.
+// skipped finding rides every later pass's fix list (fixListFor) until one
+// fixes it, an off-scope one stays open for the report; a clean later pass
+// never forgets either.
 const carried = new Map()
 let offScopeFindings = []
-let fixedAny = false
+// Fixed in the pass the cap ended: gated, but no reshoot confirmed them — the
+// routes they touched earn no pass, so the draft stays a draft.
+let unverified = []
+let clean = false
 let gateRed = false
 let lastPub = {}
+// What the run actually judged, for the report's per-route verdicts: every
+// route a lane published per pass (judged when that lane's reviewer
+// returned), every route a pass's fixes may have changed (on every lane),
+// and the shooters' problems.
+const captures = []
+const fixedLog = []
+const problems = {}
 
 for (let pass = 1; pass <= cap; pass++) {
   const ph = `Pass ${pass}`
@@ -495,7 +719,7 @@ for (let pass = 1; pass <= cap; pass++) {
   const tester = () => agent(withPreamble(
     `Exploratory usertest, pass ${pass}${prep.baseUrl ? ` against ${prep.baseUrl}` : ''} on ${utLane.label}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
-    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start --task ${task} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey; a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
+    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start --task ${task} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: ph, schema: USERTEST_SCHEMA })
 
   const results = (await parallel(reviews && journeys.length ? [...shooters, tester] : shooters)).filter(Boolean)
@@ -519,10 +743,13 @@ for (let pass = 1; pass <= cap; pass++) {
 
   let filed = []
   let regressions = []
+  const judgedLanes = new Set()
   if (reviews) {
     const reviewers = lanes.map(l => () => {
       const p = pubs.find(x => x.boardSlug === laneBoard(l.key).slug)
       if (!p) return Promise.resolve(null)
+      // Accepted in an earlier pass and not fixed: filed once, one bug each.
+      const stillOpen = [...carried.values()].filter(f => f.lane === l.key && f.route)
       return agent(withPreamble(
         `Local review (you are the reviewer, no server-side judge) of pass ${pass}, lane ${l.label}, on board ${p.boardSlug} (${p.boardUrl}).\n` +
         `Cards in scope: ${JSON.stringify(p.cards)}.\n` +
@@ -531,41 +758,64 @@ for (let pass = 1; pass <= cap; pass++) {
         (A.scope || (A.scopeFiles && A.scopeFiles.length) ? `Feature scope: ${A.scope || ''}${A.scopeFiles && A.scopeFiles.length ? ` — files ${JSON.stringify(A.scopeFiles)}` : ''}. Mark each finding inScope true when its fix lives in that scope, false otherwise (off-scope defects are still filed — they become bugs, not fixes).\n` : '') +
         `Read every card's pixels with get_card_image before filing anything (cross-cutting problems show only across the set). File ONE \`annotate {board, agent: "claude-code", items: [...]}\` batch: each item keyed \`p${pass}-${l.key}-<n>\`, region measured on the source pixels, category = the rule id, severity blocker|major|minor, and detail naming the implementing files and what correct looks like. Sort defects as kind "finding" and taste as "suggestion".\n` +
         (regressList.length ? `Regression check — these findings were fixed last pass; for each, look at the same route in this lane and report fixed true/false with a note:\n${JSON.stringify(regressList.filter(f => f.lane === l.key).map(f => ({ key: f.key, id: f.id, route: f.route, summary: f.summary })))}\n` : '') +
-        `Return every finding with its annotation id from the receipt, its route, lane "${l.key}", state, an \`area\` (the component or route the fix lives in), inScope and the files it names.`
+        (stillOpen.length ? `Already filed and still open on this lane (accepted earlier, not fixed) — never file these again, under any key; file only defects not on this list:\n${JSON.stringify(stillOpen.map(f => ({ key: f.key, id: f.id, route: f.route, summary: f.summary })))}\n` : '') +
+        `Return every finding with its annotation id from the receipt, its route, lane "${l.key}", state, an \`area\` (the component or route the fix lives in), inScope and the files it names; and \`screensRead\`: the card id of every card whose pixels you read — a card left out is a route you did not judge.`
       ), { label: `review:${l.key}`, phase: ph, schema: FINDINGS_SCHEMA })
     })
-    const revs = (await parallel(reviewers)).filter(Boolean)
+    const byLane = await parallel(reviewers)
+    // A lane is judged only when its reviewer read every card it published.
+    byLane.forEach((r, i) => {
+      const k = lanes[i].key
+      const p = pubs.find(x => x.boardSlug === laneBoard(k).slug)
+      if (!p) return
+      if (laneJudged(r, p.cards)) judgedLanes.add(k)
+      else if (r) { const shots = p.cards.filter(c => c.route); log(`${ph}: lane ${k} reviewer read ${shots.filter(c => (r.screensRead || []).includes(c.cardId)).length} of ${shots.length} shot cards — its routes stay unjudged`) }
+    })
+    // A finding belongs to the lane whose reviewer filed it, whatever lane it echoes.
+    const revs = byLane.map((r, i) => r && { ...r, findings: r.findings.map(f => ({ ...f, lane: lanes[i].key })) }).filter(Boolean)
     const seen = new Set()
     filed = revs.flatMap(r => r.findings).filter(f => { const k = key(f); if (seen.has(k)) return false; seen.add(k); return true })
     regressions = revs.flatMap(r => r.regressions || [])
   }
+  for (const l of lanes) {
+    const set = shots.find(s => s.lane === l.key)
+    if (set && set.problems && set.problems.length) problems[l.key] = uniq([...(problems[l.key] || []), ...set.problems.map(p => `pass ${pass}: ${p}`)])
+    // A route is captured on a lane when its card reached the lane's board —
+    // those cards are all the reviewer is shown, never the shooter's list.
+    const pub = pubs.find(p => p.boardSlug === laneBoard(l.key).slug)
+    if (!pub) continue
+    for (const route of uniq(pub.cards.map(c => c.route))) captures.push({ pass, lane: l.key, route, judged: judgedLanes.has(l.key) })
+  }
   const regressed = regressList.filter(f => regressions.some(r => r.key === f.key && r.fixed === false))
-  const functional = ut.cases.filter(c => c.verdict === 'fail').map((c, i) => ({
-    key: `p${pass}-usertest-${i + 1}`, route: '', lane: c.lane || utLane.key, area: (c.files && c.files[0]) || 'functional',
+  const functional = ut.cases.filter(c => c.verdict === 'fail').map(c => ({
+    key: usertestKey(c.title, c.lane || utLane.key), route: '', lane: c.lane || utLane.key, area: (c.files && c.files[0]) || 'functional',
     kind: 'finding', severity: 'major', rule: 'functional', summary: `${c.title}: ${c.note || 'failed'}`, files: c.files || [], inScope: true,
   }))
-  const accepted = autoAcceptable(filed, threshold)
-  const fixList = [...accepted, ...functional, ...regressed]
+  const accepted = fixes ? autoAcceptable(filed, threshold) : []
+  const fixList = fixListFor([...accepted, ...functional, ...regressed], [...carried.values()])
   const parked = filed.length - accepted.length
   passes.push({ pass, shots: shotCount, filed: filed.length, functionalFails: functional.length, regressed: regressed.length, toFix: fixes ? fixList.length : 0, parked })
-  log(`${ph}: ${shotCount} shots, ${filed.length} findings filed (${parked} left staged for the human), ${functional.length} functional fails, ${regressed.length} regressions`)
+  log(`${ph}: ${shotCount} shots, ${filed.length} findings filed (${parked} left staged for the human), ${functional.length} functional fails, ${regressed.length} regressions, ${carried.size} carried open`)
 
   // Overview tab: one summary row per lane on the run board itself.
   await agent(withPreamble(
     `Update the Overview of run board ${board.boardSlug} (${board.boardUrl}) for pass ${pass}: section "Pass ${pass}" holding one summary card per lane in this order ${JSON.stringify(lanes.map(l => l.key))} — lane label, shot count, findings filed, accepted, functional fails — each with a portal card (kind "board") to that lane's board (${JSON.stringify(board.lanes)}), plus one verdict card for the pass (${fixes ? 'fixing ' + fixList.length : reviews ? filed.length + ' findings for the human' : 'shots only'}). Earlier pass sections stay untouched. Return the board url.`
   ), { label: 'overview', phase: ph, agentType: 'vitrinka:vitrinka-publisher', effort: 'low' })
 
-  if (!fixes) { openFindings = accepted; offScopeFindings = accepted.filter(f => f.inScope === false); break }
+  if (!fixes) { openFindings = openWithoutFixing(filed, functional); offScopeFindings = openFindings.filter(f => f.inScope === false); break }
   for (const f of fixList) if (!carried.has(f.key)) carried.set(f.key, f)
-  if (!fixList.length) {
+  const end = passEnd(pass, cap, fixList.length)
+  if (end === 'clean') {
+    clean = true
     openFindings = [...carried.values()]
     log(`${ph}: clean — no new fixable findings${openFindings.length ? `; ${openFindings.length} carried from earlier passes stay open` : ' — loop converged'}`)
     break
   }
-  if (pass === cap) { openFindings = [...carried.values()]; offScopeFindings = openFindings.filter(f => f.inScope === false); log(`${ph}: cap reached with ${openFindings.length} findings open — they stay on the board and reach the task engine as bugs`); break }
 
+  // Only this pass's accepted findings are still staged: the door refuses the
+  // whole batch over one carried or regressed id it accepted in an earlier pass.
   const byBoard = new Map()
-  for (const f of fixList) if (f.id) { const slug = laneBoard(f.lane || '') ? laneBoard(f.lane).slug : board.boardSlug; if (!byBoard.has(slug)) byBoard.set(slug, []); byBoard.get(slug).push(f.id) }
+  for (const f of accepted) if (f.id) { const slug = laneBoard(f.lane || '') ? laneBoard(f.lane).slug : board.boardSlug; if (!byBoard.has(slug)) byBoard.set(slug, []); byBoard.get(slug).push(f.id) }
   await parallel([...byBoard].map(([slug, ids]) => () => agent(withPreamble(
     `Accept these agent findings on board ${slug} on the user's standing instruction for this run (auto-accept ${threshold}+ defects): ids ${JSON.stringify(uniq(ids))}.\n` +
     `Door: POST /api/v1/boards/${slug}/annotations/agent-verdict with body {"action":"accept","ids":[...]} — bearer token from $VITRINKA_TOKEN or \`vitrinka auth token\`, fed through stdin as a header file, never inline in argv. Return the response status and the accepted count.`
@@ -573,7 +823,7 @@ for (let pass = 1; pass <= cap; pass++) {
 
   const { shared, groups } = groupByArea(fixList, 4)
   const fixPrompt = g => withPreamble(
-    `Fix these accepted findings from pass ${pass} of the device test run (area: ${g.area}) in this worktree, on branch ${prep.branch}${prep.baseUrl ? `, app at ${prep.baseUrl}` : ''}:\n${JSON.stringify(g.findings)}\n` +
+    `Fix these accepted findings open at pass ${pass} of the device test run (area: ${g.area}) in this worktree, on branch ${prep.branch}${prep.baseUrl ? `, app at ${prep.baseUrl}` : ''} — one filed in an earlier pass was skipped there, so try it again:\n${JSON.stringify(g.findings)}\n` +
     `Scope rule: the feature's scope is ${A.scope ? JSON.stringify(A.scope) : 'the branch\'s own changes'}${A.scopeFiles && A.scopeFiles.length ? ` (files ${JSON.stringify(A.scopeFiles)})` : ''}. A finding with inScope false may be fixed ONLY when the whole fix stays within 2 files; otherwise skip it with why "off-scope" — the report stage files it as a bug.\n` +
     `Rules: touch only the files a finding names or the component that owns the defect; other fixers are working other areas in this same checkout right now, so never reformat, rename or move shared code${g.area === 'shared' ? ' (you ARE the shared fixer — the others wait for you)' : ''}. For each finding with an annotation id: \`set_status working\` when you start, fix, then \`reply\` with the commit and \`set_status in_review\`. Commit per area with a message naming the finding keys. A finding you cannot fix without a design decision is skipped with why — never guess a redesign. Return fixed keys, skipped keys, touched routes and files, commits.`
   )
@@ -585,25 +835,36 @@ for (let pass = 1; pass <= cap; pass++) {
   const skipped = fixResults.flatMap(r => r.skipped)
   const touchedRoutes = uniq(fixResults.flatMap(r => r.touchedRoutes))
   const touchedFiles = uniq(fixResults.flatMap(r => r.touchedFiles))
-  if (fixedKeys.size) fixedAny = true
   offScopeFindings = fixList.filter(f => !fixedKeys.has(f.key) && skipped.some(s => s.key === f.key && /off-scope/i.test(s.why || '')))
   log(`${ph}: ${fixedKeys.size} fixed, ${skipped.length} skipped (${offScopeFindings.length} off-scope), ${touchedFiles.length} files, ${touchedRoutes.length} routes touched`)
 
   const gate = await agent(withPreamble(
-    `Gate the fixes of pass ${pass}: run the repo's type/build/test gates from CLAUDE.md (the strict TS gate, the Go build, the unit suites; the e2e suite only for the specs covering ${JSON.stringify(touchedRoutes)}) where CLAUDE.md says they run (the run target is ${prep.where}). A failure caused by this pass's commits (${JSON.stringify(fixResults.flatMap(r => r.commits || []))}) you repair in place and commit; a failure that predates them is reported, not fixed.${prep.baseUrl ? ` Restart the app if the fixes need it and confirm ${prep.baseUrl} answers.` : ''} Return green, what ran, and failures.`
+    `Gate the fixes of pass ${pass}: run the repo's type/build/test gates from CLAUDE.md (the strict TS gate, the Go build, the unit suites; the e2e suite only for the specs covering ${JSON.stringify(touchedRoutes)}) where CLAUDE.md says they run (the run target is ${prep.where}). A failure caused by this pass's commits (${JSON.stringify(fixResults.flatMap(r => r.commits || []))}) you repair in place and commit, then return repaired true and touchedFiles: every file your repair commits changed; a failure that predates them is reported, not fixed.${prep.baseUrl ? ` Restart the app if the fixes need it and confirm ${prep.baseUrl} answers.` : ''} Return green, what ran, and failures.`
   ), { label: 'gate', phase: ph, schema: GATE_SCHEMA })
   // A red gate is a fact of the RUN, not of one pass: a later green gate
   // covers a different e2e subset (touched routes), so it never clears it.
   if (!gate || !gate.green) gateRed = true
-  if (!gate || !gate.green) log(`${ph}: gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}; the next pass shoots anyway so the board shows the state`)
+  if (!gate || !gate.green) log(`${ph}: gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}${end === 'last' ? '' : '; the next pass shoots anyway so the board shows the state'}`)
 
   regressList = fixList.filter(f => fixedKeys.has(f.key))
+  // The gate's repairs postdate the captures too; unnamed ones reach every route.
+  const repairFiles = gateRepairFiles(gate)
+  if (!repairFiles || repairFiles.length) log(`${ph}: the gate repaired ${repairFiles ? repairFiles.length + ' files' : 'files it did not name — every route is unverified'}`)
+  // A fix with no route whose fixer named nothing it touched is placed nowhere.
+  const unplaced = unplacedFixes(fixResults, fixList)
+  if (unplaced.length) log(`${ph}: ${unplaced.join(', ')} fixed with no route or file to place the change — every route is unverified`)
+  const changed = repairFiles && !unplaced.length ? affectedRoutes(allRoutes, [...regressList.map(f => f.route), ...touchedRoutes], [...touchedFiles, ...repairFiles]) : allRoutes.map(r => r.path)
+  for (const route of changed) fixedLog.push({ pass, route })
   for (const k of fixedKeys) carried.delete(k)
   openFindings = [...carried.values()]
   offScopeFindings = openFindings.filter(f => f.inScope === false)
+  if (end === 'last') {
+    unverified = regressList
+    log(`${ph}: cap reached — ${unverified.length} fixed with no reshoot to verify them, ${openFindings.length} findings open — they stay on the board and reach the task engine as bugs`)
+    break
+  }
   const openRoutes = uniq([...touchedRoutes, ...openFindings.map(f => f.route)])
-  routes = allRoutes.filter(r => openRoutes.some(p => p && (r.path === p || r.path.startsWith(p))))
-  if (!routes.length) routes = allRoutes.filter(r => touchedFiles.some(f => r.file && f === r.file))
+  routes = allRoutes.filter(r => changed.includes(r.path) || openRoutes.some(p => p && (r.path === p || r.path.startsWith(p))))
   if (!routes.length) routes = allRoutes
   journeys = allJourneys.filter(j => j.steps.some(s => openRoutes.some(p => p && s.includes(p))))
   if (!journeys.length) journeys = allJourneys.filter(j => ut.cases.some(c => c.verdict === 'fail' && c.title === j.title))
@@ -613,35 +874,49 @@ for (let pass = 1; pass <= cap; pass++) {
 
 phase('Report')
 const bugCandidates = uniq([...openFindings, ...offScopeFindings].map(f => f.key)).map(k => [...openFindings, ...offScopeFindings].find(f => f.key === k))
-const report = await agent(withPreamble(
+// Every route with no open finding on a lane takes the verdict its coverage
+// earned — never a pass for a route that lane did not capture and judge.
+const routeCases = Object.fromEntries(lanes.map(l => [l.key, allRoutes
+  .filter(r => !bugCandidates.some(f => f.lane === l.key && f.route === r.path))
+  .map(r => Object.assign({ route: r.path }, routeVerdict(r.path, l.key, captures, fixedLog)))]))
+const skips = Object.values(routeCases).flat().filter(c => c.verdict === 'skip').length
+log(`test: report — ${skips} route case(s) earned no pass (never captured, never reviewed or fixed without a reshoot)`)
+// The record names the commit every pass fixer and gate repair left behind —
+// prep.sha predates them — and readiness compares the branch with this same sha.
+const recorded = await agent(withPreamble(
+  'Read-only: return head, the full `git rev-parse HEAD` of this checkout. Change nothing.'
+), { label: 'record-head', phase: 'Report', effort: 'low', schema: HEAD_SCHEMA })
+const recordSha = (recorded && recorded.head) || ''
+if (!recordSha) log('test: HEAD could not be read — no record is filed at a commit nobody read')
+const report = recordSha ? await agent(withPreamble(
   `File this device test run's record through the run door, ONE runner manifest per lane (the door takes one device per manifest).\n` +
-  `Run: task ${task}, branch ${prep.branch}, sha ${prep.sha || ''}${A.pr ? `, pr ${A.pr}` : ''}, runner "vitrinka-experimental:test", app ${project || type}. Lanes: ${JSON.stringify(lanes.map(l => ({ key: l.key, label: l.label, kind: l.kind, platform: l.kind === 'ios-safari' ? 'ios' : (l.platform || 'web') })))}. Routes: ${JSON.stringify(allRoutes.map(r => r.path))}.\n` +
-  `Per lane write \`.vitrinka/test-run/<lane>.manifest.json\` in the runner-manifest shape ({version: 1, runId: "<branch>-<sha>-<lane>", runner, app, branch, sha, pr?, device: {platform, name: "<lane label>", os?}, specs: [{key: "<route path>", title: "<route title>", cases: [...]}]}): one spec per route; a case per open finding on that route in that lane (title = the finding summary, verdict "fail", error = the finding detail, shots = the finding's card image paths under ${captureRoot(passes.length, '<lane>')}) and one "pass" case for a route with no open finding. Open findings (these become bug tasks under the epic through --bugs direct, each with its shot): ${JSON.stringify(bugCandidates.map(f => ({ key: f.key, lane: f.lane, route: f.route, severity: f.severity, summary: f.summary, files: f.files, inScope: f.inScope })))}.\n` +
-  `Publish each with \`vitrinka qa run --task ${task} --results .vitrinka/test-run/<lane>.manifest.json --bugs direct --runner vitrinka-experimental:test${project ? ` --app ${project}` : ''} -- true\` (the door is POST /api/v1/tasks/${task}/run with {manifest, bugs: "direct"}). Return the qa task url the door printed, per lane whether it published, and every bug task url with its finding key.`
-), { label: 'run-door', phase: 'Report', schema: RUNDOOR_SCHEMA })
+  `Run: task ${task}, branch ${prep.branch}, sha ${recordSha}${A.pr ? `, pr ${A.pr}` : ''}, runner "vitrinka-experimental:test", app ${project || type}. Lanes: ${JSON.stringify(lanes.map(l => ({ key: l.key, label: l.label, kind: l.kind, platform: l.kind === 'ios-safari' ? 'ios' : (l.platform || 'web') })))}. Routes: ${JSON.stringify(allRoutes.map(r => r.path))}.\n` +
+  `Per lane write \`.vitrinka/test-run/<lane>.manifest.json\` in the runner-manifest shape ({version: 1, runId, runner, app, branch, sha, pr?, device: {platform, name: "<lane label>", os?}, specs: [{key: "<route path>", title: "<route title>", cases: [...]}]}), its runId and sha exactly as stamped here per lane key: ${JSON.stringify(manifestStamps(board.boardSlug, recordSha, lanes.map(l => l.key)))}; one spec per route; a case per open finding on that route in that lane (title = the finding summary, verdict "fail", error = the finding detail, shots = the finding's card image paths under ${captureRoot('<N>', '<lane>')}, N the pass its key names p<N>-…); every other route takes exactly the ONE case given here per lane — verdict "pass" (shots from ${captureRoot('<pass>', '<lane>')}) or "skip" (error = its why), never a pass this list does not give: ${JSON.stringify(routeCases)}.${Object.keys(problems).length ? ` Shooter problems per lane (quote the line naming a skipped route in its error): ${JSON.stringify(problems)}.` : ''} Open findings (these become bug tasks under the epic through --bugs direct, each with its shot): ${JSON.stringify(bugCandidates.map(f => ({ key: f.key, lane: f.lane, route: f.route, severity: f.severity, summary: f.summary, files: f.files, inScope: f.inScope })))}.\n` +
+  `Publish each with \`vitrinka qa run --task ${task} --results .vitrinka/test-run/<lane>.manifest.json --bugs direct --runner vitrinka-experimental:test${project ? ` --app ${project}` : ''} -- true\` (the door is POST /api/v1/tasks/${task}/run with {manifest, bugs: "direct"}). Return the qa task url the door printed, per lane (by its key) whether it published, and every bug task url with its finding key. Commit nothing here.`
+), { label: 'run-door', phase: 'Report', schema: RUNDOOR_SCHEMA }) : null
 log(`test: run door — ${report ? `${report.lanes.filter(l => l.published).length}/${lanes.length} lanes published, ${report.bugs.length} bugs` : 'failed'}`)
 
 let code = null
-let codeLoopFailed = false
-if (fixes && fixedAny) {
+if (fixes) {
   try {
-    code = await workflow('vitrinka:code-loop', { base: A.base || 'main', task, cap: 2, pr: A.pr })
+    // A PR the loop opens is a draft: only this run's gate below may ready it.
+    code = await workflow('vitrinka:code-loop', { base: A.base || 'main', task, cap: 2, draft: true })
     log(`test: code loop ${code.rounds.length} round(s), ${code.remaining.length} for the human, PR ${code.pr || A.pr || 'none'}`)
   } catch (e) {
-    codeLoopFailed = true
     log(`test: code loop failed (${e && e.message}) — the PR stays a draft`)
   }
 }
 const prUrl = (code && code.pr) || A.pr || ''
+// Whatever the code loop committed or prm pushed moved the head past the record.
+const heads = fixes && code && prUrl ? await agent(withPreamble(
+  `Read-only: return head, the full \`git rev-parse HEAD\` of this checkout, and prHead, the head commit of pull request ${prUrl} (\`gh pr view ${prUrl} --json headRefOid --jq .headRefOid\`). Change nothing.`
+), { label: 'heads', phase: 'Report', effort: 'low', schema: HEADS_SCHEMA }) : null
 // The PR leaves draft only when the run actually earned it: every pass gated
-// green, no finding left open, the run door filed the record, and the code
-// loop reviewed the diff. Anything less stays a draft and the hand-back says why.
-const notReady = []
-if (!fixes) notReady.push('thoroughness is not "fix"')
-if (openFindings.length) notReady.push(`${openFindings.length} findings open`)
-if (!report || report.lanes.some(l => !l.published)) notReady.push('the run door did not publish every lane')
-if (fixedAny && (!code || codeLoopFailed)) notReady.push('the code loop did not complete')
-if (gateRed) notReady.push('a pass gate stayed red')
+// green, no finding left open, every route on every lane earned a pass, the
+// run door filed the record, and the code loop reviewed the diff without
+// moving the branch past the record (its commits postdate every capture).
+// Anything less stays a draft and the hand-back says why.
+const notReady = notReadyReasons({ fixes, open: openFindings, lanes: lanes.map(l => l.key), report, code, gateRed, routeCases, recordSha, heads })
 let ready = false
 if (prUrl && !notReady.length) {
   const r = await agent(withPreamble(
@@ -657,8 +932,9 @@ const handback = await agent(withPreamble(
     lanes: board.lanes,
     thoroughness, cap, threshold,
     passes,
-    converged: fixes && openFindings.length === 0,
+    converged: clean && openFindings.length === 0,
     open: openFindings.map(f => ({ key: f.key, lane: f.lane, summary: f.summary })),
+    unverified: unverified.map(f => ({ key: f.key, lane: f.lane, summary: f.summary })),
     qaTask: report && report.qaTaskUrl,
     bugs: report && report.bugs,
     codeLoop: code ? { rounds: code.rounds, remaining: code.remaining.length } : null,
@@ -673,8 +949,9 @@ return {
   branch: prep.branch,
   task,
   passes,
-  converged: fixes && openFindings.length === 0,
+  converged: clean && openFindings.length === 0,
   open: openFindings.map(f => ({ key: f.key, id: f.id, lane: f.lane, summary: f.summary })),
+  unverified: unverified.map(f => ({ key: f.key, id: f.id, lane: f.lane, summary: f.summary })),
   qaTask: report && report.qaTaskUrl,
   bugs: report ? report.bugs : [],
   pr: prUrl,

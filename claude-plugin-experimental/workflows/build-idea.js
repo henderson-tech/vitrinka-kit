@@ -113,10 +113,12 @@ const FINDINGS_SCHEMA = {
     lane: { type: 'string' },
     findings: { type: 'array', items: FINDING },
     regressions: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, key: { type: 'string' }, fixed: { type: 'boolean' }, note: { type: 'string' } }, required: ['key', 'fixed'] } },
-    screensRead: { type: 'integer' },
+    // The card id of every card whose pixels the reviewer read: the evidence
+    // laneJudged checks against the lane's published cards.
+    screensRead: { type: 'array', items: { type: 'integer' } },
     boardUrl: { type: 'string' },
   },
-  required: ['findings'],
+  required: ['findings', 'screensRead'],
 }
 
 const SHOOT_SCHEMA = {
@@ -159,6 +161,7 @@ const GATE_SCHEMA = {
     ran: { type: 'array', items: { type: 'string' } },
     failures: { type: 'array', items: { type: 'string' } },
     repaired: { type: 'boolean' },
+    touchedFiles: { type: 'array', items: { type: 'string' }, description: 'every file a repair commit changed' },
   },
   required: ['green', 'ran'],
 }
@@ -226,6 +229,23 @@ const RUNDOOR_SCHEMA = {
   },
   required: ['lanes', 'bugs'],
 }
+
+// The commit the record is filed at, read once after every pass committed.
+const HEAD_SCHEMA = {
+  type: 'object',
+  properties: { head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' } },
+  required: ['head'],
+}
+
+// Where the branch stands after the code loop, compared with the record's sha.
+const HEADS_SCHEMA = {
+  type: 'object',
+  properties: {
+    head: { type: 'string', description: 'the full `git rev-parse HEAD` of this checkout' },
+    prHead: { type: 'string', description: "the full sha of the pull request's head commit" },
+  },
+  required: ['head', 'prHead'],
+}
 // ---- lib/helpers.js — plain-code helpers shared by the Exp flows (no agents here)
 const SEVERITY_RANK = { blocker: 3, major: 2, minor: 1 }
 
@@ -234,6 +254,197 @@ const SEVERITY_RANK = { blocker: 3, major: 2, minor: 1 }
 function autoAcceptable(findings, threshold) {
   const min = SEVERITY_RANK[threshold] || SEVERITY_RANK.minor
   return findings.filter(f => f.kind === 'finding' && (SEVERITY_RANK[f.severity] || 0) >= min)
+}
+
+// The pass cap a run asked for: absent is 2, a number or numeric string is
+// clamped to 1-6. Anything else (true, [], '', 'two') is null — the type is
+// checked before any coercion, because Number(true) and Number([]) are
+// finite and would pass as a cap nobody asked for.
+function parseCap(raw) {
+  if (raw === undefined || raw === null) return 2
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
+  return Number.isFinite(n) ? Math.max(1, Math.min(6, Math.floor(n))) : null
+}
+
+// How a pass ends once its fix list is known. A pass is shoot → review →
+// accept → fix → gate, the final one included: `cap` bounds the passes, so
+// the last pass still fixes what it accepted and only the reshoot that would
+// verify it is dropped. 'clean' — nothing left to fix, retried carried
+// findings included (see fixListFor); 'reshoot' — fix, gate, shoot again;
+// 'last' — fix and gate, then stop.
+function passEnd(pass, cap, toFix) {
+  if (!toFix) return 'clean'
+  return pass < cap ? 'reshoot' : 'last'
+}
+
+// A pass's fix list: what it filed and accepted (new findings, functional
+// fails, regressions) plus every carried finding still open from earlier
+// passes — a skipped finding goes back to a fixer each pass until one fixes
+// it or the cap ends the run, since reviewers never refile it. A carried
+// off-scope finding (inScope false: its first fixer already had the 2-file
+// allowance) is the report's bug, never another attempt. One entry per key,
+// the fresh ones first.
+function fixListFor(fresh, carried) {
+  const byKey = new Map()
+  for (const f of [...fresh, ...carried.filter(f => f.inScope !== false)]) if (!byKey.has(f.key)) byKey.set(f.key, f)
+  return [...byKey.values()]
+}
+
+// A failed usertest case's finding key: its lane and its title (the
+// journey's), never the pass or the case's index, so a failure refiled in a
+// later pass is the carried finding — fixing it there closes that one.
+function usertestKey(title, lane) {
+  return `usertest-${slugify(lane)}-${slugify(title)}`
+}
+
+// The case a route gets on one lane where the run leaves no finding open. A
+// pass is earned, never assumed: this lane captured the route, a reviewer
+// judged that capture, and no fix landed on the route after it. Anything
+// less — unreachable, a failed shooter or publish, a shots run, a fix the
+// cap left without a reshoot — is a skip naming why.
+// captures: [{pass, lane, route, judged}] · fixed: [{pass, route}] — a fix
+// has no lane (see affectedRoutes).
+function routeVerdict(path, lane, captures, fixed) {
+  const latest = list => list.reduce((a, x) => (!a || x.pass >= a.pass ? x : a), null)
+  const shot = latest(captures.filter(x => x.lane === lane && x.route === path))
+  if (!shot) return { verdict: 'skip', why: 'never captured on this lane' }
+  if (!shot.judged) return { verdict: 'skip', why: `captured in pass ${shot.pass}, never reviewed`, pass: shot.pass }
+  const fix = latest(fixed.filter(x => x.route === path))
+  if (fix && fix.pass >= shot.pass) return { verdict: 'skip', why: `fixed in pass ${fix.pass} after its last capture, never reshot`, pass: shot.pass }
+  return { verdict: 'pass', pass: shot.pass }
+}
+
+// Whether a lane's reviewer judged its capture: it returned the card ids it
+// read, and they cover every card the lane published this pass with a route
+// on it — the cards that count as captures; a route-less card (a section
+// summary) has no screen to judge. A reply alone — {findings: []} with
+// nothing read — proves no card was looked at, so the lane's routes stay
+// unjudged (a skip, never a pass).
+function laneJudged(review, cards) {
+  if (!review || !Array.isArray(review.screensRead)) return false
+  const read = new Set(review.screensRead)
+  return cards.filter(c => c.route).every(c => read.has(c.cardId))
+}
+
+// The routes a pass's fixes may have changed, on EVERY lane — a fix edits
+// code every lane renders. The routes they name (the fixed findings' own and
+// the fixers' touched ones, sub-routes included) together with the routes
+// whose implementing file they touched — a named route never hides a file
+// edit elsewhere. A change nobody can place is verified everywhere: a touched
+// file no route implements (a shared header, a route with no `file`) and a
+// change that places nowhere reach every route. Nothing touched changes
+// nothing. The next pass reshoots these, and each stays unverified until a
+// capture is judged.
+function affectedRoutes(allRoutes, paths, files) {
+  const named = paths.filter(Boolean)
+  const rel = f => String(f).replace(/^\.\//, '')
+  const touched = files.filter(Boolean).map(rel)
+  if (!named.length && !touched.length) return []
+  // The terrain's file is repo-relative; a fixer may report it absolute.
+  const implementsFile = (r, f) => !!r.file && (f === rel(r.file) || f.endsWith('/' + rel(r.file)))
+  if (touched.some(f => !allRoutes.some(r => implementsFile(r, f)))) return allRoutes.map(r => r.path)
+  const hit = allRoutes.filter(r => named.some(p => r.path === p || r.path.startsWith(p)) || touched.some(f => implementsFile(r, f)))
+  return (hit.length ? hit : allRoutes).map(r => r.path)
+}
+
+// The files a pass gate's repair commits changed — like the fixers' edits,
+// they postdate the pass's captures. [] when it repaired nothing; null when
+// it repaired without naming them: a change nobody can place.
+function gateRepairFiles(gate) {
+  if (!gate || !gate.repaired) return []
+  const files = (gate.touchedFiles || []).filter(Boolean)
+  return files.length ? files : null
+}
+
+// The keys a pass fixed where nobody can place the change: the finding has
+// no route of its own (a functional failure's is '', an unknown key has
+// none) and the fixer that reported it named no touched route and no
+// touched file. Its commit still postdates every capture — empty metadata is
+// no proof nothing changed — so, like a gate repair naming no files, it
+// unverifies every route (affectedRoutes' "a change nobody can place").
+function unplacedFixes(fixResults, fixList) {
+  const routeOf = k => (fixList.find(f => f.key === k) || {}).route
+  return fixResults
+    .filter(r => !(r.touchedRoutes || []).some(Boolean) && !(r.touchedFiles || []).some(Boolean))
+    .flatMap(r => (r.fixed || []).filter(k => !routeOf(k)))
+}
+
+// What a run that fixes nothing leaves open: every defect it filed, at any
+// severity — the threshold is a fix decision and a review-only run makes
+// none — and every usertest case that failed (`functional`: the usertest
+// stage files each through `finish --bugs direct`). Suggestions are taste,
+// never bugs: they stay staged on the board.
+function openWithoutFixing(filed, functional) {
+  return [...filed.filter(f => f.kind === 'finding'), ...functional]
+}
+
+// Why a run's draft PR stays a draft; empty means the run earned "ready".
+// Every fix run ends in the code loop's review of the final diff — a run
+// whose passes fixed nothing still carries the whole branch diff, and
+// nothing before the device pass reviewed it. Returning is not enough: the
+// loop must leave nothing for the human and end on a green gate (each round
+// gates the same suites, so its LAST round is the branch's state). `lanes`
+// are the run's lane keys: a lane the receipt leaves out was not published.
+// A published lane is not a judged one: every route case the record files
+// must be a pass (routeVerdict) — a lane nobody captured or reviewed, and a
+// fix the cap left without a reshoot, keep the draft. The code loop runs
+// after the record, so anything it commits — a review fix, a gate repair, a
+// push from prm's first round — postdates every capture and names no files
+// to place it: a change nobody can place unverifies every route
+// (affectedRoutes). So the PR head and the checkout's HEAD must still be the
+// commit the record was filed at (`recordSha`, `heads`).
+function notReadyReasons({ fixes, open, lanes, report, code, gateRed, routeCases, recordSha, heads }) {
+  const why = []
+  if (!fixes) why.push('thoroughness is not "fix"')
+  if (open.length) why.push(`${open.length} findings open`)
+  if (!report || !lanes.every(k => report.lanes.some(l => l.key === k && l.published))) why.push('the run door did not publish every lane')
+  for (const k of lanes) {
+    const cases = routeCases[k] || []
+    const unearned = cases.filter(c => c.verdict !== 'pass').length
+    if (unearned) why.push(`lane ${k}: ${unearned} of ${cases.length} routes earned no pass`)
+  }
+  if (fixes) {
+    const last = code && code.rounds.length ? code.rounds[code.rounds.length - 1] : null
+    if (!last) why.push('the code loop did not review the diff')
+    else {
+      if (code.remaining.length) why.push(`${code.remaining.length} code-review findings left for the human`)
+      if (!last.green) why.push("the code loop's last gate is red")
+      const same = (a, b) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a))
+      if (!recordSha || !heads || !heads.head || !heads.prHead) why.push('the PR head could not be compared with the device record')
+      else {
+        const moved = [heads.prHead, heads.head].find(s => !same(s, recordSha))
+        if (moved) why.push(`the branch moved after the device record (${recordSha.slice(0, 9)} → ${moved.slice(0, 9)}) — no device pass verified the change`)
+      }
+    }
+  }
+  if (gateRed) why.push('a pass gate stayed red')
+  return why
+}
+
+// Each lane manifest's stamp, keyed by lane: the ONE head the record is filed
+// at — read after every pass fixer and gate repair committed, and the same
+// sha readiness compares (notReadyReasons' `recordSha`) — names both the
+// manifest's `sha` and its `runId`, which fits the run door's
+// ^[A-Za-z0-9._-]{1,64}$ whatever the run is called. `run` is the slug of
+// the run board this invocation minted: the door replaces the cards a
+// previous publish of the same runId left, so a second run on an unchanged
+// commit must never reuse the first one's ids.
+function manifestStamps(run, head, lanes) {
+  return Object.fromEntries(lanes.map(lane => {
+    const tail = `-${head.slice(0, 9)}-${boundedSlug(lane, 32)}`
+    return [lane, { runId: boundedSlug(run, 64 - tail.length) + tail, sha: head }]
+  }))
+}
+
+// A runId part of at most `max` chars: a longer slug keeps its head plus a
+// hash of the whole, so two run boards or custom lanes sharing a long prefix
+// still get distinct runIds.
+function boundedSlug(s, max) {
+  const slug = slugify(s)
+  if (slug.length <= max) return slug
+  let h = 0x811c9dc5
+  for (const c of slug) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0
+  return `${slug.slice(0, max - 9)}-${h.toString(16).padStart(8, '0')}`
 }
 
 // Group findings by area into at most `max` disjoint fix lists. A finding
