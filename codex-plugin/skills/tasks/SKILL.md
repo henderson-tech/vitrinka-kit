@@ -78,10 +78,12 @@ carries only the laws the verbs do not print.
   merge → done); `update {kind:"task", status}` only to correct.
 - **Reading**: `summarize_tasks` for counts; `list {kind:"task", f}` with the
   filter document (states, groups, types, priorities, assignees, labels,
-  sprint, milestone, parent, intake, spans, text, order) for rows;
+  sprint, milestone, parent, intake, spans, text, order) for rows, or
+  `ask` (a phrase Eve compiles into f; page on with the reply's `compiled` as f);
   to FIND, one door per need — ONE task by any reference (a name, any id
   spelling, a URL, "bugs under X") → `search {q, mode:"resolve"}`, whose
-  verdict says whether to act on the lead or pick; title words (an epic by name) → `search {q,
+  verdict says whether to act on the lead or pick (`deep: true` lets
+  Eve break an ambiguous tie, AI credits); title words (an epic by name) → `search {q,
   groups:["tasks"], type}`; body, field, ref or comment text → `search
   {kind:"task"}`, narrowed by type, state, parent or `epic` (any depth);
   every match in one task's tree, a row each → `search {kind:"task",
