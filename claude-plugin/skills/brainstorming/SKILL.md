@@ -17,6 +17,7 @@ Do NOT write code, scaffold, or invoke implementation skills until the decision 
 
 ## Laws
 
+- **Bind scope before filing**: resume the project's explicit harness-session binding. Unknown asks for an active sprint or **No sprint**; persist the choice before creating the feature. Children and required follow-ups inherit approved scope. Never infer scope from dates or the sole active sprint.
 - **Two levels, ONE flow, the SAME artifacts** (log · brief · Plan chapter). `default` spends 1–3 rounds; the argument word `deep` lifts the limits, keeps the board on from the start and forces the architectural path. Prototype code under `deep` is labelled throwaway and never lands on the branch.
 - **Classify first, out loud** — spike / bounded / architectural — so the user can override it. The ratchet is one-way: hidden complexity upgrades the path, nothing downgrades; when in doubt, take the heavier path.
 - **The map is WRITTEN OUT, always** — visible assistant text, a message of its own, before any `AskUserQuestion` call. Never carry the map inside the question text or option labels. A map that is not printed does not exist; simple means a 1–2 question map, not no map.
