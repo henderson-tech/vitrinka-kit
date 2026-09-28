@@ -24,7 +24,8 @@ the full contract is `docs {topic: "tasks"}`.
 
 - **A next step that is a check on the work you just did is a step, not a
   task**: a merge, a deploy confirmation, "verify X on preview", "look at
-  the hub once", a human decision — one line each, on THIS task. A child
+  the hub once", a decision left by a run nobody attends — one line each,
+  on THIS task. A child
   task (`task: true`, with `type`) is only for work that needs its own
   session, PR or QA record. Steps re-filed by name keep their tick.
 - `next` holds only what the human must do (a merge they keep, an account
