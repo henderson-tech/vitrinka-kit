@@ -78,10 +78,8 @@ vitrinka qa session continue <task-id> [--ref <distill-ref>]
   `//vitrinka:repo:git@github.com:Org/Repo.git/<rel>`, one under `$HOME`
   becomes `//vitrinka:home/<rel>`; the reading CLI maps them back to ITS
   checkouts, and an unresolved placeholder stays as-is.
-- **The auto-archive never fails a session**: the `SessionEnd` hook exits 0
-  always and does nothing unless `archive on` was run on this machine AND
-  the transcript named a task (`vitrinka task start <id>`, else the last
-  `vt-<id>` marker). Bind the run first; attach a `hint`.
+- **Archiving is a hand-off act, never a hook**: `vitrinka task handback
+  --transcript` or `vitrinka qa session archive`; attach a `hint`.
 - **Continue prints an OFFER, never runs it**: the native resume is printed
   only when the transcript's `harness` is the one this shell runs under.
   Without a distill it prints the transcript index — label the task

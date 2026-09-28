@@ -35,8 +35,8 @@ narrative, board suites. Dispatch via the Agent tool, `subagent_type:
 "vitrinka-publisher"`, in the **background** — keep working; the completion
 notification carries the result.
 
-- **Stays inline**: the one-command initial import (`board-from-set` /
-  `journey-from-set`) — a single idempotent CLI call; run it yourself so the
+- **Stays inline**: the one-command initial import (`vitrinka board create` /
+  `board create --journey`) — a single idempotent CLI call; run it yourself so the
   user gets the URL the moment the board exists. Incremental re-runs too.
   A screenshots push already lands on the `<project>-<branch>-<key>` journey
   board and prints that board's URL; the import is for a custom slug/title.
@@ -97,7 +97,7 @@ Per-kind payload contracts: the `docs` MCP tool; kind index + doctrine:
 - **Steps ARE the walkthrough**: ONE `section` per journey/area, a numbered
   `step` per screen with `status` and `image: {project, branch, selector,
   file}` naming the shot in THIS session's set. Never keep a serpentine flow
-  of raw shots next to a steps section — skip `board-from-set` or remove the
+  of raw shots next to a steps section — skip `board create` or remove the
   duplicate row through `update_cards {remove:[…]}` (anyone else's cards:
   `409 needs_confirm` → repeat with `confirm:<token>` + `reason`).
 - **Live annotate→fix loop on a single screen** stays a real shot card —

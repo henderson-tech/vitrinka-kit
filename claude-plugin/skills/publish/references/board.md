@@ -51,7 +51,8 @@ part of creation.
    structure of your own with `save_template` and instantiate via
    `compose_board {template, params}` (`save_template` and `request_review`
    are `rare`-module tools: opt in on the registration's `/mcp` URL with
-   `?modules=core,qa,rare`).
+   `?modules=core,pm,qa,me,rare` — naming modules lists only those, so name
+   every one you keep).
 4. **Hand over the server's `url` field** from the create/list response — it
    carries the `/w/<workspace>` segment; never compose a path yourself.
 5. **Arm the listener AUTOMATICALLY** — if this session will service the

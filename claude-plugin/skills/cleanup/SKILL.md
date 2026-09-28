@@ -36,7 +36,7 @@ drafted · report-only), never a chat retelling of the page.
   task, "Cleanup <date>: <change> — <evidence>"; the comment is the record
   and the task event follows by itself.
 - **Doors only, nothing deleted.** Statuses through `bulk_update_tasks` /
-  `update {kind: "task"}`; a duplicate is `create_task_link {rel:
+  `update {kind: "task"}`; a duplicate is `create {kind: "task_link", rel:
   "duplicates"}` plus `cancelled` — the survivor keeps the history; an
   orphan gets its `parentId`; an epic is refined through the feature preset
   (`ledger_state · next_action · waiting_on`) and closed with `status:
@@ -62,7 +62,7 @@ drafted · report-only), never a chat retelling of the page.
   stages (`resumeFromRunId`), so `trust: "none"` first and `"evidence"`
   after reading the report costs one extra Apply, not a second inventory.
 - **Undo is a door too**: a status is corrected with `update {kind: "task",
-  status}`, a duplicate with `delete_task_link` and a status, a proposal or
+  status}`, a duplicate with `delete {kind: "task_link"}` and a status, a proposal or
   a draft with its decline.
 
 ## Codex

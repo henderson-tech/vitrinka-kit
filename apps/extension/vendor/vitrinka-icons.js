@@ -166,6 +166,15 @@
     "run": { viewBox: "0 0 24 24", stroke: "1.75", markup: "<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />" },
     "unlink": { viewBox: "0 0 24 24", stroke: "1.75", markup: "<path d=\"m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71\" /><path d=\"m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71\" /><line x1=\"8\" x2=\"8\" y1=\"2\" y2=\"5\" /><line x1=\"2\" x2=\"5\" y1=\"8\" y2=\"8\" /><line x1=\"16\" x2=\"16\" y1=\"19\" y2=\"22\" /><line x1=\"19\" x2=\"22\" y1=\"16\" y2=\"16\" />" },
     "tag": { viewBox: "0 0 24 24", stroke: "1.75", markup: "<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\" /><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />" },
+    "user-x": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><circle cx=\"9\" cy=\"7\" r=\"4\" /><line x1=\"17\" x2=\"22\" y1=\"8\" y2=\"13\" /><line x1=\"22\" x2=\"17\" y1=\"8\" y2=\"13\" />" },
+    "priority-urgent": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" /><path d=\"M12 7.5v5.5\" /><path d=\"M12 16.5h.01\" />" },
+    "priority-high": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M2 20h.01\" /><path d=\"M7 20v-4\" /><path d=\"M12 20v-8\" /><path d=\"M17 20V8\" />" },
+    "priority-medium": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M2 20h.01\" /><path d=\"M7 20v-4\" /><path d=\"M12 20v-8\" />" },
+    "priority-low": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M2 20h.01\" /><path d=\"M7 20v-4\" />" },
+    "sprint": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M4 10a8 8 0 1 1 8 8H4\" /><path d=\"m8 22-4-4 4-4\" />" },
+    "layout-cards": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect x=\"3\" y=\"3\" width=\"7.5\" height=\"11\" rx=\"1.5\" /><rect x=\"13.5\" y=\"3\" width=\"7.5\" height=\"11\" rx=\"1.5\" /><path d=\"M3 18.5h7.5\" /><path d=\"M13.5 18.5h7.5\" />" },
+    "layout-mini": { viewBox: "0 0 24 24", stroke: "1.75", markup: "<rect x=\"3\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"9.75\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"16.5\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"3\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"9.75\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"16.5\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" />" },
+    "layout-table": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" ry=\"2\" /><line x1=\"3\" x2=\"21\" y1=\"9\" y2=\"9\" /><line x1=\"3\" x2=\"21\" y1=\"15\" y2=\"15\" /><line x1=\"9\" x2=\"9\" y1=\"9\" y2=\"21\" /><line x1=\"15\" x2=\"15\" y1=\"9\" y2=\"21\" />" },
   };
   function html(name, cls) {
     var g = MARKUP[name];
