@@ -95,7 +95,9 @@ carries only the laws the verbs do not print.
   paths; `get {kind:"brief"}` before
   planning anything in a project; `read_task_ref` under a `budget` or with
   a `question` — never a transcript blind; `ask_task` for a cited answer
-  over the whole corpus (relay the citation).
+  over the whole corpus (relay the citation); `ask_task {project,
+  question}` answers an open question ("what blocks 4.0.0?") with the
+  task ids and urls it rests on — AI credits, never to find ONE task.
 - **The feature lifecycle** hangs on the epic: the brainstorming skill files
   it (board + decision refs); `/prm` attaches the PR and at merge drafts the
   QA plan (a `qa` child with one `journey` per user path — `vitrinka task
@@ -103,8 +105,9 @@ carries only the laws the verbs do not print.
   publish); `usertest` and `publish_run` write journey verdicts; `vitrinka
   task final <epic>` composes the final artifact; a later `story` that
   revises another links `supersedes`.
-- **Sprints** are history: `create {kind:"sprint"}` → start → `complete {carry}`; no
-  delete, ever.
+- **Scope**: categories are permanent vocabulary; epics are finite outcomes. `origin` records who requested work, independently of the filing actor; never guess historical Unknown. Admission uses existing Intake. Children/follow-ups inherit approved scope; verified bugs use coverage, ambiguous matches ask, unverified bugs and enhancements enter Intake.
+- **Sprints** allow optional dates and concurrent active scopes. Bind the session explicitly to a sprint or none before feature creation. Read bounded members → preview selected carry → apply that exact preview with a stable request ID; a stale version means reread and review. No implicit carry or deletion.
+- **Readiness**: required Before/Ship obligations block shipment; After obligations block closure. Deferral needs an owner and typed trigger. Candidates bind exact repository revisions/builds; a cut release is not deployment. Agents may cite evidence, never verify it or declare shipment. Now and history work without Eve.
 - **Rules** are typed documents (`GET /api/v1/rules/schema`): ALWAYS
   `dry_run_rule` and show what would have fired before enabling; admin-only
   to create or enable.
