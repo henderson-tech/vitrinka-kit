@@ -63,7 +63,8 @@ oldest first). Per ⌖ snap (`[fix]`) or escalated note (`[note]`):
    status:"⟳ fixing №<id> — <short cause>"}`. The narration is what the
    tester sees IN THE APP; keep it under a dozen words. `board_working` is
    a `rare`-module tool: the registration opts in on its `/mcp` URL with
-   `?modules=core,qa,rare`.
+   `?modules=core,pm,qa,me,rare` (naming modules lists only those, so name
+   every one you keep).
 2. **Fix in the pair worktree.** Smallest correct change; commit on the
    rolling branch (conventional message referencing №id).
 3. **Get it into the running app**: hot stack — nothing to do; otherwise

@@ -12,9 +12,9 @@ handback [id]`, `- < body.json` for an exact body). It lands everything in one
 transaction — `next` items land as **steps** on the task's checklist
 (`kind` step · human · date · action, `who` / `at`, an optional `when` that
 ticks the step by itself), `task: true` files a child, `omitted` with
-`decide: true` becomes a `human` gate `Decide: …` (waiting on `who`) and
-other omissions children, `summary` becomes the next version of the
-task's `handoff` attachment, `surfaces` · `buildOn` · `branch` · `worktree` ·
+`decide: true` becomes a `human` gate `Decide: …` (waiting on `who`; an
+unattended run only) and other omissions children, `summary` becomes the
+next version of the task's `handoff` attachment, `surfaces` · `buildOn` · `branch` · `worktree` ·
 `prerequisites` · `readFirst` become the next pickup's ON · BRANCH · BEFORE ·
 READ rows, `refs` (pr, board) attach, `sessionId` ends the live run — and
 returns `rendered`, the chat block. The schema carries each field's shape;
@@ -27,10 +27,15 @@ the full contract is `docs {topic: "tasks"}`.
   the hub once", a human decision — one line each, on THIS task. A child
   task (`task: true`, with `type`) is only for work that needs its own
   session, PR or QA record. Steps re-filed by name keep their tick.
-- `next` holds only what the human must do (a merge they keep, a decision,
-  an account or device only they hold). Work the agent can do is built
+- `next` holds only what the human must do (a merge they keep, an account
+  or device only they hold). Work the agent can do is built
   before the hand-back, not filed; a remainder that outgrew the context
   window is the one exception, and it says so in `buildOn`.
+- **A decision is asked, never filed, while a human is in the session**:
+  ask it before the hand-back (AskUserQuestion in Claude Code) and record
+  the answer in `summary`. `decide: true`, or a `human` step that is a
+  decision, is only for a run nobody attends: a Workflow, a headless or
+  scheduled run.
 - A step whose trigger is observable carries `when` in the todo grammar
   (`pr 12 merged`, `deployed prod`): the server ticks it with evidence, so
   the record follows the work without a call.
@@ -63,6 +68,8 @@ the full contract is `docs {topic: "tasks"}`.
 - Never end a bound task's work with a chat-only next-steps list.
 - Never file a check on your own work, a merge or a human call as a child
   task — it is a step or gate on the task.
+- Never file a `Decide:` gate for a call the human in the session could
+  answer now.
 - Never write, shorten or reorder the hand-back block by hand.
 - Never attach the summary through `upload_task_file` yourself — the door
   versions the `handoff` lineage.

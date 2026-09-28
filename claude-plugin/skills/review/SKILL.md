@@ -96,7 +96,8 @@ audits a sample of passing judgments to measure missed issues. The old board
 reviewer is replaced, including the `request_review` compatibility door.
 `review_judge`, `review_job`, `review_stats` and `request_review` live in
 the `rare` module — never listed by default; the registration opts in on
-its `/mcp` URL: `?modules=core,qa,rare`.
+its `/mcp` URL: `?modules=core,pm,qa,me,rare` (naming modules lists only
+those, so name every one you keep).
 
 A pass requested without `instructions` receives the rendered brief
 automatically. To steer it, tweak the Phase 0 block's focus and pass the

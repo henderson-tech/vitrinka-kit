@@ -30,7 +30,8 @@ One thought, one child, filed while the context is fresh; then back to work.
      are doing, a merge, a look, a verify is a STEP on the bound task
      (`update {kind:"task", fields: {gates: [...]}}`, or `next` at
      hand-back) — never a child.
-   - A call a human owns is a `human` gate on the bound task (`kind:
+   - A call a human owns is asked now when a human is in the session; in
+     a run nobody attends it is a `human` gate on the bound task (`kind:
      "human"`, `who`, the options as `evidence`; `decide: true` at
      hand-back does the same). Never decide it silently in code; a child
      `task` only when the decision is itself a piece of work.

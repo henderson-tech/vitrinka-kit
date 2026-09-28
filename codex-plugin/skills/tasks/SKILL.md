@@ -108,7 +108,9 @@ carries only the laws the verbs do not print.
   to create or enable.
 - `dry_run_rule`, `transfer_project`, `merge_project`, `my_favorites`,
   `favorite` and `unfavorite` live in the `rare` module — never listed by
-  default; the registration opts in on its `/mcp` URL: `?modules=core,pm,rare`.
+  default; the registration opts in on its `/mcp` URL:
+  `?modules=core,pm,qa,me,rare` (naming modules lists only those, so name
+  every one you keep).
 - **Mirror** (Jira): the truth side wins every conflict; never "fix" a
   conflict by editing the losing side.
 - **Transfer** (`transfer_project`): dry-run first, show the report and the

@@ -42,7 +42,7 @@ for exactly this deploy.
   larger artifact page.
 - tw4 (`body` + `runtime:"tw4"`) artifacts are static markup — no `<script>`
   runs. Anything needing the libraries above ships as a full `html` document
-  with the scaffold import map (`vitrinka board artifact-init` writes it).
+  with the scaffold import map (`vitrinka board artifact init` writes it).
 
 Immutability contract: `/vendor` files are pinned + immutable-cached except
 the mutable engines on the server's no-cache list (`board-1`, `kit-3`, the
