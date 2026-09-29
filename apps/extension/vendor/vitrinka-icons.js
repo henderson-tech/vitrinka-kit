@@ -14,6 +14,7 @@
     "close": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />" },
     "more": { viewBox: "0 0 24 24", stroke: "2", markup: "<circle cx=\"12\" cy=\"12\" r=\"1\" /><circle cx=\"19\" cy=\"12\" r=\"1\" /><circle cx=\"5\" cy=\"12\" r=\"1\" />" },
     "plus": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />" },
+    "minus": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M5 12h14\" />" },
     "check": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M20 6 9 17l-5-5\" />" },
     "share": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M12 2v13\" /><path d=\"m16 6-4-4-4 4\" /><path d=\"M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8\" />" },
     "new-tab": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M15 3h6v6\" /><path d=\"M10 14 21 3\" /><path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\" />" },
