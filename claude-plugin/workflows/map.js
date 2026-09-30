@@ -277,6 +277,25 @@ function withUiLoop(prompt, fix) {
   return 'ui-loop rules:\n- ' + rules.join('\n- ') + '\n\n' + prompt
 }
 
+// Workflow agents inherit the launching session's cwd, so a run launched from
+// the main clone once worked there instead of the worktree. With `repo` (an
+// absolute path) every prompt opens by pinning the agent to it.
+function withRepo(prompt, repo) {
+  if (!repo) return prompt
+  return `All work happens in the repo at ${repo}: cd there before anything else and run every command from it, never from the directory you started in.\n\n` + prompt
+}
+
+// `repo` must be absolute; the first agent reports the repo it actually ran
+// in (`git rev-parse --show-toplevel`) and a mismatch stops the run. Returns
+// the problem, or '' when there is none.
+function repoProblem(want, got) {
+  if (!want) return ''
+  const norm = p => String(p || '').trim().replace(/\/+$/, '')
+  if (!norm(want).startsWith('/')) return `repo must be an absolute path, got "${want}"`
+  if (norm(got) !== norm(want)) return `the agents ran in ${got ? `"${got}"` : 'an unreported repo'}, not in repo "${want}"`
+  return ''
+}
+
 const UILOOP_SEVERITY = { broken: 3, 'needs-work': 2, polish: 1 }
 const UILOOP_VERDICT = { 'not-met': 3, partly: 2, met: 1 }
 
@@ -347,6 +366,23 @@ function mergeBacklog(pass, previous, raw) {
     }
   }
   return { backlog: { v: 1, pass, findings: [...out.values()] }, unjudged, problems }
+}
+
+// The backlog's `reviewed`: the screens a reviewer actually judged this pass —
+// the union of every raw batch's screens (its reviewBatches definition, or,
+// for a batch id the current batching does not know, the screens its findings
+// and verdicts name) minus every screen a reviewer marked unreviewed. Only
+// these can score clean (`vybava ui-loop scoreboard`, v0.24.1+).
+function reviewedScreens(raw, batches) {
+  const byId = new Map((batches || []).map(b => [b.id, b.screens]))
+  const judged = new Set()
+  const skipped = new Set()
+  for (const r of raw || []) {
+    const ids = byId.get(r.batch) || [...(r.findings || []), ...(r.acceptance || [])].map(f => f.screen).filter(Boolean)
+    for (const id of ids) judged.add(id)
+    for (const id of r.unreviewed || []) skipped.add(id)
+  }
+  return [...judged].filter(id => !skipped.has(id)).sort()
 }
 
 const BACKLOG_KEYS = ['key', 'screen', 'area', 'severity', 'status', 'title', 'detail', 'files', 'acceptance', 'viewports', 'themes', 'shots', 'refs']
@@ -488,7 +524,7 @@ function nextStage(s, cap = 6) {
 // The ui-loop mode runs when the repo's vybava.config.ts carries a `uiLoop`
 // section. A script cannot read files, so one low-effort agent answers.
 const UILOOP_DETECT_PROMPT =
-  'Read-only: does this repo drive the Výbava ui-loop applet? Run `vybava ui-loop check --json --no-ts` from the repo root. ' +
+  'Read-only: does this repo drive the Výbava ui-loop applet? Always return repo, the absolute path `git rev-parse --show-toplevel` prints. Run `vybava ui-loop check --json --no-ts` from the repo root. ' +
   'A CONFIG_MISSING diagnostic (or no vybava.config.ts, or no `vybava` binary) means configured=false — say which in reason. ' +
   'Otherwise configured=true: read the uiLoop section with `vybava config show --json` and return dir, out, spec, appMap, areas (in config order), the app names and vitrinka {project, boardPrefix}. Change nothing.'
 
@@ -509,7 +545,7 @@ const UILOOP_CONFIG = {
 
 const UILOOP_DETECT_SCHEMA = {
   type: 'object',
-  properties: { configured: { type: 'boolean' }, reason: { type: 'string' }, config: UILOOP_CONFIG },
+  properties: { configured: { type: 'boolean' }, reason: { type: 'string' }, repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' }, config: UILOOP_CONFIG },
   required: ['configured'],
 }
 
@@ -564,6 +600,7 @@ const UILOOP_PREP_SCHEMA = {
   properties: {
     configured: { type: 'boolean' },
     branch: { type: 'string' },
+    repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
     config: UILOOP_CONFIG,
     headSha: { type: 'string' },
     capturedHeadSha: { type: 'string', description: 'capture.json revision, empty for legacy passes' },
@@ -575,7 +612,7 @@ const UILOOP_PREP_SCHEMA = {
     passDir: { type: 'string' },
     shots: { type: 'integer', description: 'shot records under <passDir>/shots' },
     published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed with no refused captures' },
-    screens: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' } }, required: ['id', 'area'] } },
+    screens: { type: 'array', description: 'EVERY screen with a shot record, one {id, area} each — never omitted or summarized, however long: it is the review scope', items: { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' } }, required: ['id', 'area'] } },
     reviewedAreas: { type: 'array', items: { type: 'string' }, description: 'areas every batch of which has a raw review file' },
     raw: { type: 'array', items: UILOOP_RAW, description: 'every <passDir>/review/raw/*.json, verbatim' },
     hasBacklog: { type: 'boolean', description: '<passDir>/review/backlog.json exists' },
@@ -585,7 +622,7 @@ const UILOOP_PREP_SCHEMA = {
     boards: { type: 'array', description: 'the area set boards of publish/boards.json', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'headSha', 'capturedHeadSha', 'sourceUnchanged', 'reviewBasis', 'pass', 'shots', 'published'],
+  required: ['configured', 'branch', 'headSha', 'capturedHeadSha', 'sourceUnchanged', 'reviewBasis', 'pass', 'shots', 'published', 'screens'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
@@ -702,17 +739,21 @@ const UILOOP_MAP_SCHEMA = {
 }
 // args: { scope: 'idea' | 'app' | 'screens', requirements?: string, project?: string, task?: string, push?: boolean,
 //         screens?: false (scope app: never switch to the manifest — the terrain is wanted), areas?: string[] (screens: only these),
-//         commit?: boolean (screens: commit the manifest and app map, default true) }
+//         commit?: boolean (screens: commit the manifest and app map, default true),
+//         repo?: absolute path (screens: every agent works there, cd first; the run stops when Detect reports another repo) }
 const run = workflowRun(args || {})
 const scope = (args && args.scope) || 'app'
 const requirements = (args && args.requirements) || ''
 const project = (args && args.project) || ''
 const task = (args && args.task) || ''
 const push = !(args && args.push === false)
+const repo = (args && args.repo) || ''
 
 if (scope === 'screens' || (scope === 'app' && !(args && args.screens === false))) {
   phase('Detect')
-  const detected = await run.agent(withPreamble(UILOOP_DETECT_PROMPT), { label: 'detect', phase: 'Detect', effort: 'low', schema: UILOOP_DETECT_SCHEMA })
+  const detected = await run.agent(withRepo(withPreamble(UILOOP_DETECT_PROMPT), repo), { label: 'detect', phase: 'Detect', effort: 'low', schema: UILOOP_DETECT_SCHEMA })
+  const wrongRepo = repoProblem(repo, detected && detected.repo)
+  if (wrongRepo) throw new Error(`map: ${wrongRepo} — nothing was changed; relaunch with repo set to the checkout to map`)
   if (detected && detected.configured) return await mapScreens(detected.config)
   if (scope === 'screens') throw new Error(`map: scope screens needs a uiLoop section in vybava.config.ts (${(detected && detected.reason) || 'detect failed'}) — \`vybava ui-loop init\` scaffolds it`)
   log(`map: no ui-loop here (${(detected && detected.reason) || 'detect failed'}); mapping the terrain`)
@@ -731,13 +772,13 @@ async function mapScreens(cfg) {
   const per = Math.ceil(areas.length / writers)
   const groups = []
   for (let i = 0; i < areas.length; i += per) groups.push(areas.slice(i, i + per))
-  const explorer = g => () => run.agent(withPreamble(withUiLoop(
+  const explorer = g => () => run.agent(withRepo(withPreamble(withUiLoop(
     `Extend the ui-loop screen manifest for area${g.length > 1 ? 's' : ''} ${g.join(', ')} (apps: ${cfg.apps.join(', ')}).\n` +
     `The API is \`${cfg.dir}/vendor/manifest.ts\` + \`${cfg.dir}/vendor/project.ts\` (defineScreens, Screen, Step, Recipe) and \`${cfg.dir}/vendor/states.ts\`; the repo's hooks are \`${cfg.dir}/project.ts\`. Your files: ${JSON.stringify(g.map(a => `${cfg.dir}/screens/${a}.ts`))} — a missing one is created in the style of its siblings; never write any other area's file.\n` +
     `Inventory the area from the app's own route tables, navigators and components: every route × tab × overlay (dialog, drawer, menu, popover, phone sheet, stacked layer) × state — empty / error / loading through the \`states.ts\` request mocks (\`listStates\` for a list), unsaved changes, a validation error, denied and read-only personas (\`as\`). Add a Screen for each one the manifest lacks, with the recipe that reaches it (\`before\` mocks, \`open\` steps ending in a wait, \`ready\`), \`sourceFiles\` that exist, \`parentId\`/\`variantOf\` for overlays and states, \`app\` when there are several apps. One that cannot be reached with the seed data gets \`unreachable: '<why>'\`; one whose recipe writes gets \`destructive: true\`.\n` +
     `EXTEND ONLY: never delete, rename, reorder or rewrite an existing entry — one you believe wrong is a problems line naming its id. Run \`vybava ui-loop check --json\` and fix what it reports in the entries you added. You are the ONLY writer while this group runs; other groups run sequentially. Never run a capture, never commit.\n` +
     `Return your areas, files, the screen count before, how many you added and the unreachable ones with why.`
-  )), { label: `screens:${g.join('+')}`, phase: 'Explore', schema: UILOOP_MANIFEST_SCHEMA })
+  )), repo), { label: `screens:${g.join('+')}`, phase: 'Explore', schema: UILOOP_MANIFEST_SCHEMA })
   phase('Explore')
   run.ensureBudget(groups.length + 1)
   const reports = (await run.serial(groups.map(explorer))).filter(Boolean)
@@ -747,13 +788,13 @@ async function mapScreens(cfg) {
 
   phase('Validate')
   const commit = !(args && args.commit === false)
-  const result = await run.agent(withPreamble(withUiLoop(
+  const result = await run.agent(withRepo(withPreamble(withUiLoop(
     `Validate the ui-loop screen manifest the explorers just extended (${JSON.stringify(reports.map(r => ({ areas: r.areas, files: r.files, added: r.added, problems: r.problems || [] })))}).\n` +
     `1. \`vybava ui-loop check --json\`: fix every MANIFEST_INVALID problem in the newly added entries (the diff against HEAD shows which); an existing entry's problem is reported, not rewritten.\n` +
     `2. \`vybava ui-loop map\` renders \`${cfg.appMap || 'uiLoop.appMap'}\`; \`vybava ui-loop check --json\` again must report the app map fresh.\n` +
     (commit ? `3. Commit ${cfg.dir}/screens/ and the app map path-limited ("ui-loop: map screens (${areas.join(', ')})").\n` : '3. Do not commit.\n') +
     `Return ok, the screen and capture counts, screens per area, the app map path${commit ? ', the commit' : ''} and every problem left.`
-  )), { label: 'validate', phase: 'Validate', schema: UILOOP_MAP_SCHEMA })
+  )), repo), { label: 'validate', phase: 'Validate', schema: UILOOP_MAP_SCHEMA })
   if (!result) throw new Error('map: validating the screen manifest failed — run `vybava ui-loop check --json`')
   const problems = [...reports.flatMap(r => r.problems || []), ...(result.problems || []), ...missed.map(a => `area ${a}: its explorer failed — rerun map with areas: ["${a}"]`)]
   return run.finish({ scope: 'screens', ok: result.ok, screens: result.screens, captures: result.captures || 0, perArea: result.perArea || [], appMap: result.appMap, commit: result.commit || '', added: reports.reduce((n, r) => n + r.added, 0), unreachable: reports.flatMap(r => r.unreachable || []), problems, receipt: completionReceipt({ complete: result.ok, problems, evidence: result.ok ? [{ appMap: result.appMap, screens: result.screens }] : [] }) })
