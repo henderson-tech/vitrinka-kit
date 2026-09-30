@@ -67,11 +67,15 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
       for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
       return results
     },
-    async serial(tasks) {
+    async serial(tasks, accept = result => result != null) {
       reserve(tasks.length)
       const results = []
-      for (const task of tasks) results.push(await task())
-      return results
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
     },
     finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
   }
@@ -323,11 +327,9 @@ if (plan.shared && plan.shared.files && plan.shared.files.length) {
   impl.push(shared)
 }
 phase('Implement')
-for (const s of plan.slices) {
-  const result = await run.agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA })
-  if (!result) throw new Error(`build-idea: slice "${s.name}" failed; resume this run before building its consumers`)
-  impl.push(result)
-}
+const slices = await run.serial(plan.slices.map(s => () => run.agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA })))
+if (slices.failedIndex !== null) throw new Error(`build-idea: slice "${plan.slices[slices.failedIndex].name}" failed; resume this run before building its consumers`)
+impl.push(...slices.results)
 built = impl
 const left = built.flatMap(r => r.left.map(l => ({ slice: r.slice, ...l })))
 log(`build-idea: ${built.length} slices built, ${left.length} items left`)

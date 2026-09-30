@@ -64,11 +64,15 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
       for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
       return results
     },
-    async serial(tasks) {
+    async serial(tasks, accept = result => result != null) {
       reserve(tasks.length)
       const results = []
-      for (const task of tasks) results.push(await task())
-      return results
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
     },
     finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
   }
@@ -572,6 +576,7 @@ const UILOOP_CHECKPOINT = {
     key: { type: 'string' },
     lane: { type: 'string' },
     basis: { type: 'string' },
+    apiChanges: { type: 'array', items: { type: 'string' } },
     valid: { type: 'boolean', description: 'commit is an ancestor of HEAD and the recorded fix is still present' },
     status: { type: 'string', enum: ['done', 'skipped', 'blocked'] },
     commit: { type: 'string' },
@@ -781,7 +786,9 @@ async function mapScreens(cfg) {
   )), repo), { label: `screens:${g.join('+')}`, phase: 'Explore', schema: UILOOP_MANIFEST_SCHEMA })
   phase('Explore')
   run.ensureBudget(groups.length + 1)
-  const reports = (await run.serial(groups.map(explorer))).filter(Boolean)
+  const written = await run.serial(groups.map(explorer))
+  if (written.failedIndex !== null) throw new Error('map: a manifest writer failed; resume it before another writer or validator')
+  const reports = written.results
   const covered = new Set(reports.flatMap(r => r.areas))
   const missed = areas.filter(a => !covered.has(a))
   log(`map: ${reports.reduce((n, r) => n + r.added, 0)} screens added across ${covered.size}/${areas.length} areas${missed.length ? `; explorers failed for ${missed.join(', ')}` : ''}`)

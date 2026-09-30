@@ -62,11 +62,15 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
       for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
       return results
     },
-    async serial(tasks) {
+    async serial(tasks, accept = result => result != null) {
       reserve(tasks.length)
       const results = []
-      for (const task of tasks) results.push(await task())
-      return results
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
     },
     finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
   }
@@ -279,7 +283,7 @@ for (let round = 1; round <= cap; round++) {
   if (A.expectedHead && round === 1 && review.startHeadSha !== A.expectedHead) throw new Error('code-loop: continuation revision changed before review')
   gate = review.gate
   headSha = gate && gate.headSha || ''
-  rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: !!(gate && gate.green) })
+  rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: review.startSourceUnchanged === true && gatePassed(gate) && gate.sourceUnchanged === true })
   remaining = review.remaining
   if (review.startSourceUnchanged !== true || !gate || gate.sourceUnchanged !== true) {
     sourceProblems.push('application source is dirty or its revision was not verified before review and after the gates')

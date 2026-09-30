@@ -72,11 +72,15 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
       for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
       return results
     },
-    async serial(tasks) {
+    async serial(tasks, accept = result => result != null) {
       reserve(tasks.length)
       const results = []
-      for (const task of tasks) results.push(await task())
-      return results
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
     },
     finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
   }
@@ -777,6 +781,7 @@ const UILOOP_CHECKPOINT = {
     key: { type: 'string' },
     lane: { type: 'string' },
     basis: { type: 'string' },
+    apiChanges: { type: 'array', items: { type: 'string' } },
     valid: { type: 'boolean', description: 'commit is an ancestor of HEAD and the recorded fix is still present' },
     status: { type: 'string', enum: ['done', 'skipped', 'blocked'] },
     commit: { type: 'string' },
@@ -975,7 +980,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     `1. The repo you are in (git rev-parse --show-toplevel, absolute); branch; \`vybava ui-loop check --json\` (every diagnostic goes to problems); the uiLoop section via \`vybava config show --json\` (configured=false when there is none); the devbox workspace from \`devbox url --json\` (empty when none).\n` +
     `2. The pass: ${A.pass ? `pass ${A.pass}` : 'the newest pass-<n> under <out>'} (pass 0 when <out> holds none). Count the shot records (<passDir>/shots/<id>/*.json, not the .full ones) and list each DISTINCT screen {id, area} they name once. published = publish/index.json exists and every set of publish/plan.json has a pushed receipt with no refused files; each set is one permanent area board; legacy rows never count.\n` +
     `3. Every <passDir>/review/raw/*.json verbatim as raw; reviewedAreas = the areas whose screens are all covered by a raw file. hasBacklog and the findings of <passDir>/review/backlog.json. previousBacklog = the findings of the newest EARLIER pass with a review/backlog.json.\n` +
-    `4. Every <passDir>/fix/*.json checkpoint; report valid=true ONLY when its commit is an ancestor of HEAD and the recorded fix is still present (skipped/blocked: its recorded reason still applies). Missing, reverted or unrelated commits are invalid. Read the area boards from <passDir>/publish/boards.json (or the newest earlier pass that has one).\n` +
+    `4. Every <passDir>/fix/*.json checkpoint, including its apiChanges; report valid=true ONLY when its commit is an ancestor of HEAD and the recorded fix is still present (skipped/blocked: its recorded reason still applies). Missing, reverted or unrelated commits are invalid. Read the area boards from <passDir>/publish/boards.json (or the newest earlier pass that has one).\n` +
     `5. headSha = git rev-parse HEAD. reviewBasis = SHA256 of UTF-8 JSON.stringify(entries), where each entry is [repo-relative forward-slash filename, lowercase SHA256 of its bytes], sorted by filename using JavaScript string comparison. Include ALL pass shot JSON/PNG files, the spec, and manifest .ts files (exclude vendor/); empty only without a pass. Raw reviews and backlog files carry basis; return backlogBasis from <passDir>/review/basis.json. Treat a missing or different basis as stale. Never reuse a stale review or checkpoint. Compare published digests against ui-loop publish --dry-run --json before claiming published; an old receipt alone is insufficient.\n` +
     `6. Read <passDir>/capture.json {headSha}; capturedHeadSha is empty when absent. sourceUnchanged=true ONLY when that commit exists and git diff from it to the working tree has no changes outside uiLoop.out and .vitrinka/ (also check untracked non-ignored files outside those directories). Review artifact commits in those output directories may differ; application changes may not. Never infer a captured revision from current HEAD.`
   )), { label: 'prepare', phase: 'Prepare', schema: UILOOP_PREP_SCHEMA })
@@ -1146,11 +1151,15 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       `Score ui-loop pass ${prep.pass}: \`vybava ui-loop scoreboard --pass ${prep.pass} --json\`, then read ${passDir}/scoreboard.md.\n` +
       `On each area set board ${JSON.stringify(out.boards)} post a callout in this pass's first section (the row's \`section\`, headed by the "Pass ${prep.pass}" summary callout): that area's row (screens broken / needs-work / polish / clean, findings open / met / partly / not-met, lint defects per rule, console errors, shots not ok, and the delta against the previous pass) and the totals line. Read \`docs {topic: "kind:board"}\` first; the callout replaces an earlier scoreboard callout of the same section. Return the scoreboard file, the totals and every board url you posted to.`
     )), { label: 'scoreboard', phase: 'Scoreboard', effort: 'low', schema: UILOOP_SCORE_SCHEMA })
-    if (score) out.scoreboard = { file: score.scoreboardFile, totals: score.totals || {}, posted: score.posted }
+    if (score) {
+      out.scoreboard = { file: score.scoreboardFile, totals: score.totals || {}, posted: score.posted }
+      out.problems.push(...(score.problems || []))
+    }
     else out.problems.push('scoreboard: posting failed — `vybava ui-loop scoreboard` can be rerun by hand')
-    const gate = !synth.open && !unreviewed.length && score ? await verifyGate() : null
+    const scoreOk = !!score && !(score.problems || []).length
+    const gate = !synth.open && !unreviewed.length && scoreOk ? await verifyGate() : null
     if (!synth.open && !unreviewed.length && !verifiedGate(gate)) out.problems.push('the UI pass has no passing verification gate')
-    return Object.assign(out, { next: nextOf(unreviewed.length ? 'capture' : synth.open ? 'fix' : null), receipt: completionReceipt({ complete: !synth.open && !unreviewed.length && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: prep.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
+    return Object.assign(out, { next: nextOf(unreviewed.length ? 'capture' : synth.open ? 'fix' : !scoreOk ? 'review' : null), receipt: completionReceipt({ complete: !synth.open && !unreviewed.length && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: prep.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
 
   // ---- fix: primitives lanes first, then the primitive API is frozen and ≤ 4 area lanes run
@@ -1165,19 +1174,26 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       `Fix lane ${l.lane} of ui-loop pass ${prep.pass}, on branch ${prep.branch}. The spec is \`${cfg.spec}\`; the apps run on the devbox${prep.workspace ? ` workspace ${prep.workspace}` : ''} and stay running.\n` +
       `Items, in order (worst first) — each with the checkpoint file you write when it is finished (basis ${prep.reviewBasis}):\n${JSON.stringify(l.items.map(f => Object.assign({}, f, { checkpoint: checkpointPath(passDir, f.key) })))}\n` +
       (kind === 'primitives'
-        ? `You own these primitives: the fix lands in the shared component or token, so every screen that uses it is fixed at once. Public API changes are ADDITIVE only — nothing removed or renamed — and each is documented in the spec's primitives section and returned in apiChanges. When you finish, the primitive API is frozen for the area lanes.\n`
+        ? `You own these primitives: the fix lands in the shared component or token, so every screen that uses it is fixed at once. Public API changes are ADDITIVE only — nothing removed or renamed — and each is documented beside the changed primitive code and returned in apiChanges. Never edit the fingerprinted spec during this fix round; keep per-item API notes in its ignored checkpoint so recovery retains the review basis. When you finish, the primitive API is frozen for the area lanes.\n`
         : `The primitive API is FROZEN: never edit these files — ${JSON.stringify(plan.frozen)}.${apiNotes.length ? ` Additions the primitives lanes made this round: ${JSON.stringify(apiNotes)}.` : ''} An item that needs a primitive change is checkpointed blocked with the exact change as its note (and returned in blocked).\n`) +
-      `You are the ONLY writer and committer in this checkout while this lane runs. Other lanes run sequentially; never revert another lane's changes. Checkpoint JSON: {"v":1,"basis":"${prep.reviewBasis}","key","lane":"${l.lane}","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"note"} — write it once the source fix is committed; never commit or force-add the checkpoint (the pass directory is gitignored environment output). An item that already has a VALID checkpoint with basis ${prep.reviewBasis} is finished: skip it. Old or invalid checkpoints must be reevaluated.\n` +
+      `You are the ONLY writer and committer in this checkout while this lane runs. Other lanes run sequentially; never revert another lane's changes. Checkpoint JSON: {"v":1,"basis":"${prep.reviewBasis}","key","lane":"${l.lane}","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"apiChanges":[this item's additive primitive API notes],"note"} — write it once the source fix is committed; never commit or force-add the checkpoint (the pass directory is gitignored environment output). An item that already has a VALID checkpoint with basis ${prep.reviewBasis} is finished: skip it. Old or invalid checkpoints must be reevaluated.\n` +
       `Look at your fixes in a browser (onyx browser, headless) at the viewports and themes each item names — batch it: fix several items of one screen, look once; screenshots under ${passDir}/fix/shots/${l.lane}/. Never run \`vybava ui-loop run\` — the verify stage captures the whole round in one batch.\n` +
       `A skip needs a concrete reason (a design decision the spec does not settle is one). Return done/skipped/blocked keys, commits, touched screens, treeCleanOfMine.`
     , true))
-    const runLanes = async (lanes, kind, apiNotes) => (await run.serial(lanes.map(l => () =>
-      run.agent(laneBrief(l, kind, apiNotes), { label: `fix:${l.lane}`, phase: kind === 'primitives' ? 'Fix: primitives' : 'Fix: areas', schema: UILOOP_LANE_SCHEMA })))).filter(Boolean)
-    const finishedBy = results => new Set(results.flatMap(r => [...r.done, ...r.skipped.map(s => s.key), ...(r.blocked || []).map(b => b.key)]))
     const results = []
+    const runLanes = async (lanes, kind, apiNotes) => {
+      const batch = await run.serial(lanes.map(l => () => run.agent(laneBrief(l, kind, apiNotes), { label: `fix:${l.lane}`, phase: kind === 'primitives' ? 'Fix: primitives' : 'Fix: areas', schema: UILOOP_LANE_SCHEMA })), r => !!r && r.treeCleanOfMine === true)
+      results.push(...batch.results.filter(Boolean))
+      if (batch.failedIndex === null) return true
+      out.fix = laneSummary(results)
+      out.problems.push(`fix lane ${lanes[batch.failedIndex].lane} failed or left dirty source; recover it before another writer`)
+      return false
+    }
+    const resumeFix = () => Object.assign(out, { next: nextOf('fix'), reason: out.problems[out.problems.length - 1], receipt: completionReceipt({ problems: out.problems }) })
+    const finishedBy = results => new Set(results.flatMap(r => [...r.done, ...r.skipped.map(s => s.key), ...(r.blocked || []).map(b => b.key)]))
     if (prim.length) {
       phase('Fix: primitives')
-      results.push(...await runLanes(prim, 'primitives', []))
+      if (!await runLanes(prim, 'primitives', [])) return resumeFix()
       const fin = finishedBy(results)
       const unfinished = prim.flatMap(l => l.items).filter(f => !fin.has(f.key))
       if (unfinished.length) {
@@ -1187,7 +1203,8 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     }
     if (areas.length) {
       phase('Fix: areas')
-      results.push(...await runLanes(areas, 'areas', results.flatMap(r => r.apiChanges || [])))
+      const apiNotes = [...state.checkpoints.flatMap(c => c.apiChanges || []), ...results.flatMap(r => r.apiChanges || [])]
+      if (!await runLanes(areas, 'areas', apiNotes)) return resumeFix()
     }
     out.fix = laneSummary(results)
     const fin = finishedBy(results)
