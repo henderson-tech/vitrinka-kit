@@ -9,10 +9,10 @@ export const meta = {
     { title: 'Fix', detail: 'one writer accepts and repairs the route pass, then verifies it' },
     { title: 'Gate', detail: 'verify a clean route pass without changing its captured revision' },
     { title: 'Capture', detail: 'ui-loop: vybava ui-loop run on the devbox → rsync → split → publish' },
-    { title: 'Boards', detail: 'ui-loop: one board per area, a section per pass' },
+    { title: 'Boards', detail: 'ui-loop: lay the pass out on each area\'s set board (one per area, every pass) — never a new board' },
     { title: 'Review', detail: 'ui-loop: batch reviewers per area against the spec and the previous acceptance' },
     { title: 'Synthesize', detail: 'ui-loop: the deduplicated review/backlog.json' },
-    { title: 'Scoreboard', detail: 'ui-loop: vybava ui-loop scoreboard, a callout per area board' },
+    { title: 'Scoreboard', detail: 'ui-loop: vybava ui-loop scoreboard, a callout per area set board' },
     { title: 'Fix: primitives', detail: 'ui-loop: primitives lanes, then the API is frozen' },
     { title: 'Fix: areas', detail: 'ui-loop: ≤ 4 area lanes, one item at a time, a checkpoint per item' },
   ],
@@ -770,13 +770,15 @@ const UILOOP_PREP_SCHEMA = {
     branch: { type: 'string' },
     config: UILOOP_CONFIG,
     headSha: { type: 'string' },
+    capturedHeadSha: { type: 'string', description: 'capture.json revision, empty for legacy passes' },
+    sourceUnchanged: { type: 'boolean', description: 'application tree matches captured revision, including uncommitted changes' },
     reviewBasis: { type: 'string', description: 'SHA256 of sorted pass capture files, manifest and spec contents; empty only without a pass' },
     backlogBasis: { type: 'string' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
     pass: { type: 'integer', description: 'the pass inspected; 0 when <out> holds none' },
     passDir: { type: 'string' },
     shots: { type: 'integer', description: 'shot records under <passDir>/shots' },
-    published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed (or halved into pushed halves)' },
+    published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed with no refused captures' },
     screens: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' } }, required: ['id', 'area'] } },
     reviewedAreas: { type: 'array', items: { type: 'string' }, description: 'areas every batch of which has a raw review file' },
     raw: { type: 'array', items: UILOOP_RAW, description: 'every <passDir>/review/raw/*.json, verbatim' },
@@ -784,10 +786,10 @@ const UILOOP_PREP_SCHEMA = {
     backlog: { type: 'array', items: UILOOP_ITEM, description: 'its findings, [] when absent' },
     previousBacklog: { type: 'array', items: UILOOP_ITEM, description: 'the findings of the newest earlier pass that has a backlog, [] when none' },
     checkpoints: { type: 'array', items: UILOOP_CHECKPOINT, description: 'every <passDir>/fix/*.json' },
-    boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
+    boards: { type: 'array', description: 'the area set boards of publish/boards.json', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'headSha', 'reviewBasis', 'pass', 'shots', 'published'],
+  required: ['configured', 'branch', 'headSha', 'capturedHeadSha', 'sourceUnchanged', 'reviewBasis', 'pass', 'shots', 'published'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
@@ -796,18 +798,20 @@ const UILOOP_CAPTURE_SCHEMA = {
     pass: { type: 'integer' },
     passDir: { type: 'string' },
     shots: { type: 'integer' },
+    capturedHeadSha: { type: 'string' },
+    sourceUnchanged: { type: 'boolean' },
     byStatus: { type: 'object' },
     published: { type: 'boolean' },
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'shots', 'published'],
+  required: ['pass', 'shots', 'published', 'capturedHeadSha', 'sourceUnchanged'],
 }
 
 const UILOOP_BOARDS_SCHEMA = {
   type: 'object',
   properties: {
-    boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
+    boards: { type: 'array', description: 'one row per area: its set board, never a new board', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string', description: 'the set board url, server-returned' }, slug: { type: 'string', description: 'the set board slug' }, section: { type: 'string', description: 'the title of this pass\'s first section' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['boards'],
@@ -817,6 +821,8 @@ const UILOOP_REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     batch: { type: 'string' },
+    basis: { type: 'string' },
+    screensRead: { type: 'array', items: { type: 'string' } },
     area: { type: 'string' },
     findings: {
       type: 'array',
@@ -908,7 +914,7 @@ const UILOOP_MAP_SCHEMA = {
 //
 //   <out>/pass-<n>/shots/…                  vybava ui-loop run (+ rsync from the devbox)
 //   <out>/pass-<n>/publish/{plan,index}.json vybava ui-loop split / publish
-//   <out>/pass-<n>/publish/boards.json      the Boards agent: one board per area, a section per pass
+//   <out>/pass-<n>/publish/boards.json      the Boards agent: each area's set board (one per area, every pass), laid out
 //   <out>/pass-<n>/review/raw/<batch>.json  one reviewer batch, verbatim
 //   <out>/pass-<n>/review/backlog.json      the Synthesize agent (scoreboard contract, v1)
 //   <out>/pass-<n>/scoreboard.{json,md}     vybava ui-loop scoreboard
@@ -925,10 +931,11 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const prep = await run.agent(withPreamble(withUiLoop(
     `Read back the ui-loop state of this checkout; change nothing.\n` +
     `1. Branch; \`vybava ui-loop check --json\` (every diagnostic goes to problems); the uiLoop section via \`vybava config show --json\` (configured=false when there is none); the devbox workspace from \`devbox url --json\` (empty when none).\n` +
-    `2. The pass: ${A.pass ? `pass ${A.pass}` : 'the newest pass-<n> under <out>'} (pass 0 when <out> holds none). Count the shot records (<passDir>/shots/<id>/*.json, not the .full ones) and list each DISTINCT screen {id, area} they name once. published = publish/index.json exists and every set of publish/plan.json is pushed (a halved set counts when both halves are).\n` +
+    `2. The pass: ${A.pass ? `pass ${A.pass}` : 'the newest pass-<n> under <out>'} (pass 0 when <out> holds none). Count the shot records (<passDir>/shots/<id>/*.json, not the .full ones) and list each DISTINCT screen {id, area} they name once. published = publish/index.json exists and every set of publish/plan.json has a pushed receipt with no refused files; each set is one permanent area board; legacy rows never count.\n` +
     `3. Every <passDir>/review/raw/*.json verbatim as raw; reviewedAreas = the areas whose screens are all covered by a raw file. hasBacklog and the findings of <passDir>/review/backlog.json. previousBacklog = the findings of the newest EARLIER pass with a review/backlog.json.\n` +
     `4. Every <passDir>/fix/*.json checkpoint; report valid=true ONLY when its commit is an ancestor of HEAD and the recorded fix is still present (skipped/blocked: its recorded reason still applies). Missing, reverted or unrelated commits are invalid. Read the area boards from <passDir>/publish/boards.json (or the newest earlier pass that has one).\n` +
-    `5. headSha = git rev-parse HEAD. reviewBasis = SHA256 of UTF-8 JSON.stringify(entries), where each entry is [repo-relative forward-slash filename, lowercase SHA256 of its bytes], sorted by filename using JavaScript string comparison. Include ALL pass shot JSON/PNG files, the spec, and manifest .ts files (exclude vendor/); empty only without a pass. Raw reviews and backlog files carry basis; return backlogBasis from <passDir>/review/basis.json. Treat a missing or different basis as stale. Never reuse a stale review or checkpoint. Compare published digests against ui-loop publish --dry-run --json before claiming published; an old receipt alone is insufficient.`
+    `5. headSha = git rev-parse HEAD. reviewBasis = SHA256 of UTF-8 JSON.stringify(entries), where each entry is [repo-relative forward-slash filename, lowercase SHA256 of its bytes], sorted by filename using JavaScript string comparison. Include ALL pass shot JSON/PNG files, the spec, and manifest .ts files (exclude vendor/); empty only without a pass. Raw reviews and backlog files carry basis; return backlogBasis from <passDir>/review/basis.json. Treat a missing or different basis as stale. Never reuse a stale review or checkpoint. Compare published digests against ui-loop publish --dry-run --json before claiming published; an old receipt alone is insufficient.\n` +
+    `6. Read <passDir>/capture.json {headSha}; capturedHeadSha is empty when absent. sourceUnchanged=true ONLY when that commit exists and git diff from it to the working tree has no changes outside uiLoop.out and .vitrinka/ (also check untracked non-ignored files outside those directories). Review artifact commits in those output directories may differ; application changes may not. Never infer a captured revision from current HEAD.`
   )), { label: 'prepare', phase: 'Prepare', schema: UILOOP_PREP_SCHEMA })
   if (!prep) throw new Error('review-loop (ui-loop): prepare failed')
   if (!prep.configured) throw new Error('review-loop (ui-loop): this repo has no uiLoop section in vybava.config.ts — run `vybava ui-loop init`, then `vitrinka:map` with scope "screens"')
@@ -943,11 +950,15 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     pass: prep.pass, shots: prep.shots, published: prep.published, areas: uniqAreas(prep.screens || []),
     reviewedAreas: prep.reviewedAreas || [], backlog: prep.hasBacklog ? (prep.backlog || []) : null, checkpoints: prep.checkpoints || [],
   }
+  const uiGateSchema = { ...GATE_SCHEMA, properties: { ...GATE_SCHEMA.properties, sourceUnchanged: { type: 'boolean' } }, required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }
+  const verifiedGate = gate => gatePassed(gate) && gate.sourceUnchanged === true && !!prep.capturedHeadSha && prep.sourceUnchanged === true
   const verifyGate = () => run.agent(withPreamble(
-    `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Check that code has not changed since prepare at ${prep.headSha}, allowing only this pass's review/backlog and basis artifacts. A source change invalidates the captured evidence. Return green, ran, failures and headSha AFTER verification.`
-  ), { label: 'gate:ui-loop', phase: 'Verify', schema: GATE_SCHEMA })
-  const auto = nextStage(state, cap)
+    `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Check that code has not changed since prepare at ${prep.headSha}, allowing only this pass's review/backlog and basis artifacts. A source change invalidates the captured evidence. Also repeat the git diff and untracked-file check against capturedHeadSha ${prep.capturedHeadSha}, excluding only ${cfg.out} and .vitrinka/, and report sourceUnchanged; no application edits, staged or unstaged, are allowed. Return green, ran, failures and headSha AFTER verification.`
+  ), { label: 'gate:ui-loop', phase: 'Verify', schema: uiGateSchema })
+  const staleCapture = !!prep.pass && (!prep.capturedHeadSha || prep.sourceUnchanged !== true)
+  const auto = staleCapture ? { stage: 'capture', reason: 'application source differs from captured revision; capture again', resume: false } : nextStage(state, cap)
   let stage = A.stage && A.stage !== 'auto' ? A.stage : auto.stage
+  if (staleCapture) stage = 'capture'
   // A verify cut off before its publish left a new, unpublished pass: finish
   // that pass (capture resumes it) instead of shooting yet another one.
   if (stage === 'verify' && auto.stage === 'capture' && auto.resume) stage = 'capture'
@@ -963,7 +974,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   out.stage = stage
   if (stage === 'done') {
     const gate = await verifyGate()
-    return Object.assign(out, { next: null, receipt: completionReceipt({ complete: !state.backlog.some(isOpenItem) && !!state.shots && state.published && gatePassed(gate), problems: [...out.problems, ...(!gatePassed(gate) ? ['the UI pass has no passing verification gate'] : [])], open: state.backlog.filter(isOpenItem), evidence: gatePassed(gate) ? [{ pass: state.pass, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
+    return Object.assign(out, { next: null, receipt: completionReceipt({ complete: !state.backlog.some(isOpenItem) && !!state.shots && state.published && verifiedGate(gate), problems: [...out.problems, ...(!verifiedGate(gate) ? ['the UI pass has no passing verification gate'] : [])], open: state.backlog.filter(isOpenItem), evidence: verifiedGate(gate) ? [{ pass: state.pass, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
   if ((stage === 'review' || stage === 'fix') && !(prep.pass && prep.published)) throw new Error(`review-loop (ui-loop): stage ${stage} needs a published pass — ${auto.reason}; run stage capture`)
   if (stage === 'fix' && !state.backlog) throw new Error(`review-loop (ui-loop): pass ${prep.pass} has no review/backlog.json — run stage review`)
@@ -972,7 +983,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   // ---- capture | verify: one `ui-loop run` on the devbox, rsync back, split, publish, board sections
   if (stage === 'capture' || stage === 'verify') {
     const resume = stage === 'capture' && auto.stage === 'capture' && auto.resume && !A.fresh
-    const only = stage === 'verify' ? verifySelection(state.backlog, state.checkpoints) : list(A.only)
+    const only = stage === 'verify' ? verifySelection(state.backlog, state.checkpoints) : staleCapture ? [] : list(A.only)
     if (stage === 'verify' && !only.length) return Object.assign(out, { next: null, reason: 'nothing touched and nothing open — no verify pass needed' })
     const flags = [
       list(A.apps).length ? `--app ${list(A.apps).join(',')}` : '',
@@ -988,27 +999,30 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       `${stage === 'verify' ? `Verify pass: re-shoot the ${only.length} screens pass ${prep.pass}'s fix round touched plus every screen an open backlog item names, as a NEW pass.` : resume ? `Finish pass ${prep.pass}: it holds shots that are not published.` : 'Capture a new ui-loop pass.'}\n` +
       (resume && prep.shots ? `Shots already exist: when report.json shows every selected shot ok or unreachable, skip straight to step 3.\n` : '') +
       `1. \`vybava ui-loop check --json\` must pass (a VENDOR_DRIFT is fixed with \`vybava ui-loop sync\` and committed path-limited; any other diagnostic is a problems line and you stop).\n` +
-      `2. \`vybava ui-loop run ${flags} --wrap "${wrap}" --json\` from the repo root. The capture runs in the devbox workspace${prep.workspace ? ` (${prep.workspace})` : ''}, next to the app, never on the Mac. A run cut short is finished with the same command plus \`--resume\`, never by restarting the container.\n` +
+      `2. Before capture, record git rev-parse HEAD and require a clean application tree (ignore only uiLoop.out and .vitrinka/); compare the Devbox source to this revision too. \`vybava ui-loop run ${flags} --wrap "${wrap}" --json\` from the repo root. The capture runs in the devbox workspace${prep.workspace ? ` (${prep.workspace})` : ''}, next to the app, never on the Mac. A run cut short is finished with the same command plus \`--resume\`, never by restarting the container.\n` +
       `3. Bring the pass back — devbox sync is one-way: \`rsync -a devops:ws/<workspace>/<app>/<out>/pass-<n>/ <out>/pass-<n>/\` with <workspace> from \`devbox url --json\` (docs/uiloop.md "On a Devbox").\n` +
-      `4. \`vybava ui-loop split --json\`, then \`vybava ui-loop publish --json\`; a set that still fails after its retries and halving is re-published alone with \`--sets <key>\` once, then reported.\n` +
-      `Return the pass, its passDir, the shot count by status (report.json), published, and every set {key, area, url, status}.`
+      `4. \`vybava ui-loop split --json\`, then \`vybava ui-loop publish --json\`; a set that still fails after its retries is re-published alone with \`--sets <key>\` once, then reported.\n` +
+      `After capture, verify git rev-parse HEAD and the application tree still match the recorded revision; sourceUnchanged=false and stop when they differ. Write {headSha: recorded revision} to <passDir>/capture.json only after that check (on resume, validate and retain its original revision; a missing marker needs a fresh capture). Return capturedHeadSha, sourceUnchanged, the pass, its passDir, the shot count by status (report.json), published, and every set {key, area, url, status}.`
     )), { label, phase: 'Capture', schema: UILOOP_CAPTURE_SCHEMA })
     if (cap1 && !cap1.shots) throw new Error('review-loop (ui-loop): capture executed zero shots; resume capture')
     if (!cap1) throw new Error(`review-loop (ui-loop): ${label} failed — run stage auto: when the pass was created it resumes that pass, otherwise it runs ${stage} again`)
+    if (!cap1.capturedHeadSha || cap1.sourceUnchanged !== true) throw new Error('review-loop (ui-loop): capture has no unchanged source revision; capture again')
     out.pass = cap1.pass
     out.capture = { shots: cap1.shots, byStatus: cap1.byStatus || {}, published: cap1.published }
     out.problems.push(...(cap1.problems || []))
     if (!cap1.published) return Object.assign(out, { next: nextOf('capture') })
 
     phase('Boards')
+    const passDir = cap1.passDir || `<out>/pass-${cap1.pass}`
+    const prefix = cfg.boardPrefix || 'ui-loop'
     const title = `Pass ${cap1.pass}${stage === 'verify' ? ' — verify' : ''}`
     const boards = await run.agent(withPreamble(withUiLoop(
-      `Compose pass ${cap1.pass} of the ui-loop onto ONE board per area${cfg.project ? ` in project ${cfg.project}` : ''}: slug \`${cfg.boardPrefix || 'ui-loop'}-<area>\`, area order ${JSON.stringify(cfg.areas)}. Existing boards: ${JSON.stringify(prep.boards || [])}.\n` +
-      `Published sets (each is its own source board): ${JSON.stringify((cap1.sets || []).filter(s => s.url))}.\n` +
-      `On each area board add a section "${title}" — earlier pass sections stay untouched — holding that area's sets as Phone · Tablet · Desktop step clusters (by viewport, then theme) with a portal to each source set, and a summary callout at the section head naming the pass, the shot count and the shots that are not ok. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back. ` +
-      `Write [{area, url, slug, section}] to ${cap1.passDir || `<out>/pass-${cap1.pass}`}/publish/boards.json and return it; every url is the server-returned one.`
+      `Lay out pass ${cap1.pass} of the ui-loop on its area set boards${cfg.project ? ` in project ${cfg.project}` : ''}, area order ${JSON.stringify(cfg.areas)}. A vitrinka set key IS a board: \`vybava ui-loop publish\` keeps ONE set per area across every pass (key \`${prefix}-<area>\`, board slug \`<project>-<branch>-${prefix}-<area>\`) and each pass adds its shots to it. Compose onto those set boards: never create a board and never delete one — the index's \`legacy\` keys are old chunk boards and stay as they are.\n` +
+      `Read ${passDir}/publish/index.json: per area set its key, title, url, status and \`sections\` [{title: "Pass N · <viewport> · <theme>", viewport, theme, labels}], plus the area's \`notes\` (shots not captured: id, viewport, theme, status, step, error). Published sets: ${JSON.stringify((cap1.sets || []).filter(s => s.url))}.\n` +
+      `On each area's set board (open it by the index url) upsert this pass's sections and lay out its existing shots as the listed sections, in order: one board section per entry, holding the cards whose labels it lists. At the head of the pass's first section put a "${title}" summary callout naming the shot count and how many are not ok. Render the area's notes as ONE text card "Not captured this pass" (id · viewport · theme · status · error, one line each), never as images. Earlier passes' sections stay untouched. Replay replaces this pass's existing summary and notes instead of duplicating them. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back.\n` +
+      `Write [{area, url, slug, section}] to ${passDir}/publish/boards.json and return it: url and slug are the set board's, server-returned; section is the title of this pass's first section (the one the summary callout heads).`
     )), { label: 'boards', phase: 'Boards', agentType: 'vitrinka:vitrinka-publisher', schema: UILOOP_BOARDS_SCHEMA })
-    if (boards) { out.boards = boards.boards; out.problems.push(...(boards.problems || [])) } else out.problems.push('boards: composing the area sections failed — the sets are published; rerun stage capture to compose them')
+    if (boards) { out.boards = boards.boards; out.problems.push(...(boards.problems || [])) } else out.problems.push('boards: laying the pass out on the area set boards failed — the sets are published; rerun stage capture to lay them out')
     return Object.assign(out, { next: nextOf('review') })
   }
 
@@ -1016,7 +1030,8 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   if (stage === 'review') {
     const all = reviewBatches(prep.screens || [], cfg.areas || [], A.batch)
     if (!all.length) throw new Error('review-loop (ui-loop): no screens to review; zero coverage cannot complete')
-    const doneIds = new Set((prep.raw || []).map(r => r.batch))
+    const completeBatch = (b, r) => r.batch === b.id && b.screens.every(id => (r.screensRead || []).includes(id)) && !(r.unreviewed || []).length
+    const doneIds = new Set(all.filter(b => prep.raw.some(r => completeBatch(b, r))).map(b => b.id))
     const todo = all.filter(b => !doneIds.has(b.id)).filter(b => !list(A.areas).length || list(A.areas).includes(b.area))
     const now = todo.slice(0, Math.min(UILOOP_MAX_REVIEWERS, A.reviewers || UILOOP_MAX_REVIEWERS, Math.max(0, run.remaining() - 3)))
     const passDir = prep.passDir || `${cfg.out}/pass-${prep.pass}`
@@ -1042,7 +1057,8 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     // (missing or blank shot) is never silently counted as reviewed — it is
     // named here and in the synthesis prompt, with the recapture that fixes it.
     if (fresh.some(r => r.basis !== prep.reviewBasis)) throw new Error('review-loop (ui-loop): reviewer returned a stale content fingerprint')
-    const raw = [...prep.raw, ...fresh]
+    const retried = new Set(fresh.map(r => r.batch))
+    const raw = [...prep.raw.filter(r => !retried.has(r.batch)), ...fresh]
     const unread = all.flatMap(b => b.screens.filter(id => !raw.some(r => r.batch === b.id && (r.screensRead || []).includes(id))))
     const unreviewed = [...new Set([...raw.flatMap(r => r.unreviewed || []), ...unread])].sort()
     out.review = { batches: all.length, reviewedNow: fresh.length, left: left.map(b => b.id), unreviewed }
@@ -1053,7 +1069,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     if (left.length) return Object.assign(out, { next: { stage: 'review', args: Object.assign({}, carry, { stage: 'review', areas: undefined }) }, reason: `${left.length} review batches left outside areas ${list(A.areas).join(', ')}` })
 
     phase('Synthesize')
-    const merged = mergeBacklog(prep.pass, prep.previousBacklog || [], [...(prep.raw || []), ...fresh])
+    const merged = mergeBacklog(prep.pass, prep.previousBacklog || [], raw)
     const synth = await run.agent(withPreamble(withUiLoop(
       `Write the deduplicated backlog of ui-loop pass ${prep.pass} to ${passDir}/review/backlog.json, in the \`vybava ui-loop scoreboard\` contract (docs/uiloop.md "Scoreboard and the review backlog": {v: 1, pass, findings}, unknown keys rejected).\n` +
       `Plain code already merged the reviewers' output (exact duplicates folded, previous items carry their verdict as status):\n${JSON.stringify(merged.backlog)}\n` +
@@ -1070,13 +1086,13 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     phase('Scoreboard')
     const score = await run.agent(withPreamble(withUiLoop(
       `Score ui-loop pass ${prep.pass}: \`vybava ui-loop scoreboard --pass ${prep.pass} --json\`, then read ${passDir}/scoreboard.md.\n` +
-      `On each area board ${JSON.stringify(out.boards)} post a callout in its "Pass ${prep.pass}" section: that area's row (screens broken / needs-work / polish / clean, findings open / met / partly / not-met, lint defects per rule, console errors, shots not ok, and the delta against the previous pass) and the totals line. Read \`docs {topic: "kind:board"}\` first; the callout replaces an earlier scoreboard callout of the same section. Return the scoreboard file, the totals and every board url you posted to.`
+      `On each area set board ${JSON.stringify(out.boards)} post a callout in this pass's first section (the row's \`section\`, headed by the "Pass ${prep.pass}" summary callout): that area's row (screens broken / needs-work / polish / clean, findings open / met / partly / not-met, lint defects per rule, console errors, shots not ok, and the delta against the previous pass) and the totals line. Read \`docs {topic: "kind:board"}\` first; the callout replaces an earlier scoreboard callout of the same section. Return the scoreboard file, the totals and every board url you posted to.`
     )), { label: 'scoreboard', phase: 'Scoreboard', effort: 'low', schema: UILOOP_SCORE_SCHEMA })
     if (score) out.scoreboard = { file: score.scoreboardFile, totals: score.totals || {}, posted: score.posted }
     else out.problems.push('scoreboard: posting failed — `vybava ui-loop scoreboard` can be rerun by hand')
     const gate = !synth.open && !unreviewed.length && score ? await verifyGate() : null
-    if (!synth.open && !unreviewed.length && !gatePassed(gate)) out.problems.push('the UI pass has no passing verification gate')
-    return Object.assign(out, { next: nextOf(unreviewed.length ? 'capture' : synth.open ? 'fix' : null), receipt: completionReceipt({ complete: !synth.open && !unreviewed.length && gatePassed(gate), problems: out.problems, evidence: gatePassed(gate) ? [{ backlog: synth.backlogFile, shots: prep.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
+    if (!synth.open && !unreviewed.length && !verifiedGate(gate)) out.problems.push('the UI pass has no passing verification gate')
+    return Object.assign(out, { next: nextOf(unreviewed.length ? 'capture' : synth.open ? 'fix' : null), receipt: completionReceipt({ complete: !synth.open && !unreviewed.length && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: prep.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
 
   // ---- fix: primitives lanes first, then the primitive API is frozen and ≤ 4 area lanes run
@@ -1314,13 +1330,21 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
     gateRed = !gatePassed(gate) || gate.headSha !== headSha
     converged = !problems.length && convergedAfter({ clean: true, open: stillOpen, unwalked, gateRed })
     log(`${ph}: clean — ${converged ? 'loop converged' : [unwalked.length ? `${unwalked.length} fixed journeys never walked again` : '', gateRed ? 'a pass gate stayed red' : ''].filter(Boolean).join('; ') + ', so it did not converge'}`)
+    if (!converged && pass < cap) {
+      walkOnly = false
+      routes = allRoutes
+      journeys = allJourneys
+      regressList = missingRegressions
+      next = { stage: 'verify', args: Object.assign({}, A, { agentBudget: undefined, expectedHead: headSha, routes: allRoutes, journeys: allJourneys, continuation: { pass: pass + 1, routes, journeys, regressList, passes, boardUrl, stillOpen, unwalked, gateRed, walkOnly } }) }
+    }
     break
   }
   if (end === 'rewalk') {
     walkOnly = !problems.length
     if (walkOnly) regressList = [] // pixels were judged; only the functional rewalk remains
     else routes = allRoutes // recover missing visual coverage before claiming convergence
-    journeys = journeysToRerun(allJourneys, [], unwalked, ut.cases)
+    regressList = missingRegressions
+    journeys = problems.length ? allJourneys : journeysToRerun(allJourneys, [], unwalked, ut.cases)
     log(`${ph}: nothing to fix, ${unwalked.length} fixed journeys never walked again — the next pass only walks them`)
     next = { stage: 'verify', args: Object.assign({}, A, { agentBudget: undefined, expectedHead: headSha, routes: allRoutes, journeys: allJourneys, continuation: { pass: pass + 1, routes, journeys, regressList, passes, boardUrl, stillOpen, unwalked, gateRed, walkOnly } }) }
     continue
@@ -1343,7 +1367,7 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
   gateRed = !gatePassed(gate)
   if (gateRed) log(`${ph}: verification gate has no passing evidence`)
 
-  regressList = fixList.filter(f => fixedKeys.has(f.key))
+  regressList = [...missingRegressions.filter(f => !fixedKeys.has(f.key)), ...fixList.filter(f => fixedKeys.has(f.key))]
   unwalked = [...unwalked.filter(f => !fixedKeys.has(f.key)), ...regressList.filter(f => f.rule === 'functional')]
   stillOpen = openAfterPass(stillOpen, fixList, fixedKeys)
   if (end === 'last') {
@@ -1358,7 +1382,7 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
   const sharedChange = !!(gate && gate.repaired) || touchedFiles.some(f => !allRoutes.some(r => r.file === f)) || !touchedFiles.length
   if (problems.length || sharedChange) routes = allRoutes // partial coverage must be recovered before narrowing
   if (!routes.length) routes = allRoutes
-  journeys = sharedChange ? allJourneys : journeysToRerun(allJourneys, openRoutes, unwalked, ut.cases)
+  journeys = problems.length || sharedChange ? allJourneys : journeysToRerun(allJourneys, openRoutes, unwalked, ut.cases)
   next = { stage: 'verify', args: Object.assign({}, A, { agentBudget: undefined, expectedHead: headSha, routes: allRoutes, journeys: allJourneys, continuation: { pass: pass + 1, routes, journeys, regressList, passes, boardUrl, stillOpen, unwalked, gateRed, walkOnly } }) }
   log(`${ph}: next pass reshoots ${routes.length} routes, reruns ${journeys.length} journeys`)
 }

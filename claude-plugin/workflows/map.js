@@ -565,13 +565,15 @@ const UILOOP_PREP_SCHEMA = {
     branch: { type: 'string' },
     config: UILOOP_CONFIG,
     headSha: { type: 'string' },
+    capturedHeadSha: { type: 'string', description: 'capture.json revision, empty for legacy passes' },
+    sourceUnchanged: { type: 'boolean', description: 'application tree matches captured revision, including uncommitted changes' },
     reviewBasis: { type: 'string', description: 'SHA256 of sorted pass capture files, manifest and spec contents; empty only without a pass' },
     backlogBasis: { type: 'string' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
     pass: { type: 'integer', description: 'the pass inspected; 0 when <out> holds none' },
     passDir: { type: 'string' },
     shots: { type: 'integer', description: 'shot records under <passDir>/shots' },
-    published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed (or halved into pushed halves)' },
+    published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed with no refused captures' },
     screens: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' } }, required: ['id', 'area'] } },
     reviewedAreas: { type: 'array', items: { type: 'string' }, description: 'areas every batch of which has a raw review file' },
     raw: { type: 'array', items: UILOOP_RAW, description: 'every <passDir>/review/raw/*.json, verbatim' },
@@ -579,10 +581,10 @@ const UILOOP_PREP_SCHEMA = {
     backlog: { type: 'array', items: UILOOP_ITEM, description: 'its findings, [] when absent' },
     previousBacklog: { type: 'array', items: UILOOP_ITEM, description: 'the findings of the newest earlier pass that has a backlog, [] when none' },
     checkpoints: { type: 'array', items: UILOOP_CHECKPOINT, description: 'every <passDir>/fix/*.json' },
-    boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
+    boards: { type: 'array', description: 'the area set boards of publish/boards.json', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'headSha', 'reviewBasis', 'pass', 'shots', 'published'],
+  required: ['configured', 'branch', 'headSha', 'capturedHeadSha', 'sourceUnchanged', 'reviewBasis', 'pass', 'shots', 'published'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
@@ -591,18 +593,20 @@ const UILOOP_CAPTURE_SCHEMA = {
     pass: { type: 'integer' },
     passDir: { type: 'string' },
     shots: { type: 'integer' },
+    capturedHeadSha: { type: 'string' },
+    sourceUnchanged: { type: 'boolean' },
     byStatus: { type: 'object' },
     published: { type: 'boolean' },
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'shots', 'published'],
+  required: ['pass', 'shots', 'published', 'capturedHeadSha', 'sourceUnchanged'],
 }
 
 const UILOOP_BOARDS_SCHEMA = {
   type: 'object',
   properties: {
-    boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
+    boards: { type: 'array', description: 'one row per area: its set board, never a new board', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string', description: 'the set board url, server-returned' }, slug: { type: 'string', description: 'the set board slug' }, section: { type: 'string', description: 'the title of this pass\'s first section' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['boards'],
@@ -612,6 +616,8 @@ const UILOOP_REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     batch: { type: 'string' },
+    basis: { type: 'string' },
+    screensRead: { type: 'array', items: { type: 'string' } },
     area: { type: 'string' },
     findings: {
       type: 'array',
