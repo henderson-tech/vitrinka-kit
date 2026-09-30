@@ -181,11 +181,12 @@ const SHOOT_SCHEMA = {
   type: 'object',
   properties: {
     device: { type: 'string' },
+    sourceUnchanged: { type: 'boolean', description: 'tracked and untracked application source matches the prepared HEAD before and after capture' },
     shots: { type: 'array', items: { type: 'object', properties: { route: { type: 'string' }, label: { type: 'string' }, file: { type: 'string' } }, required: ['route', 'label'] } },
     boardUrl: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['device', 'shots'],
+  required: ['device', 'shots', 'sourceUnchanged'],
 }
 
 const USERTEST_SCHEMA = {
@@ -1180,6 +1181,9 @@ if (mode !== 'routes') throw new Error(`review-loop: unknown mode ${mode} — ro
 const cap = Math.max(1, Math.min(6, A.cap || 3))
 const threshold = A.severity || 'minor'
 
+const sourceCheck = 'Check git diff from the recorded revision to the working tree (staged and unstaged) and untracked non-ignored files; exclude only .vitrinka/ capture and review output. Application source must match, including the Devbox copy. Report sourceUnchanged; never infer it from HEAD alone.'
+const sourceProperty = { type: 'boolean', description: 'application tree matches the recorded revision, including uncommitted and untracked source' }
+const routeGateSchema = { ...GATE_SCHEMA, properties: { ...GATE_SCHEMA.properties, sourceUnchanged: sourceProperty }, required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }
 phase('Prepare')
 const prep = await run.agent(withPreamble(
   `Prepare this checkout for a review loop.\n` +
@@ -1188,9 +1192,11 @@ const prep = await run.agent(withPreamble(
   `3. Decide projectType (web | expo | cli | other) from the repo.\n` +
   `4. Start the app for this branch the way CLAUDE.md prescribes (devbox when available, else locally); wait until it answers; return the reachable base URL${A.base ? ` (requested: ${A.base})` : ''}.\n` +
   `5. Task binding: ${A.task ? `the run is bound to task ${A.task}.` : 'if the checkout carries a vt-<id> task, return it; otherwise leave task empty (the QA record lands on the project\'s Unplanned runs epic).'}\n` +
+  `6. Require a clean application tree at headSha BEFORE capture. ${sourceCheck}\n` +
   `Never create tasks, boards or commits here.`
-), { label: 'prepare', phase: 'Prepare', schema: PREPARE_SCHEMA })
+), { label: 'prepare', phase: 'Prepare', schema: { ...PREPARE_SCHEMA, properties: { ...PREPARE_SCHEMA.properties, sourceUnchanged: sourceProperty }, required: [...PREPARE_SCHEMA.required, 'sourceUnchanged'] } })
 if (!prep) throw new Error('review-loop: prepare failed')
+if (prep.sourceUnchanged !== true) throw new Error('review-loop: application source is dirty or differs from the prepared revision; commit the intended source before capture')
 if (A.expectedHead && prep.headSha !== A.expectedHead) throw new Error('review-loop: input revision changed; start a fresh verification instead of reusing old evidence')
 if (A.continuation && !A.expectedHead) throw new Error('review-loop: a continuation requires expectedHead to bind its evidence')
 const task = A.task || prep.task || ''
@@ -1259,28 +1265,37 @@ let walkOnly = !!resumed.walkOnly
 
 let next = null
 const firstPass = resumed.pass || 1
-run.ensureBudget((walkOnly ? 0 : matrix.length + 2) + 2) // capture + publish + review + usertest + gate/fix
+// At most three capture agents plus the tester in this phase. Larger matrices
+// share those capture calls; all devices remain required by the coverage gate.
+const captureSlots = Math.min(3, run.remaining() - 4)
+if (!walkOnly && captureSlots < 1) throw new Error('review-loop: no capture allowance remains; continue as a fresh run')
+const captureGroups = []
+const groupSize = Math.ceil(matrix.length / Math.max(1, captureSlots))
+for (let i = 0; i < matrix.length; i += groupSize) captureGroups.push(matrix.slice(i, i + groupSize))
+run.ensureBudget((walkOnly ? 0 : captureGroups.length + 2) + 2) // capture + publish + review + usertest + gate/fix
 for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
   const ph = `Pass ${pass}`
   phase('Capture')
   const isFirst = pass === 1
   log(walkOnly ? `${ph}: walking ${unwalked.length} fixed journeys again, nothing to shoot` : `${ph}: shooting ${routes.length} routes on ${matrix.length} devices, ${journeys.length} journeys`)
 
-  const shooters = walkOnly ? [] : matrix.map(d => () => run.agent(withPreamble(
-    `Shoot pass ${pass} of a review loop on device ${devLine(d)} against ${prep.baseUrl}.\n` +
+  const shooters = walkOnly ? [] : captureGroups.map(group => () => run.agent(withPreamble(
+    `Shoot pass ${pass} of a review loop on EVERY device in this group against ${prep.baseUrl}.\n` +
     `Routes (shoot every one, with data on screen; a route needing setup says how):\n${JSON.stringify(routes)}\n` +
-    `Read \`docs {topic: "guide:publish-capture"}\` first. For each route: ${captureStep(d, pass)}. On a touch device also capture one screen with a menu/sheet open when the route has one. Read each saved image back and re-shoot a blank or half-loaded one. Return every shot; a route you could not reach is a \`problems\` line naming why.`
-  ), { label: `shoot:${d.name}`, phase: 'Capture', schema: SHOOT_SCHEMA }))
+    `Read \`docs {topic: "guide:publish-capture"}\` first. Shoot ALL routes on each group device sequentially:\n${group.map(d => `${devLine(d)}: ${captureStep(d, pass)}`).join('\n')}\nOn a touch device also capture one screen with a menu/sheet open when the route has one. Read each saved image back and re-shoot a blank or half-loaded one. Return every shot; a route you could not reach is a problems line naming why.\n` +
+    `Before and after capture, require HEAD and application source to match prepared revision ${headSha}. ${sourceCheck} Never edit application source. ${group.length > 1 ? 'Return sets with one device result per group device.' : 'Return the device result.'}`
+  ), { label: `shoot:${group.map(d => d.name).join('+')}`, phase: 'Capture', schema: group.length === 1 ? SHOOT_SCHEMA : { type: 'object', properties: { sets: { type: 'array', items: SHOOT_SCHEMA } }, required: ['sets'] } }))
 
   const tester = () => run.agent(withPreamble(
     `Exploratory usertest, pass ${pass}, against ${prep.baseUrl} ${utWhere}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
     (unwalked.length ? `Fixed failures to walk again — each is ONE case on its device under exactly this title (a journey above with the same title is that case), so the loop can tell the fix held:\n${JSON.stringify(rewalkCases(unwalked))}\n` : '') +
-    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
+    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants or edit application source (including tests); captures and QA records are your only writes. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: 'Capture', schema: USERTEST_SCHEMA })
 
-  const results = (await run.parallel([...shooters, tester])).filter(Boolean)
+  const results = (await run.parallel([...shooters, tester])).filter(Boolean).flatMap(r => r.sets || [r])
   const shots = results.filter(r => r.shots)
+  problems.push(...shots.filter(s => s.sourceUnchanged !== true).map(s => `capture source changed: ${s.device}`))
   const ut = results.find(r => r.cases) || { cases: [], bugs: [] }
   const shotCount = shots.reduce((n, s) => n + s.shots.length, 0)
   if (!shotCount && !walkOnly) throw new Error(`${ph}: no screenshots captured — the app or the browser is not reachable`)
@@ -1329,9 +1344,9 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
   if (end === 'clean') {
     phase('Gate')
     const gate = await run.agent(withPreamble(
-      `Verify this clean UI pass WITHOUT editing or committing: run the repo's type/build/test gates where CLAUDE.md prescribes. Report testsExecuted from the runner counts; an expected suite with zero executed tests fails. Return green, ran, failures and headSha from git rev-parse HEAD. The screenshots were captured at ${headSha}; a different HEAD fails this gate.`
-    ), { label: 'gate:clean', phase: 'Gate', schema: GATE_SCHEMA })
-    gateRed = !gatePassed(gate) || gate.headSha !== headSha
+      `Verify this clean UI pass WITHOUT editing or committing: run the repo's type/build/test gates where CLAUDE.md prescribes. Report testsExecuted from the runner counts; an expected suite with zero executed tests fails. Return green, ran, failures and headSha from git rev-parse HEAD. The screenshots were captured at ${headSha}; a different HEAD fails this gate. ${sourceCheck}`
+    ), { label: 'gate:clean', phase: 'Gate', schema: routeGateSchema })
+    gateRed = !gatePassed(gate) || gate.headSha !== headSha || gate.sourceUnchanged !== true
     converged = !problems.length && convergedAfter({ clean: true, open: stillOpen, unwalked, gateRed })
     log(`${ph}: clean — ${converged ? 'loop converged' : [unwalked.length ? `${unwalked.length} fixed journeys never walked again` : '', gateRed ? 'a pass gate stayed red' : ''].filter(Boolean).join('; ') + ', so it did not converge'}`)
     if (!converged && pass < cap) {
@@ -1360,15 +1375,16 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
     `You are the ONLY writer and committer in this checkout. Fix ALL findings below sequentially, shared components before their consumers; never revert other work.\n` +
     `First accept only these newly staged annotation ids through the documented agent-verdict door: ${JSON.stringify(ids)} on board ${pub ? pub.boardSlug : boardSlug}. Do not re-accept carried ids.\n` +
     `Findings: ${JSON.stringify(fixList)}. Commit path-limited per coherent unit, reply with the commit, and set in_review. A design decision is skipped with why.\n` +
-    `Then in THIS SAME agent run the repo's type/build/test gates where CLAUDE.md prescribes. Repair and commit introduced failures; report prior ones. Report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Return fixed/skipped keys, touchedRoutes, touchedFiles, commits, and gate {green, ran, testsExecuted, failures, repaired, headSha} after all verification. Leave the app running.`
-  ), { label: 'fix:batch', phase: 'Fix', schema: { type: 'object', properties: Object.assign({}, FIX_SCHEMA.properties, { gate: GATE_SCHEMA }), required: [...FIX_SCHEMA.required, 'gate'] } })
+    `Commit all intended source changes before verification. ${sourceCheck} Compare to your final committed headSha; any uncommitted application changes fail the gate.\n` +
+    `Then in THIS SAME agent run the repo's type/build/test gates where CLAUDE.md prescribes. Repair and commit introduced failures; report prior ones. Report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Return fixed/skipped keys, touchedRoutes, touchedFiles, commits, and gate {green, ran, testsExecuted, failures, repaired, headSha, sourceUnchanged} after all verification. Repeat the source check AFTER all gates and repairs against your final committed headSha. Leave the app running.`
+  ), { label: 'fix:batch', phase: 'Fix', schema: { type: 'object', properties: Object.assign({}, FIX_SCHEMA.properties, { gate: routeGateSchema }), required: [...FIX_SCHEMA.required, 'gate'] } })
   if (!fixer) throw new Error(`${ph}: fixer failed; resume this run before advancing`)
   const fixedKeys = new Set(fixer.fixed)
   const touchedRoutes = uniq(fixer.touchedRoutes)
   const touchedFiles = uniq(fixer.touchedFiles)
   const gate = fixer.gate
   headSha = gate && gate.headSha || headSha
-  gateRed = !gatePassed(gate)
+  gateRed = !gatePassed(gate) || gate.sourceUnchanged !== true
   if (gateRed) log(`${ph}: verification gate has no passing evidence`)
 
   regressList = [...missingRegressions.filter(f => !fixedKeys.has(f.key)), ...fixList.filter(f => fixedKeys.has(f.key))]

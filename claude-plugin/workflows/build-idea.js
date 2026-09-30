@@ -176,11 +176,12 @@ const SHOOT_SCHEMA = {
   type: 'object',
   properties: {
     device: { type: 'string' },
+    sourceUnchanged: { type: 'boolean', description: 'tracked and untracked application source matches the prepared HEAD before and after capture' },
     shots: { type: 'array', items: { type: 'object', properties: { route: { type: 'string' }, label: { type: 'string' }, file: { type: 'string' } }, required: ['route', 'label'] } },
     boardUrl: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['device', 'shots'],
+  required: ['device', 'shots', 'sourceUnchanged'],
 }
 
 const USERTEST_SCHEMA = {
