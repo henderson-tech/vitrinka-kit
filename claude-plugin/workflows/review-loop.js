@@ -472,8 +472,8 @@ const UILOOP_RULES = [
 const UILOOP_FIX_RULES = [
   'One item at a time, with a green build between items: the provider before the consumer, the class half before the template half. Commit path-limited (only your files, never `git add -A`, never a bare `git commit`) and never leave your own uncommitted work in the tree.',
   'Never edit a file that holds another lane\'s uncommitted edits. Shared files (i18n, recipes) are edited surgically.',
-  'After every item write its checkpoint file (the path you were given) and commit it with the item, so a cutoff loses at most one item. A checkpoint that already says done or skipped means the item is finished — skip it.',
-  'After a usage-limit cutoff the successor maps the dirty files to lanes (git status against the checkpoints), commits an in-flight map, and resumes from the first item without a checkpoint.',
+  'After every item commit its source fix, then write the checkpoint file you were given with the matching review basis and the source commit SHA. The pass directory is ignored environment output: never commit or force-add a checkpoint. Skip an item only when its checkpoint has the current basis, its commit remains an ancestor of HEAD and its fix or recorded skip/block reason still applies; otherwise reevaluate it.',
+  'After a usage-limit cutoff the successor maps the dirty files to lanes using git status and the valid checkpoints, finishes the in-flight source fix and writes its checkpoint after committing, then resumes from the first item without a valid checkpoint.',
   '`cn`/`cx` (tailwind-merge) drop a position or display class beside a recipe that sets one: put layout on a wrapper or extend the recipe. A focus ring follows its control\'s radius; grouped rows take an inset ring.',
 ]
 
@@ -574,17 +574,17 @@ function mergeBacklog(pass, previous, raw) {
 }
 
 // The backlog's `reviewed`: the screens a reviewer actually judged this pass —
-// the union of every raw batch's screens (its reviewBatches definition, or,
-// for a batch id the current batching does not know, the screens its findings
-// and verdicts name) minus every screen a reviewer marked unreviewed. Only
-// these can score clean (`vybava ui-loop scoreboard`, v0.24.1+).
+// the reported screensRead inside that batch's current scope, minus every
+// screen a reviewer marked unreviewed. Missing reports and unknown batches
+// contribute no coverage. Only these can score clean
+// (`vybava ui-loop scoreboard`, v0.24.1+).
 function reviewedScreens(raw, batches) {
   const byId = new Map((batches || []).map(b => [b.id, b.screens]))
   const judged = new Set()
   const skipped = new Set()
   for (const r of raw || []) {
-    const ids = byId.get(r.batch) || [...(r.findings || []), ...(r.acceptance || [])].map(f => f.screen).filter(Boolean)
-    for (const id of ids) judged.add(id)
+    const scope = new Set(byId.get(r.batch) || [])
+    for (const id of r.screensRead || []) if (scope.has(id)) judged.add(id)
     for (const id of r.unreviewed || []) skipped.add(id)
   }
   return [...judged].filter(id => !skipped.has(id)).sort()
