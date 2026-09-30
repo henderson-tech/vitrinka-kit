@@ -833,7 +833,7 @@ phase('Map')
 let terrain = A.routes ? { routes: A.routes, journeys: A.journeys || [] } : null
 if (!terrain) {
   try {
-    terrain = await workflow('vitrinka:map', { scope: 'app', project, task, push: false })
+    terrain = await workflow('vitrinka:map', { scope: 'app', screens: false, project, task, push: false })
   } catch (e) {
     log(`test: map workflow unavailable (${e && e.message}); inventorying inline`)
     terrain = await agent(withPreamble(

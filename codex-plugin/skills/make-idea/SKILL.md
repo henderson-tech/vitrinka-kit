@@ -34,11 +34,30 @@ the decision log and the committed `<topic>-brief.md`. No brief, no build.
 Workflow tool: `{name: "vitrinka:build-idea", args: {brief: "<repo-relative
 brief path>", task: "<epic or story id>", project?, cap?: 3, severity?:
 "minor", matrix?}}`. It plans the brief into disjoint slices, implements
-them in the worktree, gates, runs `vitrinka:map` + `vitrinka:review-loop`
+them sequentially in the worktree, gates, runs `vitrinka:review-loop`
 (shoot every route on every device, review, fix, reshoot until clean or
 cap), then `vitrinka:code-loop` (native code review with fixes, the PR
-through prm) and hands the task back. The notification's result carries
-the rendered hand-back block: print it verbatim as the closing message.
+through `prm --once`) and hands the task back.
+
+The build returns `next: {name, args}` between implement → verify → ship,
+and between review passes. Launch each returned continuation unchanged,
+without asking the human to nudge it. Each new run gets up to ten agents;
+children share that run's allowance. A continuation contains the state
+and expected Git revision. If that revision changed outside the loop,
+verify the current branch afresh instead of reusing the old evidence.
+A code-review fix triggers another UI verification before hand-back.
+
+An interrupted run resumes with `resumeFromRunId` in the SAME Claude
+session (or its `claude --resume` restoration); runtime replay reuses the
+unchanged prefix of completed agent calls. A fresh session cannot replay
+that journal: use a returned continuation, or the ui-loop pass files, and
+reverify stale evidence. Never invent missing state.
+
+Only the terminal result's `receipt.status: "complete"` means the build
+was verified. `incomplete` names blockers, including missing coverage,
+failed gates and fixes not reshot before the cap. Print its hand-back
+verbatim, preserve these blockers, and drive the PR review inline through
+prm in this session; a workflow agent does not wait on CI or review bots.
 
 ## Contracts
 
