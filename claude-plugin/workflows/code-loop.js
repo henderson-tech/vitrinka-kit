@@ -255,12 +255,14 @@ const REVIEW_SCHEMA = {
     remaining: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, line: { type: 'integer' }, summary: { type: 'string' }, why: { type: 'string' } }, required: ['file', 'summary'] } },
     commits: { type: 'array', items: { type: 'string' } },
     startHeadSha: { type: 'string' },
-    gate: GATE_SCHEMA,
+    startSourceUnchanged: { type: 'boolean' },
+    gate: Object.assign({}, GATE_SCHEMA, { properties: Object.assign({}, GATE_SCHEMA.properties, { sourceUnchanged: { type: 'boolean' } }), required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }),
   },
-  required: ['findings', 'applied', 'remaining', 'startHeadSha', 'gate'],
+  required: ['findings', 'applied', 'remaining', 'startHeadSha', 'startSourceUnchanged', 'gate'],
 }
 
 const rounds = []
+const sourceProblems = []
 let remaining = []
 let converged = false
 let headSha = ''
@@ -270,7 +272,7 @@ phase('Review')
 for (let round = 1; round <= cap; round++) {
   const review = await run.agent(withPreamble(
     `Round ${round} of the code loop on this branch against ${base}.\n` +
-    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Read the code-review guidance when available, then review the branch diff INLINE with high confidence: check correctness, contracts, failure paths and the linked acceptance criteria; validate claims against current code and primary documentation. Fix confirmed defects in this same agent. Never invoke a review skill that spawns its own agents. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. Return counts, remaining, commits and gate {green, ran, testsExecuted, failures, repaired, headSha}; headSha is git rev-parse HEAD AFTER every repair and verification.`
+    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Inspect staged, unstaged and untracked application source against startHeadSha, allowing only .vitrinka/ and the configured uiLoop.out artifacts. Return startSourceUnchanged=false and a failed gate immediately if source is dirty; do not review, fix or commit someone else's uncommitted work. Read the code-review guidance when available, then review the branch diff INLINE with high confidence: check correctness, contracts, failure paths and the linked acceptance criteria; validate claims against current code and primary documentation. Fix confirmed defects in this same agent. Never invoke a review skill that spawns its own agents. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. After gates, compare staged/unstaged/untracked application source and the tested Devbox source against the final committed HEAD again, with the same artifact exclusions; sourceUnchanged=true only when both match. Dirty source fails the gate. Return counts, remaining, commits, startSourceUnchanged and gate {green, ran, testsExecuted, failures, repaired, headSha, sourceUnchanged}; headSha is git rev-parse HEAD AFTER every repair and verification.`
   ), { label: `review:${round}`, phase: 'Review', schema: REVIEW_SCHEMA })
   if (!review) { log(`code-loop: round ${round} review failed`); break }
 
@@ -279,26 +281,32 @@ for (let round = 1; round <= cap; round++) {
   headSha = gate && gate.headSha || ''
   rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: !!(gate && gate.green) })
   remaining = review.remaining
-  converged = review.findings === 0 && gatePassed(gate) && !gate.repaired && !remaining.length
+  if (review.startSourceUnchanged !== true || !gate || gate.sourceUnchanged !== true) {
+    sourceProblems.push('application source is dirty or its revision was not verified before review and after the gates')
+    break
+  }
+  converged = review.findings === 0 && gatePassed(gate) && gate.headSha === review.startHeadSha && !gate.repaired && !remaining.length
   log(`code-loop: round ${round} — ${review.findings} findings, ${review.applied} applied, ${review.remaining.length} remaining, gate ${gate && gate.green ? 'green' : 'RED'}`)
   if (converged || (review.findings > 0 && review.applied === 0 && review.remaining.length === review.findings && !gate.repaired)) break
 }
 
 let pr = ''
 const prProblems = []
-if (A.pr !== false) {
+if (A.pr !== false && !sourceProblems.length) {
   phase('PR')
   const opened = await run.agent(withPreamble(
-    `Open the PR for this branch against ${base} through the prm skill (Skill tool: prm)${A.draft ? ' with `--draft` — a DRAFT; never mark it ready' : ''} with \`--once\` — create and perform one review round, then return; never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
+    `FIRST verify staged/unstaged/untracked application source matches HEAD, allowing only .vitrinka/ and the configured uiLoop.out artifacts. If dirty, return no URL and sourceUnchanged=false without mutating or committing it. Open the PR for this branch against ${base} through the prm skill (Skill tool: prm)${A.draft ? ' with `--draft` — a DRAFT; never mark it ready' : ''} with \`--once\` — create and perform one review round, then return; never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
     (remaining.length ? `Post these unresolved review findings as ONE PR comment for the human, each with file:line and the reviewer's reason it was not applied:\n${JSON.stringify(remaining)}\n` : '') +
-    `Return {url: the PR's full https URL, headSha: git rev-parse HEAD AFTER prm's round, problems: unresolved review/CI blockers}. A queued CI run remains pending; never call it passing.`
-  ), { label: 'prm', phase: 'PR', schema: { type: 'object', properties: { url: { type: 'string' }, headSha: { type: 'string' }, problems: { type: 'array', items: { type: 'string' } } }, required: ['url', 'headSha', 'problems'] } })
+    `After prm, recheck application source against HEAD with the same exclusions. Return {url: the PR's full https URL, headSha: git rev-parse HEAD AFTER prm's round, sourceUnchanged: true only if source matched HEAD before and after prm, problems: unresolved review/CI blockers}. A queued CI run remains pending; never call it passing.`
+  ), { label: 'prm', phase: 'PR', schema: { type: 'object', properties: { url: { type: 'string' }, headSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, problems: { type: 'array', items: { type: 'string' } } }, required: ['url', 'headSha', 'sourceUnchanged', 'problems'] } })
   pr = opened && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(opened.url) ? opened.url : ''
   if (opened) {
     prProblems.push(...opened.problems)
+    if (opened.sourceUnchanged !== true) { converged = false; sourceProblems.push('application source is dirty or unverified after the PR round') }
     if (opened.headSha !== headSha) { converged = false; headSha = opened.headSha; prProblems.push('the PR round changed code after verification') }
   }
   if (!pr) prProblems.push('no valid PR URL was returned')
 }
 
-return run.finish({ rounds, remaining, pr, converged, headSha, gate, receipt: completionReceipt({ complete: converged && (A.pr === false || !!pr), open: remaining, evidence: gatePassed(gate) ? [{ headSha, ran: gate.ran, pr }] : [], problems: [...prProblems, ...(gatePassed(gate) ? [] : ['the final verification gate has no passing evidence']), ...(!converged ? ['code review did not converge at the verified revision'] : [])] }) })
+const verified = gatePassed(gate) && gate.sourceUnchanged === true && !sourceProblems.length
+return run.finish({ rounds, remaining, pr, converged, headSha, gate, receipt: completionReceipt({ complete: converged && (A.pr === false || !!pr), open: remaining, evidence: verified ? [{ headSha: gate.headSha, ran: gate.ran, pr }] : [], problems: [...sourceProblems, ...prProblems, ...(verified ? [] : ['the final verification gate has no passing evidence']), ...(!converged ? ['code review did not converge at the verified revision'] : [])] }) })

@@ -323,9 +323,12 @@ if (plan.shared && plan.shared.files && plan.shared.files.length) {
   impl.push(shared)
 }
 phase('Implement')
-impl.push(...await run.serial(plan.slices.map(s => () => run.agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA }))))
-built = impl.filter(Boolean)
-if (built.length !== plan.slices.length + (plan.shared && plan.shared.files && plan.shared.files.length ? 1 : 0)) throw new Error('build-idea: a builder failed; resume the same run before verification')
+for (const s of plan.slices) {
+  const result = await run.agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA })
+  if (!result) throw new Error(`build-idea: slice "${s.name}" failed; resume this run before building its consumers`)
+  impl.push(result)
+}
+built = impl
 const left = built.flatMap(r => r.left.map(l => ({ slice: r.slice, ...l })))
 log(`build-idea: ${built.length} slices built, ${left.length} items left`)
 
