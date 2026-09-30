@@ -50,7 +50,7 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt, options)
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', options)
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')

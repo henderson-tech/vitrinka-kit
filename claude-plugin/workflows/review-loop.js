@@ -55,7 +55,7 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt, options)
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', options)
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
@@ -956,9 +956,12 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Check that code has not changed since prepare at ${prep.headSha}, allowing only this pass's review/backlog and basis artifacts. A source change invalidates the captured evidence. Also repeat the git diff and untracked-file check against capturedHeadSha ${prep.capturedHeadSha}, excluding only ${cfg.out} and .vitrinka/, and report sourceUnchanged; no application edits, staged or unstaged, are allowed. Return green, ran, failures and headSha AFTER verification.`
   ), { label: 'gate:ui-loop', phase: 'Verify', schema: uiGateSchema })
   const staleCapture = !!prep.pass && (!prep.capturedHeadSha || prep.sourceUnchanged !== true)
-  const auto = staleCapture ? { stage: 'capture', reason: 'application source differs from captured revision; capture again', resume: false } : nextStage(state, cap)
-  let stage = A.stage && A.stage !== 'auto' ? A.stage : auto.stage
-  if (staleCapture) stage = 'capture'
+  let auto = nextStage(state, cap)
+  // Fixes intentionally change application source. Finish a checkpoint-driven
+  // round, including dirty-work recovery, before invalidating its old captures.
+  const resumeFix = auto.stage === 'fix' && !!prep.capturedHeadSha && !!state.backlog
+  if (staleCapture && !resumeFix && prep.pass < cap) auto = { stage: 'capture', reason: 'application source differs from captured revision; capture again', resume: false }
+  let stage = staleCapture ? auto.stage : A.stage && A.stage !== 'auto' ? A.stage : auto.stage
   // A verify cut off before its publish left a new, unpublished pass: finish
   // that pass (capture resumes it) instead of shooting yet another one.
   if (stage === 'verify' && auto.stage === 'capture' && auto.resume) stage = 'capture'
@@ -968,6 +971,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const out = { mode: 'ui-loop', stage, pass: prep.pass, reason: why, boards: prep.boards || [], problems: prep.problems || [] }
   const nextOf = s => (s ? { stage: s, args: Object.assign({}, carry, { stage: s }) } : null)
 
+  if (staleCapture && !resumeFix && prep.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached with stale captured source`], open: state.backlog || [] }) })
   if (stage === 'verify' && !state.backlog) stage = 'capture' // changed spec/manifest: capture the current contract in full
   if (stage === 'fix' && !state.backlog && prep.published) stage = 'review' // stale review: rebuild before applying fixes
   if (stage === 'done' && (!state.backlog || state.areas.some(area => !state.reviewedAreas.includes(area)))) stage = 'review'

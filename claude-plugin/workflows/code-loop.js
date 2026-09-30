@@ -45,7 +45,7 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt, options)
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', options)
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
@@ -269,7 +269,7 @@ phase('Review')
 for (let round = 1; round <= cap; round++) {
   const review = await run.agent(withPreamble(
     `Round ${round} of the code loop on this branch against ${base}.\n` +
-    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Then invoke the code-review skill (Skill tool: code-review) with args \`high --fix\` over the branch diff; let it apply the findings it can. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. Return counts, remaining, commits and gate {green, ran, testsExecuted, failures, repaired, headSha}; headSha is git rev-parse HEAD AFTER every repair and verification.`
+    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Read the code-review guidance when available, then review the branch diff INLINE with high confidence: check correctness, contracts, failure paths and the linked acceptance criteria; validate claims against current code and primary documentation. Fix confirmed defects in this same agent. Never invoke a review skill that spawns its own agents. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. Return counts, remaining, commits and gate {green, ran, testsExecuted, failures, repaired, headSha}; headSha is git rev-parse HEAD AFTER every repair and verification.`
   ), { label: `review:${round}`, phase: 'Review', schema: REVIEW_SCHEMA })
   if (!review) { log(`code-loop: round ${round} review failed`); break }
 
