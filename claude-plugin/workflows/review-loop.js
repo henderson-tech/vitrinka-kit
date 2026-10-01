@@ -5,6 +5,7 @@ export const meta = {
   phases: [
     { title: 'Detect', detail: 'ui-loop or routes mode (skipped when args decide)' },
     { title: 'Prepare', detail: 'branch, app, matrix, task binding — ui-loop: vybava ui-loop state (+ batches | lanes) relayed verbatim' },
+    { title: 'Recover', detail: 'ui-loop: recover the interrupted writer before checkpoint filtering or recapture' },
     { title: 'Map', detail: 'route inventory and journeys (skipped when passed in)' },
     { title: 'Fix', detail: 'one writer accepts and repairs the route pass, then verifies it' },
     { title: 'Gate', detail: 'verify a clean route pass without changing its captured revision' },
@@ -586,6 +587,7 @@ const UILOOP_STATE = {
   type: 'object',
   description: 'the `data` of `vybava ui-loop state --json`, verbatim',
   properties: {
+    recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
     headSha: { type: 'string' }, reviewBasis: { type: 'string' }, capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, scoreboardBasis: { type: 'string' }, scoreboardCurrent: { type: 'boolean' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
     pass: { type: 'integer' }, passDir: { type: 'string' },
     config: UILOOP_CONFIG,
@@ -817,31 +819,51 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   if ((state.shots || 0) > 0 && !state.screens) throw new Error(`review-loop (ui-loop): prepare returned no screens for pass ${state.pass} although it counted ${state.shots} shots — relay \`vybava ui-loop state\` verbatim; re-run the stage`)
   const cfg = state.config || { areas: [], apps: [] }
   if (A.expectedHead && state.headSha !== A.expectedHead) throw new Error('review-loop (ui-loop): input revision changed; start a fresh pass')
+  const recovery = state.recovery || A.recovery
   const staleCapture = !!state.pass && (!state.capturedHeadSha || state.sourceUnchanged !== true)
   const resumeFix = state.next.stage === 'fix' && !!state.capturedHeadSha && state.hasBacklog
-  const auto = staleCapture && !resumeFix ? { stage: 'capture', resume: false, reason: 'application source differs from captured revision; capture again' } : state.next
+  const auto = staleCapture && !resumeFix && !recovery ? { stage: 'capture', resume: false, reason: 'application source differs from captured revision; capture again' } : state.next
   let stage = staleCapture ? auto.stage : asked || auto.stage
   // A verify cut off before its publish left a new, unpublished pass: finish
   // that pass (capture resumes it) instead of shooting yet another one.
   if (stage === 'verify' && auto.stage === 'capture' && auto.resume) stage = 'capture'
   log(`review-loop (ui-loop): pass ${state.pass} on ${prep.branch} — auto says ${auto.stage} (${auto.reason}); running ${stage}`)
-  const carry = Object.assign({}, A, { mode: 'ui-loop', stage: undefined, only: undefined, pass: undefined, agentBudget: undefined, expectedHead: undefined })
+  const carry = Object.assign({}, A, { mode: 'ui-loop', stage: undefined, only: undefined, pass: undefined, agentBudget: undefined, expectedHead: undefined, recovery: undefined })
   const why = stage === auto.stage ? auto.reason : `stage ${stage} requested (auto would run ${auto.stage}: ${auto.reason})`
   const out = { mode: 'ui-loop', stage, pass: state.pass, reason: why, boards: state.boards || [], problems: prep.problems || [] }
   const nextOf = s => (s ? { stage: s, args: Object.assign({}, carry, { stage: s }) } : null)
   const passDir = state.passDir || `${cfg.out}/pass-${state.pass}`
 
+  if (recovery) {
+    phase('Recover')
+    const recovered = await run.agent(brief(withUiLoop(
+      `Recover ONLY the interrupted writer ${recovery.lane} of pass ${state.pass}, BEFORE checkpoint filtering or recapture. Ownership: ${JSON.stringify(recovery)}. Read ${passDir}/fix/recovery.json (when absent, recreate it atomically from this bounded identity before any edit), git status and the named items/checkpoints. Finish or remove only your in-flight edits within those dirs and their item files; commit source path-limited after the repo's gates. Never revert another writer or unknown edits. Recheck each named checkpoint's commit, source digests, API notes and reason; refresh a checkpoint only after its source commit. Keep the spec and manifests unchanged. Confirm the application tree has no uncommitted source outside pass output/.vitrinka before removing ONLY ${passDir}/fix/recovery.json. If ownership is unclear or gates fail, keep the marker and report the blocker. Return treeCleanOfMine and recoveryCleared=true only after that verified cleanup and marker removal.`
+    , true)), { label: `recover:${recovery.lane}`, phase: 'Recover', schema: { type: 'object', properties: { treeCleanOfMine: { type: 'boolean' }, recoveryCleared: { type: 'boolean' }, problems: { type: 'array', items: { type: 'string' } } }, required: ['treeCleanOfMine', 'recoveryCleared'] } })
+    const clear = recovered && recovered.treeCleanOfMine === true && recovered.recoveryCleared === true && !(recovered.problems || []).length
+    return Object.assign(out, { stage: 'fix', next: { stage: clear ? 'auto' : 'fix', args: Object.assign({}, carry, { pass: state.pass, stage: clear ? 'auto' : 'fix', recovery: clear ? undefined : recovery }) }, receipt: completionReceipt({ problems: [...out.problems, ...((recovered && recovered.problems) || []), clear ? 'writer recovered; read stage evidence again' : 'interrupted writer still needs recovery'] }) })
+  }
   const uiGateSchema = { ...GATE_SCHEMA, properties: { ...GATE_SCHEMA.properties, sourceUnchanged: { type: 'boolean' } }, required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }
   const verifiedGate = gate => gatePassed(gate) && gate.sourceUnchanged === true && !!state.capturedHeadSha && state.sourceUnchanged === true
   const verifyGate = () => run.agent(brief(
     `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from runner counts; zero tests cannot pass an expected suite. Check the application tree and the tested Devbox source against capturedHeadSha ${state.capturedHeadSha}, excluding only ${cfg.out} and .vitrinka/. Include staged, unstaged and untracked files. No source edits are allowed. Return sourceUnchanged, green, ran, failures and headSha AFTER verification.`
   ), { label: 'gate:ui-loop', phase: 'Verify', schema: uiGateSchema })
-  if (staleCapture && !resumeFix && state.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached with stale captured source`] }) })
+  if (staleCapture && !resumeFix && !recovery && state.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached with stale captured source`] }) })
+  const retryGate = gate => {
+    const attempts = (A.gateRetries || 0) + 1
+    const failures = [...((gate && gate.failures) || [])]
+    if (!gate) failures.push('verification agent failed')
+    else if (gate.sourceUnchanged !== true) failures.push('application source changed during verification')
+    else if (!(gate.testsExecuted > 0) || !(gate.ran || []).length) failures.push('verification has no executed test evidence')
+    else if (!gate.green || !gate.headSha) failures.push('verification gate did not pass')
+    const stage = gate && gate.sourceUnchanged === false ? 'capture' : 'auto'
+    return Object.assign(out, { next: attempts < 3 ? { stage, args: Object.assign({}, carry, { stage, gateRetries: attempts }) } : null, receipt: completionReceipt({ problems: [...out.problems, ...failures] }) })
+  }
   if (stage === 'done') {
     if (!state.hasBacklog || (state.review.left || []).length || !state.scoreboardCurrent || state.backlog.reviewed !== state.screens) {
       return Object.assign(out, { next: nextOf('review'), receipt: completionReceipt({ problems: [...out.problems, 'review coverage or the durable scoreboard receipt is missing or stale'] }) })
     }
     const gate = await verifyGate()
+    if (!verifiedGate(gate)) return retryGate(gate)
     return Object.assign(out, { next: null, receipt: completionReceipt({ complete: !state.backlog.open && !!state.shots && state.published && verifiedGate(gate), problems: out.problems, open: state.backlog.open ? [{ title: `${state.backlog.open} open UI findings` }] : [], evidence: verifiedGate(gate) ? [{ pass: state.pass, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
   if ((stage === 'review' || stage === 'fix') && !(state.pass && state.published)) throw new Error(`review-loop (ui-loop): stage ${stage} needs a published pass — ${auto.reason}; run stage capture`)
@@ -851,6 +873,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   // ---- capture | verify: one `ui-loop run` on the devbox, rsync back, split, publish, board sections
   if (stage === 'capture' || stage === 'verify') {
     const resume = stage === 'capture' && auto.stage === 'capture' && auto.resume && !A.fresh
+    if (!resume && state.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached; another capture is required`] }) })
     // The verify selection lives on disk (open items' screens + what done
     // checkpoints touched); only its emptiness is known here, from the counts.
     const verifyOnly = stage === 'verify'
@@ -929,10 +952,6 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const left = all.filter(b => !covered.has(b.id))
     const inScope = left.filter(b => !list(A.areas).length || list(A.areas).includes(b.area))
     out.review = { batches: all.length, reviewedNow: fresh.length, left: left.map(b => b.id), unreviewed: [...new Set(fresh.flatMap(r => r.unreviewed || []))].sort() }
-    if (out.review.unreviewed.length) {
-      const only = [...new Set(out.review.unreviewed.map(u => String(u).split(/[\s(@]/)[0]).filter(Boolean))]
-      return Object.assign(out, { next: { stage: 'capture', args: Object.assign({}, carry, { stage: 'capture', only }) }, receipt: completionReceipt({ problems: [...out.problems, `unreviewed screens need recapture: ${only.join(', ')}`] }) })
-    }
     // An `areas` limit narrows this run only: once its areas are done, the
     // chain drops it so the next run reviews the rest instead of looping.
     if (inScope.length) return Object.assign(out, { next: nextOf('review'), reason: `${inScope.length} review batches left` })
@@ -943,7 +962,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     // names the few keys that need judgement; the agent handles only those.
     const synth = await run.agent(brief(withUiLoop(
       `Write the backlog of ui-loop pass ${state.pass} to ${passDir}/review/backlog.json, in the \`vybava ui-loop scoreboard\` contract (docs/uiloop.md "Scoreboard and the review backlog": {v: 1, pass, reviewed, findings}, unknown keys rejected).\n` +
-      `1. \`vybava ui-loop merge-review --pass ${state.pass} --json\`. It merged every raw batch and pass ${prev ? prev.pass : '<previous>'}'s backlog into ${passDir}/review/backlog.draft.json — exact duplicates folded, previous items carrying their verdict as status, \`reviewed\` computed from the batches minus the unreviewed screens. A REVIEW_INCOMPLETE diagnostic means batches are missing: stop and report it.\n` +
+      `1. \`vybava ui-loop merge-review --pass ${state.pass} --json\`. It merged every raw batch and pass ${prev ? prev.pass : '<previous>'}'s backlog into ${passDir}/review/backlog.draft.json — exact duplicates folded, previous items carrying their verdict as status, \`reviewed\` computed from the batches minus the unreviewed screens. A REVIEW_INCOMPLETE diagnostic means batches are incomplete: preserve the valid partial draft and name every missing/unread screen in unreviewed; never mark them clean or drop the judged screens' findings.\n` +
       `2. Handle ONLY what its envelope names; never read or rewrite the other items. \`unjudged\`: previous items no reviewer judged; they stand as not-met — look at their screens' shots and set the verdict when you can, but never met on a screen listed in \`unreviewed\`. \`problems\`: raw findings left out (\`{batch, index, missing}\` — read review/raw/<batch>.json .findings[index]); repair each from the code and the shots and add it (status open, key = its screen + title slug), or drop it with why in problems. \`invalid\`: contract breaks to fix.\n` +
       `3. Apply those edits to a copy of the draft with jq (select by key) and write it as ${passDir}/review/backlog.json. Never change \`reviewed\` and never invent a finding. The pass directory is gitignored environment output: never commit it.\n` +
       `Also write {"basis":"${state.reviewBasis}"} to ${passDir}/review/basis.json; never change the fingerprinted spec or manifests.\n` +
@@ -970,7 +989,8 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const scoreOk = !!score && score.receiptVerified === true && !(score.problems || []).length
     const coverageOk = !ids.length && synth.reviewed === state.screens
     const gate = !synth.open && coverageOk && scoreOk ? await verifyGate() : null
-    return Object.assign(out, { next: nextOf(!scoreOk ? 'review' : ids.length ? 'capture' : synth.open ? 'fix' : !coverageOk ? 'review' : null), receipt: completionReceipt({ complete: !synth.open && coverageOk && scoreOk && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
+    if (!synth.open && coverageOk && scoreOk && !verifiedGate(gate)) return retryGate(gate)
+    return Object.assign(out, { next: nextOf(ids.length ? 'capture' : !scoreOk ? 'review' : synth.open ? 'fix' : !coverageOk ? 'review' : null), receipt: completionReceipt({ complete: !synth.open && coverageOk && scoreOk && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
 
   // ---- fix: lanes by ownership (`vybava ui-loop lanes`) — primitives first, then their dirs are frozen and ≤ 4 area lanes run; Settle applies the deferred i18n and type-checks
@@ -985,6 +1005,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     log(`fix: ${prim.length} primitives lanes, ${areas.length} area lanes, ${lanes.frozen.length} frozen dirs, ${foreign.length} foreign, ${i18nItems.length} i18n-only, ${lanes.finished} already finished`)
     const laneBrief = (l, kind, apiNotes) => brief(withUiLoop(
       `You are fix lane ${l.lane} (${kind}) of ui-loop pass ${state.pass}, on branch ${prep.branch}. The spec is \`${cfg.spec}\` (read it first; its rules and owner decisions are final); the apps run on the devbox${prep.workspace ? ` workspace ${prep.workspace}` : ''} and stay running.\n` +
+      `Before any source edit, atomically write ${passDir}/fix/recovery.json = ${JSON.stringify({ lane: l.lane, kind, dirs: l.dirs, keys: l.keys })} (temp/fsync/rename/directory sync). It is the durable writer identity. Keep it on failure or dirty source; remove it only after all your source edits are committed and the application tree is clean outside pass output/.vitrinka.\n` +
       `WHAT TO FIX: these backlog keys, in this order (worst first): ${JSON.stringify(l.keys)}.\n` +
       `Read each item's full body from ${passDir}/review/backlog.json by key (\`jq '.findings[] | select(.key=="<key>")' ${passDir}/review/backlog.json\`): title, detail, acceptance, files, screen, viewports, themes, shots. Look at its shots under ${passDir}/shots/<screen>/<viewport>.<theme>.png before and while you fix.\n` +
       `Checkpoints require basis ${state.reviewBasis}, commit, fileDigests (SHA256 of every source file this item changed) and apiChanges. Missing, reverted or stale checkpoints must be reevaluated.\nYOUR DIRS — you own the files directly inside them, not their subdirectories: ${JSON.stringify(l.dirs)}. Checkpoints go to ${passDir}/fix/<key>.json with "lane":"${l.lane}".\n` +
@@ -993,18 +1014,19 @@ async function uiLoopReview(A, run = workflowRun(A)) {
         : `Primitive dirs are FROZEN (the primitives lanes finished first): never edit a file in ${JSON.stringify(lanes.frozen)}.${apiNotes.length ? ` Additions they made this round: ${JSON.stringify(apiNotes)}.` : ''} An item that needs a primitive change is checkpointed blocked with the exact change as its note.\n`) +
       `Return the done/skipped/blocked keys, remaining (keys not reached), commits, touched screens, apiChanges, i18n and treeCleanOfMine.`
     , true))
-    run.ensureBudget(prim.length + areas.length + 1)
     const results = []
     const runLanes = async (ls, kind, apiNotes) => {
-      const batch = await run.serial(ls.map(l => () =>
+      const selected = ls.slice(0, Math.max(0, run.remaining() - 1)) // reserve Settle, including calls already spent on Detect/Prepare
+      const batch = await run.serial(selected.map(l => () =>
         run.agent(laneBrief(l, kind, apiNotes), { label: `fix:${l.lane}`, phase: kind === 'primitives' ? 'Fix: primitives' : 'Fix: areas', schema: UILOOP_LANE_SCHEMA })), r => !!r && r.treeCleanOfMine === true)
       results.push(...batch.results.filter(Boolean))
       if (batch.failedIndex === null) return true
       out.fix = laneSummary(results)
       out.problems.push(`fix lane ${ls[batch.failedIndex].lane} failed or left dirty source; recover it before another writer`)
+      out.recovery = { lane: ls[batch.failedIndex].lane, kind, dirs: ls[batch.failedIndex].dirs, keys: ls[batch.failedIndex].keys }
       return false
     }
-    const recover = () => Object.assign(out, { next: nextOf('fix'), receipt: completionReceipt({ problems: out.problems }) })
+    const recover = () => Object.assign(out, { next: { stage: 'fix', args: Object.assign({}, carry, { stage: 'fix', pass: state.pass, recovery: out.recovery }) }, receipt: completionReceipt({ problems: out.problems }) })
     let wait = ''
     if (prim.length) {
       phase('Fix: primitives')
@@ -1022,7 +1044,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     if (results.length || foreign.length || i18nItems.length) {
       phase('Settle')
       settle = await run.agent(brief(withUiLoop(
-        `Settle the fix round of ui-loop pass ${state.pass} on branch ${prep.branch}. The lanes are done; you own the i18n catalogs this step. Never edit the fingerprinted spec.\n` +
+        `Settle the fix round of ui-loop pass ${state.pass} on branch ${prep.branch}. Before any edit, atomically write ${passDir}/fix/recovery.json with lane=settle, kind=settle, keys=${JSON.stringify([...foreign, ...i18nItems])} and dirs=the catalog/source directories you will edit. Keep the marker on cutoff/failure/dirty source; remove it only after committed source and verified clean application tree. The lanes are done; you own the i18n catalogs this step. Never edit the fingerprinted spec.\n` +
         `1. Strings: every string the round needs is in its checkpoints — \`jq -c '.i18n[]?' ${passDir}/fix/*.json\`${results.some(r => (r.i18n || []).length) ? ` — plus these the lanes returned: ${JSON.stringify(results.flatMap(r => r.i18n || []))}` : ''}. Add each key the catalogs lack to every locale catalog the app uses (keep each file's structure, key order and formatting; an existing key keeps its value unless the fix needs a change). Commit path-limited: "fix(i18n): strings for ui-loop pass ${state.pass}".\n` +
         (i18nItems.length ? `2. These items touch only i18n catalogs; read each by key from ${passDir}/review/backlog.json, fix it in the catalogs, commit path-limited and checkpoint it (lane "settle"): ${JSON.stringify(i18nItems)}.\n` : '') +
         (foreign.length ? `3. These items name no file in this repo (their fix lands in another repo): never edit another repo — checkpoint each blocked (lane "settle") with a note naming the repo and files the fix needs: ${JSON.stringify(foreign)}.\n` : '') +
@@ -1031,7 +1053,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
         `6. Confirm the shared dev server is green (its log in the devbox workspace).\n` +
         `Checkpoints follow the lane rules: basis ${state.reviewBasis}, fileDigests (SHA256 of every source file the item changed), apiChanges and i18n, written after the commit, never committed. Never touch the database, the devbox stack or captures; never push. Return green, what you ran, failures, commits, i18nAdded and the keys you checkpointed.`
       , true)), { label: 'settle', phase: 'Settle', schema: UILOOP_SETTLE_SCHEMA })
-      if (!settle) out.problems.push('settle: the i18n / type-check step failed — run stage fix again; it re-applies every checkpoint\'s strings')
+      if (!settle) { out.recovery = { lane: 'settle', kind: 'settle', dirs: [], keys: [...foreign, ...i18nItems] }; out.problems.push('settle: the i18n / type-check step failed — run stage fix again; it re-applies every checkpoint\'s strings') }
       else out.problems.push(...(settle.problems || []), ...(settle.failures || []).map(f => `settle: ${f}`))
     }
     out.fix = Object.assign(laneSummary(results), { remaining: results.flatMap(r => r.remaining || []), apiChanges: apiNotes, settle: settle && { green: settle.green, i18nAdded: settle.i18nAdded || 0, checkpointed: settle.checkpointed || [], commits: settle.commits || [] } })

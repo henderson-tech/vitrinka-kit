@@ -380,6 +380,7 @@ const UILOOP_STATE = {
   type: 'object',
   description: 'the `data` of `vybava ui-loop state --json`, verbatim',
   properties: {
+    recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
     headSha: { type: 'string' }, reviewBasis: { type: 'string' }, capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, scoreboardBasis: { type: 'string' }, scoreboardCurrent: { type: 'boolean' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
     pass: { type: 'integer' }, passDir: { type: 'string' },
     config: UILOOP_CONFIG,
