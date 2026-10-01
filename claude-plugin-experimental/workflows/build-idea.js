@@ -509,6 +509,9 @@ function notReadyReasons(run) {
     else {
       if (code.remaining.length) why.push(`${code.remaining.length} code-review findings left for the human`)
       if (!last.green) why.push("the code loop's last gate is red")
+      if (!code.receipt || code.receipt.status !== 'complete') {
+        why.push(...(code.receipt && code.receipt.blockers && code.receipt.blockers.length ? code.receipt.blockers : ['the code loop has no verified completion receipt']))
+      }
       const same = (a, b) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a))
       if (!recordSha || !heads || !heads.head || !heads.prHead) why.push('the PR head could not be compared with the device record')
       else {

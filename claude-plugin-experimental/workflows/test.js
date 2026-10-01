@@ -630,6 +630,9 @@ function notReadyReasons(run) {
     else {
       if (code.remaining.length) why.push(`${code.remaining.length} code-review findings left for the human`)
       if (!last.green) why.push("the code loop's last gate is red")
+      if (!code.receipt || code.receipt.status !== 'complete') {
+        why.push(...(code.receipt && code.receipt.blockers && code.receipt.blockers.length ? code.receipt.blockers : ['the code loop has no verified completion receipt']))
+      }
       const same = (a, b) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a))
       if (!recordSha || !heads || !heads.head || !heads.prHead) why.push('the PR head could not be compared with the device record')
       else {
@@ -833,7 +836,7 @@ phase('Map')
 let terrain = A.routes ? { routes: A.routes, journeys: A.journeys || [] } : null
 if (!terrain) {
   try {
-    terrain = await workflow('vitrinka:map', { scope: 'app', project, task, push: false })
+    terrain = await workflow('vitrinka:map', { scope: 'app', screens: false, project, task, push: false })
   } catch (e) {
     log(`test: map workflow unavailable (${e && e.message}); inventorying inline`)
     terrain = await agent(withPreamble(
@@ -1175,7 +1178,7 @@ const handback = await agent(withPreamble(
     unverified: unverified.map(f => ({ key: f.key, lane: f.lane, summary: f.summary })),
     qaTask: report && report.qaTaskUrl,
     bugs: report && report.bugs,
-    codeLoop: code ? { rounds: code.rounds, remaining: code.remaining.length, ...(pushHold ? { unposted: code.remaining } : {}) } : null,
+    codeLoop: code ? { rounds: code.rounds, receipt: code.receipt, remaining: code.remaining.length, ...(pushHold ? { unposted: code.remaining } : {}) } : null,
     pr: prUrl, ready, notReady, demoted, prProblem, pushHeld: pushHold,
   }) +
   `\nThe run board url goes first, bare on its own line.${demoted ? ' The PR was returned to draft: say so, with the notReady reasons.' : ''}${fixes && !recordWhy.length && notReady.length ? ' The device record itself was clean: say the PR stays a draft only because of the code loop (notReady), not a device defect.' : ''}${prProblem ? ' The PR is not in the state the run earned (prProblem): say so.' : ''}${pushHold ? ' The code loop pushed nothing (pushHeld): the PR could not be proven a draft (or absent) before the code loop, so its commits are local only and its remaining findings (codeLoop.unposted) reached no PR comment — say so, and carry those findings in full.' : ''} Open findings are already bugs on the qa task — never spot them as children. Next steps hold only what is the human's: ${ready ? 'the merge' : !fixes ? `the PR, which a ${thoroughness} run leaves as it was` : prUrl ? 'marking the PR ready and the merge' : 'opening or readying the PR'}${pushHold ? ", pushing the code loop's local commits once the PR is a draft" : ''}${openFindings.length ? ', the open findings on the lane boards' : ''}. Return the rendered hand-back block verbatim.`

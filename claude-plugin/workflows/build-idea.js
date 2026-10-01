@@ -4,7 +4,10 @@ export const meta = {
   whenToUse: 'Launched by the make-idea skill once the brainstorm has settled and the brief is committed; runs unattended until the PR is open and the task is handed back — the human merges.',
   phases: [
     { title: 'Plan', detail: 'the brief into ≤4 disjoint implementation slices' },
-    { title: 'Implement', detail: 'one agent per slice, same worktree, then the gates' },
+    { title: 'Foundation', detail: 'shared types and contracts before their consumers' },
+    { title: 'Implement', detail: 'up to four sequential slice writers in one worktree' },
+    { title: 'Finish', detail: 'resolve implementation leftovers' },
+    { title: 'Gate', detail: 'verify implementation before the UI pass' },
     { title: 'Verify', detail: 'map the app, then the review loop' },
     { title: 'Ship', detail: 'the code loop, the PR, the hand-back' },
   ],
@@ -27,6 +30,82 @@ const PREAMBLE = [
 
 function withPreamble(prompt) {
   return PREAMBLE + '\n\n' + prompt
+}
+// The runtime journals agent returns. Keep accounting deterministic on replay,
+// share the allowance with child workflows, and bound every fan-out to four.
+function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
+  const supplied = input.agentBudget || { limit: 10, used: 0 }
+  const limit = supplied.limit
+  let used = supplied.used
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10 || !Number.isInteger(used) || used < 0 || used > limit) {
+    throw new Error('workflow: agentBudget must have integer limit 1..10 and used 0..limit')
+  }
+  const remaining = () => limit - used
+  const reserve = n => {
+    if (n > remaining()) throw new Error(`workflow: agent budget exhausted (${used}/${limit}); continue with the returned next args as a new run`)
+  }
+  return {
+    remaining,
+    ensureBudget: reserve,
+    async agent(prompt, options) {
+      reserve(1)
+      used++
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', options)
+    },
+    async workflow(name, args) {
+      if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
+      const result = await callWorkflow(name, Object.assign({}, args, { agentBudget: { limit, used } }))
+      if (!result || !result.agentBudget || result.agentBudget.limit !== limit || !Number.isInteger(result.agentBudget.used) || result.agentBudget.used < used || result.agentBudget.used > limit) {
+        throw new Error(`workflow: ${name} returned no valid shared agent-budget receipt`)
+      }
+      used = result.agentBudget.used
+      return result
+    },
+    async parallel(tasks) {
+      reserve(tasks.length)
+      const results = []
+      for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
+      return results
+    },
+    async serial(tasks, accept = result => result != null) {
+      reserve(tasks.length)
+      const results = []
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
+    },
+    finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
+  }
+}
+
+function completionReceipt({ complete = false, problems = [], open = [], unverified = [], evidence = [] } = {}) {
+  const blockers = [...problems, ...open.map(x => x.summary || x.title || String(x)), ...unverified.map(x => x.summary || x.title || String(x))]
+  const status = complete && !blockers.length && evidence.length ? 'complete' : 'incomplete'
+  if (status === 'incomplete' && !blockers.length) blockers.push('stage is unfinished or lacks verification evidence')
+  return { v: 1, status, evidence, blockers }
+}
+
+function gatePassed(gate) {
+  return !!(gate && gate.green && gate.headSha && gate.ran && gate.ran.length && Number.isInteger(gate.testsExecuted) && gate.testsExecuted > 0 && !(gate.failures || []).length)
+}
+
+function coverageProblems(routes, matrix, shots, journeys, cases, reviews, walkOnly, cards = []) {
+  const problems = []
+  if (!walkOnly) {
+    for (const device of matrix) for (const route of routes) {
+      if (!shots.some(s => s.device === device.name && s.shots.some(x => x.route === route.path))) problems.push(`missing capture: ${device.name} ${route.path}`)
+      if (!cards.some(c => c.device === device.name && c.route === route.path)) problems.push(`missing published capture: ${device.name} ${route.path}`)
+    }
+    const read = new Set(reviews.flatMap(r => r.cardsRead || []))
+    if (!cards.length || cards.some(c => !read.has(c.cardId))) problems.push('the reviewer did not read every published card')
+  }
+  for (const device of matrix) for (const journey of journeys) {
+    if (!cases.some(c => c.title === journey.title && c.device === device.name && ['pass', 'fail'].includes(c.verdict))) problems.push(`journey not executed: ${device.name} ${journey.title}`)
+  }
+  return problems
 }
 // ---- lib/schemas.js — structured-output schemas shared by the flows
 const ROUTE = {
@@ -91,20 +170,22 @@ const FINDINGS_SCHEMA = {
     findings: { type: 'array', items: FINDING },
     regressions: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, key: { type: 'string' }, fixed: { type: 'boolean' }, note: { type: 'string' } }, required: ['key', 'fixed'] } },
     screensRead: { type: 'integer' },
+    cardsRead: { type: 'array', items: { type: 'integer' }, description: 'every cardId whose pixels were read' },
     boardUrl: { type: 'string' },
   },
-  required: ['findings'],
+  required: ['findings', 'cardsRead'],
 }
 
 const SHOOT_SCHEMA = {
   type: 'object',
   properties: {
     device: { type: 'string' },
+    sourceUnchanged: { type: 'boolean', description: 'tracked and untracked application source matches the prepared HEAD before and after capture' },
     shots: { type: 'array', items: { type: 'object', properties: { route: { type: 'string' }, label: { type: 'string' }, file: { type: 'string' } }, required: ['route', 'label'] } },
     boardUrl: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['device', 'shots'],
+  required: ['device', 'shots', 'sourceUnchanged'],
 }
 
 const USERTEST_SCHEMA = {
@@ -112,7 +193,7 @@ const USERTEST_SCHEMA = {
   properties: {
     qaTaskUrl: { type: 'string' },
     boardUrl: { type: 'string' },
-    cases: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, device: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'skip'] }, note: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, required: ['title', 'verdict'] } },
+    cases: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, device: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'skip'] }, note: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, required: ['title', 'device', 'verdict'] } },
     bugs: { type: 'array', items: { type: 'string', description: 'task url of each bug filed' } },
   },
   required: ['cases'],
@@ -137,8 +218,10 @@ const GATE_SCHEMA = {
     ran: { type: 'array', items: { type: 'string' } },
     failures: { type: 'array', items: { type: 'string' } },
     repaired: { type: 'boolean' },
+    testsExecuted: { type: 'integer', minimum: 0, description: 'sum of tests actually executed, read from runner output; never inferred from a success banner' },
+    headSha: { type: 'string', description: 'git rev-parse HEAD after every repair and verification' },
   },
-  required: ['green', 'ran'],
+  required: ['green', 'ran', 'headSha', 'testsExecuted'],
 }
 
 const PREPARE_SCHEMA = {
@@ -147,13 +230,14 @@ const PREPARE_SCHEMA = {
     baseUrl: { type: 'string' },
     where: { type: 'string', enum: ['devbox', 'local'] },
     branch: { type: 'string' },
+    headSha: { type: 'string' },
     project: { type: 'string' },
     task: { type: 'string', description: 'vitrinka task id the run is bound to' },
     override: { type: 'object', description: 'parsed .claude/vitrinka-workflows.json or {}' },
     projectType: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['baseUrl', 'where', 'branch', 'projectType'],
+  required: ['baseUrl', 'where', 'branch', 'headSha', 'projectType'],
 }
 
 const PUBLISH_SCHEMA = {
@@ -162,12 +246,17 @@ const PUBLISH_SCHEMA = {
     boardUrl: { type: 'string' },
     boardSlug: { type: 'string' },
     section: { type: 'string' },
-    cards: { type: 'array', items: { type: 'object', properties: { cardId: { type: 'integer' }, route: { type: 'string' }, device: { type: 'string' }, label: { type: 'string' } }, required: ['cardId'] } },
+    cards: { type: 'array', items: { type: 'object', properties: { cardId: { type: 'integer' }, route: { type: 'string' }, device: { type: 'string' }, label: { type: 'string' } }, required: ['cardId', 'route', 'device'] } },
   },
   required: ['boardUrl', 'boardSlug', 'section', 'cards'],
 }
 // args: { brief: string (repo-relative path), task: string, project?: string, cap?: 3, severity?: 'minor', matrix?, base?: 'main' }
 const A = args || {}
+const run = workflowRun(A)
+const stage = A.stage || 'implement'
+if (!['implement', 'verify', 'ship'].includes(stage)) throw new Error('build-idea: stage must be implement | verify | ship')
+const state = A.state || {}
+const nextStage = (next, data) => run.finish({ stage, receipt: completionReceipt(), next: { name: 'vitrinka:build-idea', args: Object.assign({}, A, { stage: next, state: Object.assign({}, data, { brief: A.brief, task: A.task }), agentBudget: undefined }) } })
 if (!A.brief) throw new Error('build-idea: args.brief (the committed brief\'s repo-relative path) is required')
 if (!A.task) throw new Error('build-idea: args.task (the epic or story the brief belongs to) is required')
 
@@ -209,77 +298,97 @@ const IMPL_SCHEMA = {
   required: ['slice', 'done', 'left', 'files'],
 }
 
+let plan = state.plan
+let built = state.built || []
+let gate = state.gate
+let loop = state.loop
+let implementationLeft = state.implementationLeft || []
+if (stage !== 'implement' && (state.brief !== A.brief || state.task !== A.task)) throw new Error('build-idea: continuation belongs to a different brief or task')
+if (stage === 'implement') {
+run.ensureBudget(8) // plan + shared + four slices + sweep + gate
 phase('Plan')
-const plan = await agent(withPreamble(
-  `Read the feature brief at ${A.brief} (and the terrain artifact it links, if any). Plan its implementation for THIS repo as at most 4 slices that can be built in parallel in one worktree: each slice owns a disjoint set of files; anything two slices need (schema/migration, types, a shared component, a door) goes into \`shared\`, built first. Every slice lists its acceptance criteria as observable behaviour and the tests it writes in the repo's own framework. Honour the repo's laws (CLAUDE.md, the project memory files whose triggers match) — a plan that fights a law is wrong. Also return the routes the feature adds or changes and one paragraph of what the review loop should test. Read-only: change nothing.`
+plan = await run.agent(withPreamble(
+  `Read the feature brief at ${A.brief} (and the terrain artifact it links, if any). Plan its implementation for THIS repo as at most 4 slices ordered so dependencies precede consumers, built sequentially in one worktree: each slice owns a disjoint set of files; anything two slices need (schema/migration, types, a shared component, a door) goes into \`shared\`, built first. Every slice lists its acceptance criteria as observable behaviour and the tests it writes in the repo's own framework. Honour the repo's laws (CLAUDE.md, the project memory files whose triggers match) — a plan that fights a law is wrong. Also return the routes the feature adds or changes and one paragraph of what the review loop should test. Read-only: change nothing.`
 ), { label: 'plan', phase: 'Plan', schema: PLAN_SCHEMA })
 if (!plan || !plan.slices.length) throw new Error('build-idea: planning produced no slices')
 log(`build-idea: ${plan.slices.length} slices${plan.shared && plan.shared.files && plan.shared.files.length ? ' + shared' : ''}`)
 
-phase('Implement')
 const implPrompt = (s, isShared) => withPreamble(
   `Implement ${isShared ? 'the SHARED foundation' : `slice "${s.name}"`} of the feature in ${A.brief} (task ${A.task}), in this worktree.\n` +
   `Goal: ${s.goal}\nFiles you own: ${JSON.stringify(s.files)}\n${s.acceptance ? `Acceptance: ${JSON.stringify(s.acceptance)}\n` : ''}${s.tests ? `Tests to write/extend: ${JSON.stringify(s.tests)}\n` : ''}` +
-  (isShared ? 'Other slices build on what you leave; keep it minimal and typed.' : 'Other slices are being built in this same checkout right now: never edit files outside your list, never reformat shared code; a need outside your files is a `left` item with why.') +
+  (isShared ? 'Other slices build on what you leave; keep it minimal and typed.' : 'Slices run sequentially: you are the ONLY writer and committer in this checkout. Never revert earlier slices, never edit files outside your list; a need outside your files is a `left` item with why.') +
   ` Commit per coherent unit with a trailer naming the task. Return what is done, what is left and why, files and commits.`
 )
 const impl = []
 if (plan.shared && plan.shared.files && plan.shared.files.length) {
-  impl.push(await agent(implPrompt(plan.shared, true), { label: 'implement:shared', phase: 'Implement', schema: IMPL_SCHEMA }))
+  phase('Foundation')
+  const shared = await run.agent(implPrompt(plan.shared, true), { label: 'implement:shared', phase: 'Foundation', schema: IMPL_SCHEMA })
+  if (!shared) throw new Error('build-idea: shared foundation failed; resume before building its consumers')
+  impl.push(shared)
 }
-impl.push(...await parallel(plan.slices.map(s => () => agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA }))))
-const built = impl.filter(Boolean)
+phase('Implement')
+const slices = await run.serial(plan.slices.map(s => () => run.agent(implPrompt(s, false), { label: `implement:${s.name}`, phase: 'Implement', schema: IMPL_SCHEMA })))
+if (slices.failedIndex !== null) throw new Error(`build-idea: slice "${plan.slices[slices.failedIndex].name}" failed; resume this run before building its consumers`)
+impl.push(...slices.results)
+built = impl
 const left = built.flatMap(r => r.left.map(l => ({ slice: r.slice, ...l })))
 log(`build-idea: ${built.length} slices built, ${left.length} items left`)
 
 if (left.length) {
-  const sweep = await agent(withPreamble(
+  phase('Finish')
+  const sweep = await run.agent(withPreamble(
     `Finish what the slice builders left in this worktree (feature ${A.brief}, task ${A.task}): ${JSON.stringify(left)}. Everything is yours now — no other agent edits this checkout. An item that needs a product decision is left with why. Commit. Return done/left/files/commits.`
-  ), { label: 'implement:sweep', phase: 'Implement', schema: IMPL_SCHEMA })
-  if (sweep) built.push(sweep)
+  ), { label: 'implement:sweep', phase: 'Finish', schema: IMPL_SCHEMA })
+  if (!sweep) throw new Error('build-idea: leftover sweep failed; resume this run')
+  built.push(sweep)
+  implementationLeft = sweep.left.map(l => `${l.what}: ${l.why}`)
 }
 
-const gate = await agent(withPreamble(
-  `Gate the implementation: run every type/build/test gate CLAUDE.md names, where it says they run, plus the tests the slices wrote. Repair and commit what this branch broke; report what predates it. Return green, what ran, failures.`
-), { label: 'gate', phase: 'Implement', schema: GATE_SCHEMA })
+phase('Gate')
+gate = await run.agent(withPreamble(
+  `Gate the implementation: run every type/build/test gate CLAUDE.md names, where it says they run, plus the tests the slices wrote. Repair and commit what this branch broke; report what predates it. Report testsExecuted from the runner counts; zero executed tests cannot pass an expected suite. Return green, what ran, failures and headSha from git rev-parse HEAD after verification.`
+), { label: 'gate', phase: 'Gate', schema: GATE_SCHEMA })
 if (!gate || !gate.green) log(`build-idea: implementation gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}; continuing so the board shows the state`)
-
-phase('Verify')
-let terrain = null
-try {
-  terrain = await workflow('vitrinka:map', { scope: 'app', project: A.project, task: A.task, push: false })
-} catch (e) {
-  log(`build-idea: map workflow unavailable (${e && e.message}); the review loop inventories inline`)
+return nextStage('verify', { plan, built, gate, implementationLeft, codeReverifications: state.codeReverifications || 0 })
 }
-let loop = { boardUrl: '', passes: [], converged: false, gateRed: false, open: [], unverified: [], error: '' }
-try {
-  loop = await workflow('vitrinka:review-loop', {
-    routes: terrain ? terrain.routes : undefined,
-    journeys: terrain ? terrain.journeys : undefined,
-    projectType: terrain ? terrain.projectType : undefined,
+if (!plan || !gate || !gate.headSha) throw new Error('build-idea: the previous stage state and verified headSha are required; use its returned next.args')
+
+if (stage === 'verify') {
+phase('Verify')
+loop = { boardUrl: '', passes: [], converged: false, gateRed: false, open: [], unverified: [], error: '' }
+loop = await run.workflow('vitrinka:review-loop', {
+    mode: 'routes',
+    expectedHead: gate.headSha,
+    continuation: state.continuation,
+    routes: state.routes, journeys: state.journeys,
     task: A.task, project: A.project, cap: A.cap || 3, severity: A.severity || 'minor', matrix: A.matrix, scope: plan.scope,
   })
   log(`build-idea: review loop ${loop.converged ? 'converged' : `stopped with ${loop.open.length} open${loop.gateRed ? ' and a red gate' : ''}`} after ${loop.passes.length} pass(es) → ${loop.boardUrl}`)
-} catch (e) {
-  loop.error = (e && e.message) || String(e)
-  log(`build-idea: review loop failed (${loop.error}) — the UI is UNVERIFIED; continuing to the code loop so the hand-back says so`)
+if (loop.next) return nextStage('verify', { plan, built, gate: Object.assign({}, gate, { headSha: loop.headSha || gate.headSha }), continuation: loop.next.args.continuation, routes: loop.next.args.routes, journeys: loop.next.args.journeys, implementationLeft, codeReverifications: state.codeReverifications || 0 })
+return nextStage('ship', { plan, built, gate: Object.assign({}, gate, { headSha: loop.headSha || gate.headSha }), loop, implementationLeft, codeReverifications: state.codeReverifications || 0 })
 }
 
 phase('Ship')
-const code = await workflow('vitrinka:code-loop', { base: A.base || 'main', task: A.task, cap: 2 })
+if (!loop) throw new Error('build-idea: verification state is required; use the verify stage next.args')
+const code = await run.workflow('vitrinka:code-loop', { base: A.base || 'main', task: A.task, cap: 2, expectedHead: gate.headSha })
 log(`build-idea: code loop ${code.rounds.length} round(s), ${code.remaining.length} for the human, PR ${code.pr || 'not opened'}`)
+if (code.headSha && code.headSha !== loop.headSha && (state.codeReverifications || 0) < 2) {
+  return nextStage('verify', { plan, built, gate: Object.assign({}, gate, { headSha: code.headSha }), implementationLeft, codeReverifications: (state.codeReverifications || 0) + 1 })
+}
 
-const handback = await agent(withPreamble(
+const handback = await run.agent(withPreamble(
   `Hand task ${A.task} back through the vitrinka handoff skill (Skill tool: vitrinka:handoff). Facts, one per line, for the summary:\n` +
   JSON.stringify({
     brief: A.brief,
-    slices: built.map(b => ({ slice: b.slice, done: b.done.length, left: b.left.length })),
+    slices: built.map(b => ({ slice: b.slice, done: b.done.length, leftBeforeSweep: b.left.length })),
     implementationGate: gate && gate.green,
     reviewLoop: { board: loop.boardUrl, passes: loop.passes, converged: loop.converged, gateRed: !!loop.gateRed, open: loop.open, unverified: loop.unverified || [], error: loop.error },
-    codeLoop: { rounds: code.rounds, remaining: code.remaining.length },
+    codeLoop: { rounds: code.rounds, remaining: code.remaining.length, receipt: code.receipt },
+    implementationLeft,
+    uiRevisionStillVerified: code.headSha === loop.headSha,
     pr: code.pr,
   }) +
   `\nOpen items (${loop.open.length + code.remaining.length}) become spotted children, not prose. Next steps hold only what is the human's: the merge${loop.open.length ? ', the open findings on the board' : ''}. Return the rendered hand-back block verbatim.`
 ), { label: 'handback', phase: 'Ship' })
 
-return { plan: plan.slices.map(s => s.name), gate: gate && gate.green, board: loop.boardUrl, converged: loop.converged, pr: code.pr, handback }
+return run.finish({ plan: plan.slices.map(s => s.name), gate: gatePassed(code.gate), board: loop.boardUrl, converged: loop.converged, pr: code.pr, handback, next: null, receipt: completionReceipt({ complete: loop.receipt.status === 'complete' && code.receipt.status === 'complete' && code.headSha === loop.headSha && !!handback, problems: [...implementationLeft, ...(loop.receipt.blockers || []), ...(code.receipt.blockers || []), ...(code.headSha !== loop.headSha ? ['code-loop changed the UI revision after the visual pass; verify the new head before claiming completion'] : [])], open: loop.open, unverified: loop.unverified, evidence: [{ headSha: code.headSha, pr: code.pr, board: loop.boardUrl }] }) })

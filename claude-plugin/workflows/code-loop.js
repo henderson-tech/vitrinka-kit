@@ -26,6 +26,82 @@ const PREAMBLE = [
 function withPreamble(prompt) {
   return PREAMBLE + '\n\n' + prompt
 }
+// The runtime journals agent returns. Keep accounting deterministic on replay,
+// share the allowance with child workflows, and bound every fan-out to four.
+function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
+  const supplied = input.agentBudget || { limit: 10, used: 0 }
+  const limit = supplied.limit
+  let used = supplied.used
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10 || !Number.isInteger(used) || used < 0 || used > limit) {
+    throw new Error('workflow: agentBudget must have integer limit 1..10 and used 0..limit')
+  }
+  const remaining = () => limit - used
+  const reserve = n => {
+    if (n > remaining()) throw new Error(`workflow: agent budget exhausted (${used}/${limit}); continue with the returned next args as a new run`)
+  }
+  return {
+    remaining,
+    ensureBudget: reserve,
+    async agent(prompt, options) {
+      reserve(1)
+      used++
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', options)
+    },
+    async workflow(name, args) {
+      if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
+      const result = await callWorkflow(name, Object.assign({}, args, { agentBudget: { limit, used } }))
+      if (!result || !result.agentBudget || result.agentBudget.limit !== limit || !Number.isInteger(result.agentBudget.used) || result.agentBudget.used < used || result.agentBudget.used > limit) {
+        throw new Error(`workflow: ${name} returned no valid shared agent-budget receipt`)
+      }
+      used = result.agentBudget.used
+      return result
+    },
+    async parallel(tasks) {
+      reserve(tasks.length)
+      const results = []
+      for (let i = 0; i < tasks.length; i += 4) results.push(...await parallel(tasks.slice(i, i + 4)))
+      return results
+    },
+    async serial(tasks, accept = result => result != null) {
+      reserve(tasks.length)
+      const results = []
+      for (let i = 0; i < tasks.length; i++) {
+        const result = await tasks[i]()
+        results.push(result)
+        if (!accept(result)) return { results, failedIndex: i }
+      }
+      return { results, failedIndex: null }
+    },
+    finish(result) { return Object.assign({}, result, { agentBudget: { limit, used } }) },
+  }
+}
+
+function completionReceipt({ complete = false, problems = [], open = [], unverified = [], evidence = [] } = {}) {
+  const blockers = [...problems, ...open.map(x => x.summary || x.title || String(x)), ...unverified.map(x => x.summary || x.title || String(x))]
+  const status = complete && !blockers.length && evidence.length ? 'complete' : 'incomplete'
+  if (status === 'incomplete' && !blockers.length) blockers.push('stage is unfinished or lacks verification evidence')
+  return { v: 1, status, evidence, blockers }
+}
+
+function gatePassed(gate) {
+  return !!(gate && gate.green && gate.headSha && gate.ran && gate.ran.length && Number.isInteger(gate.testsExecuted) && gate.testsExecuted > 0 && !(gate.failures || []).length)
+}
+
+function coverageProblems(routes, matrix, shots, journeys, cases, reviews, walkOnly, cards = []) {
+  const problems = []
+  if (!walkOnly) {
+    for (const device of matrix) for (const route of routes) {
+      if (!shots.some(s => s.device === device.name && s.shots.some(x => x.route === route.path))) problems.push(`missing capture: ${device.name} ${route.path}`)
+      if (!cards.some(c => c.device === device.name && c.route === route.path)) problems.push(`missing published capture: ${device.name} ${route.path}`)
+    }
+    const read = new Set(reviews.flatMap(r => r.cardsRead || []))
+    if (!cards.length || cards.some(c => !read.has(c.cardId))) problems.push('the reviewer did not read every published card')
+  }
+  for (const device of matrix) for (const journey of journeys) {
+    if (!cases.some(c => c.title === journey.title && c.device === device.name && ['pass', 'fail'].includes(c.verdict))) problems.push(`journey not executed: ${device.name} ${journey.title}`)
+  }
+  return problems
+}
 // ---- lib/schemas.js — structured-output schemas shared by the flows
 const ROUTE = {
   type: 'object',
@@ -89,20 +165,22 @@ const FINDINGS_SCHEMA = {
     findings: { type: 'array', items: FINDING },
     regressions: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, key: { type: 'string' }, fixed: { type: 'boolean' }, note: { type: 'string' } }, required: ['key', 'fixed'] } },
     screensRead: { type: 'integer' },
+    cardsRead: { type: 'array', items: { type: 'integer' }, description: 'every cardId whose pixels were read' },
     boardUrl: { type: 'string' },
   },
-  required: ['findings'],
+  required: ['findings', 'cardsRead'],
 }
 
 const SHOOT_SCHEMA = {
   type: 'object',
   properties: {
     device: { type: 'string' },
+    sourceUnchanged: { type: 'boolean', description: 'tracked and untracked application source matches the prepared HEAD before and after capture' },
     shots: { type: 'array', items: { type: 'object', properties: { route: { type: 'string' }, label: { type: 'string' }, file: { type: 'string' } }, required: ['route', 'label'] } },
     boardUrl: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['device', 'shots'],
+  required: ['device', 'shots', 'sourceUnchanged'],
 }
 
 const USERTEST_SCHEMA = {
@@ -110,7 +188,7 @@ const USERTEST_SCHEMA = {
   properties: {
     qaTaskUrl: { type: 'string' },
     boardUrl: { type: 'string' },
-    cases: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, device: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'skip'] }, note: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, required: ['title', 'verdict'] } },
+    cases: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, device: { type: 'string' }, verdict: { type: 'string', enum: ['pass', 'fail', 'skip'] }, note: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, required: ['title', 'device', 'verdict'] } },
     bugs: { type: 'array', items: { type: 'string', description: 'task url of each bug filed' } },
   },
   required: ['cases'],
@@ -135,8 +213,10 @@ const GATE_SCHEMA = {
     ran: { type: 'array', items: { type: 'string' } },
     failures: { type: 'array', items: { type: 'string' } },
     repaired: { type: 'boolean' },
+    testsExecuted: { type: 'integer', minimum: 0, description: 'sum of tests actually executed, read from runner output; never inferred from a success banner' },
+    headSha: { type: 'string', description: 'git rev-parse HEAD after every repair and verification' },
   },
-  required: ['green', 'ran'],
+  required: ['green', 'ran', 'headSha', 'testsExecuted'],
 }
 
 const PREPARE_SCHEMA = {
@@ -145,13 +225,14 @@ const PREPARE_SCHEMA = {
     baseUrl: { type: 'string' },
     where: { type: 'string', enum: ['devbox', 'local'] },
     branch: { type: 'string' },
+    headSha: { type: 'string' },
     project: { type: 'string' },
     task: { type: 'string', description: 'vitrinka task id the run is bound to' },
     override: { type: 'object', description: 'parsed .claude/vitrinka-workflows.json or {}' },
     projectType: { type: 'string' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['baseUrl', 'where', 'branch', 'projectType'],
+  required: ['baseUrl', 'where', 'branch', 'headSha', 'projectType'],
 }
 
 const PUBLISH_SCHEMA = {
@@ -160,12 +241,13 @@ const PUBLISH_SCHEMA = {
     boardUrl: { type: 'string' },
     boardSlug: { type: 'string' },
     section: { type: 'string' },
-    cards: { type: 'array', items: { type: 'object', properties: { cardId: { type: 'integer' }, route: { type: 'string' }, device: { type: 'string' }, label: { type: 'string' } }, required: ['cardId'] } },
+    cards: { type: 'array', items: { type: 'object', properties: { cardId: { type: 'integer' }, route: { type: 'string' }, device: { type: 'string' }, label: { type: 'string' } }, required: ['cardId', 'route', 'device'] } },
   },
   required: ['boardUrl', 'boardSlug', 'section', 'cards'],
 }
 // args: { cap?: 2, base?: 'main', pr?: boolean (default true), draft?: boolean (a PR it opens is a draft; an adopted one keeps its state), task?, title?: string }
 const A = args || {}
+const run = workflowRun(A)
 const cap = Math.max(1, Math.min(4, A.cap || 2))
 const base = A.base || 'main'
 
@@ -176,38 +258,59 @@ const REVIEW_SCHEMA = {
     applied: { type: 'integer' },
     remaining: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, line: { type: 'integer' }, summary: { type: 'string' }, why: { type: 'string' } }, required: ['file', 'summary'] } },
     commits: { type: 'array', items: { type: 'string' } },
+    startHeadSha: { type: 'string' },
+    startSourceUnchanged: { type: 'boolean' },
+    gate: Object.assign({}, GATE_SCHEMA, { properties: Object.assign({}, GATE_SCHEMA.properties, { sourceUnchanged: { type: 'boolean' } }), required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }),
   },
-  required: ['findings', 'applied', 'remaining'],
+  required: ['findings', 'applied', 'remaining', 'startHeadSha', 'startSourceUnchanged', 'gate'],
 }
 
 const rounds = []
+const sourceProblems = []
 let remaining = []
+let converged = false
+let headSha = ''
+let gate = null
+run.ensureBudget(cap + (A.pr === false ? 0 : 1))
 phase('Review')
 for (let round = 1; round <= cap; round++) {
-  const review = await agent(withPreamble(
+  const review = await run.agent(withPreamble(
     `Round ${round} of the code loop on this branch against ${base}.\n` +
-    `Invoke the code-review skill (Skill tool: code-review) with args \`high --fix\` over the branch diff; let it apply the findings it can. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. Return counts, remaining and the commit.`
+    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Inspect staged, unstaged and untracked application source against startHeadSha, allowing only .vitrinka/ and the configured uiLoop.out artifacts. Return startSourceUnchanged=false and a failed gate immediately if source is dirty; do not review, fix or commit someone else's uncommitted work. Read the code-review guidance when available, then review the branch diff INLINE with high confidence: check correctness, contracts, failure paths and the linked acceptance criteria; validate claims against current code and primary documentation. Fix confirmed defects in this same agent. Never invoke a review skill that spawns its own agents. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. After gates, compare staged/unstaged/untracked application source and the tested Devbox source against the final committed HEAD again, with the same artifact exclusions; sourceUnchanged=true only when both match. Dirty source fails the gate. Return counts, remaining, commits, startSourceUnchanged and gate {green, ran, testsExecuted, failures, repaired, headSha, sourceUnchanged}; headSha is git rev-parse HEAD AFTER every repair and verification.`
   ), { label: `review:${round}`, phase: 'Review', schema: REVIEW_SCHEMA })
   if (!review) { log(`code-loop: round ${round} review failed`); break }
 
-  const gate = await agent(withPreamble(
-    `Gate round ${round} of the code loop: run the repo's type/build/test gates from CLAUDE.md where CLAUDE.md says they run (the strict TS gates, the Go suite through its wrapper, the unit suites). A failure introduced by ${JSON.stringify(review.commits || [])} you repair and commit; one that predates them is reported. Return green, what ran, failures.`
-  ), { label: `gate:${round}`, phase: 'Review', schema: GATE_SCHEMA })
-  rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: !!(gate && gate.green) })
+  if (A.expectedHead && round === 1 && review.startHeadSha !== A.expectedHead) throw new Error('code-loop: continuation revision changed before review')
+  gate = review.gate
+  headSha = gate && gate.headSha || ''
+  rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: review.startSourceUnchanged === true && gatePassed(gate) && gate.sourceUnchanged === true })
   remaining = review.remaining
+  if (review.startSourceUnchanged !== true || !gate || gate.sourceUnchanged !== true) {
+    sourceProblems.push('application source is dirty or its revision was not verified before review and after the gates')
+    break
+  }
+  converged = review.findings === 0 && gatePassed(gate) && gate.headSha === review.startHeadSha && !gate.repaired && !remaining.length
   log(`code-loop: round ${round} — ${review.findings} findings, ${review.applied} applied, ${review.remaining.length} remaining, gate ${gate && gate.green ? 'green' : 'RED'}`)
-  if (review.findings === 0 || (review.applied === 0 && review.remaining.length === review.findings)) break
+  if (converged || (review.findings > 0 && review.applied === 0 && review.remaining.length === review.findings && !gate.repaired)) break
 }
 
 let pr = ''
-if (A.pr !== false) {
+const prProblems = []
+if (A.pr !== false && !sourceProblems.length) {
   phase('PR')
-  const opened = await agent(withPreamble(
-    `Open the PR for this branch against ${base} through the prm skill (Skill tool: prm)${A.draft ? ' with `--draft` — a DRAFT; never mark it ready' : ''} — create and watch, never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
+  const opened = await run.agent(withPreamble(
+    `FIRST verify staged/unstaged/untracked application source matches HEAD, allowing only .vitrinka/ and the configured uiLoop.out artifacts. If dirty, return no URL and sourceUnchanged=false without mutating or committing it. Open the PR for this branch against ${base} through the prm skill (Skill tool: prm)${A.draft ? ' with `--draft` — a DRAFT; never mark it ready' : ''} with \`--once\` — create and perform one review round, then return; never merge${A.task ? `; the branch is bound to vitrinka task ${A.task}, so the body carries its url` : ''}${A.title ? `; title: ${A.title}` : ''}.\n` +
     (remaining.length ? `Post these unresolved review findings as ONE PR comment for the human, each with file:line and the reviewer's reason it was not applied:\n${JSON.stringify(remaining)}\n` : '') +
-    `Return the PR's full https url on the first line and its CI state on the second.`
-  ), { label: 'prm', phase: 'PR' })
-  pr = (opened || '').split('\n')[0].trim()
+    `After prm, recheck application source against HEAD with the same exclusions. Return {url: the PR's full https URL, headSha: git rev-parse HEAD AFTER prm's round, sourceUnchanged: true only if source matched HEAD before and after prm, problems: unresolved review/CI blockers}. A queued CI run remains pending; never call it passing.`
+  ), { label: 'prm', phase: 'PR', schema: { type: 'object', properties: { url: { type: 'string' }, headSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, problems: { type: 'array', items: { type: 'string' } } }, required: ['url', 'headSha', 'sourceUnchanged', 'problems'] } })
+  pr = opened && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(opened.url) ? opened.url : ''
+  if (opened) {
+    prProblems.push(...opened.problems)
+    if (opened.sourceUnchanged !== true) { converged = false; sourceProblems.push('application source is dirty or unverified after the PR round') }
+    if (opened.headSha !== headSha) { converged = false; headSha = opened.headSha; prProblems.push('the PR round changed code after verification') }
+  }
+  if (!pr) prProblems.push('no valid PR URL was returned')
 }
 
-return { rounds, remaining, pr }
+const verified = gatePassed(gate) && gate.sourceUnchanged === true && !sourceProblems.length
+return run.finish({ rounds, remaining, pr, converged, headSha, gate, receipt: completionReceipt({ complete: converged && (A.pr === false || !!pr), open: remaining, evidence: verified ? [{ headSha: gate.headSha, ran: gate.ran, pr }] : [], problems: [...sourceProblems, ...prProblems, ...(verified ? [] : ['the final verification gate has no passing evidence']), ...(!converged ? ['code review did not converge at the verified revision'] : [])] }) })
