@@ -249,11 +249,12 @@ const PUBLISH_SCHEMA = {
 }
 // ---- lib/uiloop.js — the ui-loop mode's rules and plain-code decisions (no agents here)
 // `vybava ui-loop` (Výbava docs/uiloop.md) owns the deterministic half of the
-// UI polish loop: the screen manifest, capture, split/publish, scoreboard.
-// The map and review-loop flows own the judgment half and drive it through
-// these helpers. A pass is too big for one run (≤ 4 agents a phase, ≤ 10 a
-// run), so review-loop runs it as stages that resume from the files the
-// previous stage left in the pass directory — nextStage reads them back.
+// UI polish loop: the screen manifest, capture, split/publish, scoreboard, and
+// every list a stage hands on (state, batches, merge-review, lanes). The map
+// and review-loop flows own the judgment half. A pass is too big for one run
+// (≤ 4 agents a phase, ≤ 10 a run), so review-loop runs it as stages that
+// resume from the files the previous stage left in the pass directory —
+// `vybava ui-loop state` reads them back and names the next stage.
 
 // The operational rules every ui-loop agent carries. Each one cost a real
 // incident (Reservine vt-1339, voke); docs/uiloop.md "Operational rules".
@@ -269,10 +270,14 @@ const UILOOP_RULES = [
 ]
 
 const UILOOP_FIX_RULES = [
-  'One item at a time, with a green build between items: the provider before the consumer, the class half before the template half. Commit path-limited (only your files, never `git add -A`, never a bare `git commit`) and never leave your own uncommitted work in the tree.',
-  'Never edit a file that holds another lane\'s uncommitted edits. Shared files (i18n, recipes) are edited surgically.',
-  'After every item commit its source fix, then write the checkpoint file you were given with the matching review basis and the source commit SHA. The pass directory is ignored environment output: never commit or force-add a checkpoint. Skip an item only when its checkpoint has the current basis, its commit remains an ancestor of HEAD and its fix or recorded skip/block reason still applies; otherwise reevaluate it.',
-  'After a usage-limit cutoff the successor maps the dirty files to lanes using git status and the valid checkpoints, finishes the in-flight source fix and writes its checkpoint after committing, then resumes from the first item without a valid checkpoint.',
+  'One item at a time: understand the defect in code first, then make minimal, surgical edits in the repo\'s idiom — the provider before the consumer, the class half before the template half.',
+  'OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane. Edit ONLY files directly inside your lane\'s dirs — not their subdirectories unless listed. A fix that needs a file outside them is not made: checkpoint the item blocked with the exact change (file, what to change) as its note.',
+  'i18n catalogs (a .json under an `i18n` directory) are owned by nobody: never edit one. A fix that needs a new or changed string uses the key in code and lists it in its checkpoint and your return as i18n [{key, <locale>: text}] (every locale the catalogs carry); the settle step adds them.',
+  'After every edit the shared dev server must stay green: wait ~20 s, read its log (`devbox logs <app>` in the workspace); an error your edit caused is fixed at once or reverted within 5 minutes. Another lane\'s red is not yours: note it and keep going.',
+  'Commit each item path-limited: `git add <your files>` then `git commit -m "fix(<scope>): <what> (<key>)" -- <your files>` — never `git add -A`, never a bare `git commit`, never stash, reset, rebase or push. An index.lock collision means another lane is committing: wait 3 s and retry.',
+  'After the commit write the item\'s checkpoint <passDir>/fix/<key>.json = {"v":1,"basis":the review basis,"key","lane","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"fileDigests":{repo-relative source path: SHA256 of its bytes},"apiChanges":[…],"note","i18n":[…]} and NEVER commit it (the pass directory is gitignored environment output). Only a checkpoint admitted by the CLI (matching basis, ancestor commit and current source file digests) is finished. Stale checkpoints must be reevaluated. A skip needs a concrete reason (a design decision the spec does not settle, a false finding with evidence); never guess a redesign.',
+  'Never run a capture (`vybava ui-loop run`), open a browser, restart or re-provision the devbox, or edit <dir>/vendor: judge from the pass\'s shots (Read the PNG) and the code. If you run low on context, stop cleanly after a finished item and return the keys you did not reach in remaining.',
+  'After a usage-limit cutoff the successor maps the dirty files to lanes (git status against the checkpoints), commits an in-flight map, and resumes from the first item without a checkpoint.',
   '`cn`/`cx` (tailwind-merge) drop a position or display class beside a recipe that sets one: put layout on a wrapper or extend the recipe. A focus ring follows its control\'s radius; grouped rows take an inset ring.',
 ]
 
@@ -300,229 +305,45 @@ function repoProblem(want, got) {
   return ''
 }
 
-const UILOOP_SEVERITY = { broken: 3, 'needs-work': 2, polish: 1 }
-const UILOOP_VERDICT = { 'not-met': 3, partly: 2, met: 1 }
+// Every list of a pass (screens, review batches, raw reviews, backlog items,
+// fix lanes) lives in the pass directory and is planned by `vybava ui-loop`
+// (v0.25.0+: state, batches, merge-review, lanes). An agent relays a verb's
+// envelope and reads item bodies from disk by key; it never enumerates a list
+// itself — agents dropped or summarized them (pwf-ui pass 1: a backlog from 7
+// of 31 batches, a refused 340-item backlog, a fix stage with 0 lanes). The
+// helpers below only check that what an agent relayed is whole.
 
-// A backlog finding is open work unless its acceptance was met.
-function isOpenItem(f) {
-  return f.status !== 'met'
+// The relayed batch list must be the whole pass: every batch non-empty and
+// the screens they hold adding up to the state's screen count.
+function batchesProblem(state, batches) {
+  if (!batches || !Array.isArray(batches.batches)) return 'prepare relayed no batch list — `vybava ui-loop batches --json` must be returned verbatim as batches'
+  const held = batches.batches.reduce((n, b) => n + ((b && b.screens) || []).length, 0)
+  if (batches.batches.some(b => !b || !b.id || !(b.screens || []).length)) return 'prepare relayed a batch without an id or screens'
+  if (held !== batches.screens || held !== state.screens) return `prepare relayed batches holding ${held} screens; the batches envelope says ${batches.screens} and the pass has ${state.screens} — the list was cut; re-run the stage`
+  return ''
 }
 
-// A fresh finding's backlog key: its screen and title, so the same defect
-// filed by two reviewers (two viewports of one screen) is one item.
-function backlogKey(screen, title) {
-  const slug = s => String(s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase()
-  return (slug(screen) + '-' + slug(title)).slice(0, 80).replace(/-+$/, '')
+// The relayed lanes must account for every open item: lane keys, foreign,
+// i18n-only and already-finished items together are the backlog's open count.
+function lanesProblem(state, lanes) {
+  if (!lanes || !Array.isArray(lanes.primitives) || !Array.isArray(lanes.areas)) return 'prepare relayed no lanes — `vybava ui-loop lanes --json` must be returned verbatim as lanes'
+  const keys = [...lanes.primitives, ...lanes.areas].reduce((n, l) => n + (l.keys || []).length, 0)
+  const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.finished || 0)
+  const open = state.backlog ? state.backlog.open : -1
+  if (total !== lanes.open || total !== open) return `prepare relayed lanes covering ${total} items; the lanes envelope says ${lanes.open} open and the backlog ${open} — the list was cut; re-run the stage`
+  return ''
 }
 
-// Deterministic reviewer batches: each area's screens, sorted by id, in
-// chunks of `size`, in the config's area order. A batch id is stable across
-// runs, so a resumed review skips the batches whose raw file exists.
-function reviewBatches(screens, areas, size = 14) {
-  size = Math.max(1, Math.floor(Number(size)) || 14)
-  const order = [...areas, ...uniqAreas(screens).filter(a => !areas.includes(a))]
-  const out = []
-  for (const area of order) {
-    const ids = screens.filter(s => s.area === area).map(s => s.id).sort()
-    for (let i = 0; i < ids.length; i += size) out.push({ id: `${area}-${i / size + 1}`, area, screens: ids.slice(i, i + size) })
-  }
-  return out
+// The verify pass's `--only`, computed on disk: every screen an open backlog
+// item names plus every screen a done checkpoint says its fix changed.
+function verifyOnlyCommand(passDir) {
+  return `{ jq -r '.findings[] | select(.status != "met") | .screen' ${passDir}/review/backlog.json; ` +
+    `for f in ${passDir}/fix/*.json; do jq -r 'select(.status == "done") | .screens[]?' "$f"; done; } | sort -u | paste -sd, -`
 }
 
-function uniqAreas(screens) {
-  return [...new Set(screens.map(s => s.area))]
-}
-
-// The pass's backlog from its reviewers' raw output and the previous pass's
-// backlog, in the `vybava ui-loop scoreboard` contract (v1, strict keys).
-// A previous open item keeps its key and takes its worst verdict across the
-// batches that judged it; one nobody judged stays not-met and is listed in
-// `unjudged`. A fresh finding is keyed by screen + title (backlogKey), two
-// of them merge (worst severity, unioned viewports/themes/shots/files), and
-// one whose key is a previous item's is that item, never a second one. A
-// fresh finding missing its title, acceptance or files goes to `problems`
-// for the synthesis agent to repair.
-function mergeBacklog(pass, previous, raw) {
-  const prevOpen = (previous || []).filter(isOpenItem)
-  const verdicts = new Map()
-  for (const r of raw) for (const a of r.acceptance || []) {
-    const cur = verdicts.get(a.key)
-    if (!cur || (UILOOP_VERDICT[a.verdict] || 0) > (UILOOP_VERDICT[cur] || 0)) verdicts.set(a.key, a.verdict)
-  }
-  const out = new Map()
-  const unjudged = []
-  for (const p of prevOpen) {
-    const v = verdicts.get(p.key)
-    if (!v) unjudged.push(p.key)
-    out.set(p.key, pickBacklog(Object.assign({}, p, { status: v || 'not-met' })))
-  }
-  const problems = []
-  for (const r of raw) for (const f of r.findings || []) {
-    if (!f.title || !f.acceptance || !(f.files || []).length) { problems.push(f); continue }
-    const k = f.key || backlogKey(f.screen, f.title)
-    const cur = out.get(k)
-    if (!cur) { out.set(k, pickBacklog(Object.assign({}, f, { key: k, status: 'open' }))); continue }
-    if (cur.status !== 'open') continue
-    if ((UILOOP_SEVERITY[f.severity] || 0) > (UILOOP_SEVERITY[cur.severity] || 0)) cur.severity = f.severity
-    for (const field of ['viewports', 'themes', 'shots', 'files']) {
-      const merged = [...new Set([...(cur[field] || []), ...(f[field] || [])])]
-      if (merged.length) cur[field] = merged
-    }
-  }
-  return { backlog: { v: 1, pass, findings: [...out.values()] }, unjudged, problems }
-}
-
-// The backlog's `reviewed`: the screens a reviewer actually judged this pass —
-// the reported screensRead inside that batch's current scope, minus every
-// screen a reviewer marked unreviewed. Missing reports and unknown batches
-// contribute no coverage. Only these can score clean
-// (`vybava ui-loop scoreboard`, v0.24.1+).
-function reviewedScreens(raw, batches) {
-  const byId = new Map((batches || []).map(b => [b.id, b.screens]))
-  const judged = new Set()
-  const skipped = new Set()
-  for (const r of raw || []) {
-    const scope = new Set(byId.get(r.batch) || [])
-    for (const id of r.screensRead || []) if (scope.has(id)) judged.add(id)
-    for (const id of r.unreviewed || []) skipped.add(id)
-  }
-  return [...judged].filter(id => !skipped.has(id)).sort()
-}
-
-const BACKLOG_KEYS = ['key', 'screen', 'area', 'severity', 'status', 'title', 'detail', 'files', 'acceptance', 'viewports', 'themes', 'shots', 'refs']
-
-// The backlog contract rejects unknown keys: keep only its own.
-function pickBacklog(f) {
-  const o = {}
-  for (const k of BACKLOG_KEYS) if (f[k] !== undefined && f[k] !== '' && !(Array.isArray(f[k]) && !f[k].length && k !== 'files')) o[k] = f[k]
-  if (!o.files) o.files = []
-  return o
-}
-
-// The fix round's lanes. A finding is a primitive when one of its files sits
-// under a `primitives` prefix, is named by findings of two areas, or is
-// named by another primitive finding; the
-// primitive lanes run first, then the primitive files are frozen and the
-// area lanes run. Items linked by a shared file ride one lane (union-find),
-// so parallel lanes never edit one file, and lanes are packed to at most
-// `max` per phase. Within a lane: worst severity first, carried items
-// (not-met, partly) before fresh ones, then key.
-function planLanes(findings, primitives = [], max = 4) {
-  const open = findings.filter(isOpenItem)
-  const fileAreas = new Map()
-  for (const f of open) for (const file of f.files || []) {
-    if (!fileAreas.has(file)) fileAreas.set(file, new Set())
-    fileAreas.get(file).add(f.area)
-  }
-  const seed = f => (f.files || []).some(file => primitives.some(p => file.startsWith(p)) || fileAreas.get(file).size > 1)
-  // Closed over shared files: an item naming any file a primitive item
-  // names is a primitive too, or an area lane would edit a frozen file.
-  const primSet = new Set(open.filter(seed))
-  for (let grew = true; grew;) {
-    grew = false
-    const primFiles = new Set([...primSet].flatMap(f => f.files || []))
-    for (const f of open) if (!primSet.has(f) && (f.files || []).some(file => primFiles.has(file))) { primSet.add(f); grew = true }
-  }
-  const prim = open.filter(f => primSet.has(f))
-  const rest = open.filter(f => !primSet.has(f))
-  const frozen = [...new Set(prim.flatMap(f => f.files || []))].sort()
-  return {
-    frozen,
-    primitives: packLanes(prim, f => primitiveFamily(f, primitives), max, 'prim'),
-    areas: packLanes(rest, f => f.area, max, 'area'),
-  }
-}
-
-// A primitive's family: the directory of its first primitive file.
-function primitiveFamily(f, primitives) {
-  const file = (f.files || []).find(x => primitives.some(p => x.startsWith(p))) || (f.files || [])[0] || f.area
-  const parts = file.split('/')
-  return parts.length > 1 ? parts[parts.length - 2] : parts[0]
-}
-
-function packLanes(items, groupOf, max, prefix) {
-  const parent = new Map()
-  const find = g => { while (parent.get(g) !== g) g = parent.get(g); return g }
-  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(rb, ra) }
-  const fileGroup = new Map()
-  for (const f of items) {
-    const g = groupOf(f)
-    if (!parent.has(g)) parent.set(g, g)
-    for (const file of f.files || []) {
-      if (fileGroup.has(file)) union(fileGroup.get(file), g); else fileGroup.set(file, g)
-    }
-  }
-  const byRoot = new Map()
-  for (const f of items) {
-    const r = find(groupOf(f))
-    if (!byRoot.has(r)) byRoot.set(r, { groups: new Set(), items: [] })
-    byRoot.get(r).groups.add(groupOf(f))
-    byRoot.get(r).items.push(f)
-  }
-  let lanes = [...byRoot.values()].map(l => ({ groups: [...l.groups].sort(), items: l.items }))
-  lanes.sort((a, b) => b.items.length - a.items.length || a.groups[0].localeCompare(b.groups[0]))
-  while (lanes.length > max) {
-    const tail = lanes.pop()
-    const last = lanes[lanes.length - 1]
-    last.groups.push(...tail.groups)
-    last.items.push(...tail.items)
-  }
-  return lanes.map(l => ({ lane: `${prefix}-${l.groups.join('+')}`.slice(0, 60), items: orderItems(l.items) }))
-}
-
-function orderItems(items) {
-  const carried = f => (f.status === 'open' ? 0 : 1)
-  return [...items].sort((a, b) =>
-    (UILOOP_SEVERITY[b.severity] || 0) - (UILOOP_SEVERITY[a.severity] || 0) || carried(b) - carried(a) || a.key.localeCompare(b.key))
-}
-
-// A checkpoint that finishes its item for this round: done, skipped (with
-// why), or blocked on a primitive change the frozen API refused — a blocked
-// item stays open in the backlog and returns in the next pass's round.
-function finishedKeys(checkpoints) {
-  return new Set((checkpoints || []).filter(c => c.status === 'done' || c.status === 'skipped' || c.status === 'blocked').map(c => c.key))
-}
-
-// A lane's items still to do: every item without a finishing checkpoint. A
-// lane with none left is dropped, so a resumed round relaunches only
-// unfinished lanes, each from its first open item.
-function remainingLanes(lanes, checkpoints) {
-  const finished = finishedKeys(checkpoints)
-  return lanes.map(l => ({ lane: l.lane, items: l.items.filter(f => !finished.has(f.key)) })).filter(l => l.items.length)
-}
-
-// The checkpoint file of one item.
-function checkpointPath(passDir, key) {
-  return `${passDir}/fix/${key}.json`
-}
-
-// The next pass's `--only`: the screens a fix touched plus every screen an
-// open backlog item names, so the verify pass judges each fix and each
-// item still open.
-function verifySelection(findings, checkpoints) {
-  const touched = (checkpoints || []).filter(c => c.status === 'done').flatMap(c => c.screens || [])
-  const open = (findings || []).filter(isOpenItem).map(f => f.screen)
-  return [...new Set([...touched, ...open].filter(Boolean))].sort()
-}
-
-// Which stage a pass is at, read back from the files its stages left:
-// capture (no shots, or shots not yet published — then resume), review
-// (published, some area unreviewed), fix (open items without a checkpoint),
-// verify (the round is checkpointed and something was fixed), done (no open
-// item, or the cap is reached). `s` is the Prepare agent's report.
-function nextStage(s, cap = 6) {
-  if (!s.pass || !s.shots) return { stage: 'capture', resume: false, reason: 'no pass with shots yet' }
-  if (!s.published) return { stage: 'capture', resume: true, reason: `pass ${s.pass} has shots that are not published` }
-  const unreviewed = (s.areas || []).filter(a => !(s.reviewedAreas || []).includes(a))
-  if (!s.backlog || unreviewed.length) return { stage: 'review', resume: !!s.backlog, reason: unreviewed.length ? `areas not reviewed: ${unreviewed.join(', ')}` : 'no backlog yet' }
-  const open = s.backlog.filter(isOpenItem)
-  if (!open.length) return { stage: 'done', resume: false, reason: `pass ${s.pass} backlog has no open item — converged` }
-  const finished = finishedKeys(s.checkpoints)
-  const todo = open.filter(f => !finished.has(f.key))
-  if (todo.length) return { stage: 'fix', resume: finished.size > 0, reason: `${todo.length} of ${open.length} open items without a checkpoint` }
-  if (s.pass >= cap) return { stage: 'done', resume: false, reason: `cap of ${cap} passes reached with ${open.length} items open` }
-  if (!(s.checkpoints || []).some(c => c.status === 'done')) return { stage: 'done', resume: false, reason: 'the fix round fixed nothing — the open items need a human' }
-  return { stage: 'verify', resume: false, reason: `fix round of pass ${s.pass} is checkpointed` }
+// A lane's keys the lane reports as finished (done, skipped, blocked).
+function finishedBy(results) {
+  return new Set(results.flatMap(r => [...(r.done || []), ...(r.skipped || []).map(s => (typeof s === 'string' ? s : s.key)), ...(r.blocked || []).map(b => (typeof b === 'string' ? b : b.key))]))
 }
 // ---- lib/uiloop-schemas.js — the ui-loop mode's detect prompt and structured-output schemas
 // The ui-loop mode runs when the repo's vybava.config.ts carries a `uiLoop`
@@ -553,52 +374,32 @@ const UILOOP_DETECT_SCHEMA = {
   required: ['configured'],
 }
 
-const UILOOP_ITEM = {
+// `vybava ui-loop state --json` data, relayed verbatim (Výbava docs/uiloop.md
+// "Stage verbs"): counts, never item bodies.
+const UILOOP_STATE = {
   type: 'object',
-  description: 'one backlog finding in the `vybava ui-loop scoreboard` contract (docs/uiloop.md)',
+  description: 'the `data` of `vybava ui-loop state --json`, verbatim',
   properties: {
-    key: { type: 'string' }, screen: { type: 'string' }, area: { type: 'string' },
-    severity: { type: 'string', enum: ['broken', 'needs-work', 'polish'] },
-    status: { type: 'string', enum: ['open', 'met', 'partly', 'not-met'] },
-    title: { type: 'string' }, detail: { type: 'string' }, acceptance: { type: 'string' },
-    files: { type: 'array', items: { type: 'string' } },
-    viewports: { type: 'array', items: { type: 'string' } },
-    themes: { type: 'array', items: { type: 'string' } },
-    shots: { type: 'array', items: { type: 'string' } },
-    refs: { type: 'array', items: { type: 'string' } },
+    headSha: { type: 'string' }, reviewBasis: { type: 'string' }, capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, scoreboardBasis: { type: 'string' }, scoreboardCurrent: { type: 'boolean' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
+    pass: { type: 'integer' }, passDir: { type: 'string' },
+    config: UILOOP_CONFIG,
+    shots: { type: 'integer' }, screens: { type: 'integer' },
+    areas: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, screens: { type: 'integer' } }, required: ['area', 'screens'] } },
+    published: { type: 'boolean' }, unpublished: { type: 'array', items: { type: 'string' } },
+    review: { type: 'object', properties: { planned: { type: 'integer' }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, reviewedAreas: { type: 'array', items: { type: 'string' } } } },
+    hasBacklog: { type: 'boolean' },
+    backlog: { type: ['object', 'null'], properties: { file: { type: 'string' }, findings: { type: 'integer' }, open: { type: 'integer' }, byStatus: { type: 'object' }, bySeverity: { type: 'object' }, reviewed: { type: 'integer' } } },
+    previous: { type: ['object', 'null'], properties: { pass: { type: 'integer' }, file: { type: 'string' }, open: { type: 'integer' } } },
+    checkpoints: { type: 'object', properties: { total: { type: 'integer' }, byStatus: { type: 'object' } } },
+    boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
+    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' } }, required: ['stage', 'resume', 'reason'] },
   },
-  required: ['key', 'screen', 'area', 'severity', 'status', 'title', 'acceptance', 'files'],
+  required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next', 'reviewBasis', 'capturedHeadSha', 'sourceUnchanged', 'scoreboardCurrent'],
 }
 
-const UILOOP_CHECKPOINT = {
-  type: 'object',
-  properties: {
-    key: { type: 'string' },
-    lane: { type: 'string' },
-    basis: { type: 'string' },
-    apiChanges: { type: 'array', items: { type: 'string' } },
-    valid: { type: 'boolean', description: 'commit is an ancestor of HEAD and the recorded fix is still present' },
-    status: { type: 'string', enum: ['done', 'skipped', 'blocked'] },
-    commit: { type: 'string' },
-    screens: { type: 'array', items: { type: 'string' } },
-    note: { type: 'string' },
-  },
-  required: ['key', 'status'],
-}
+const UILOOP_BATCH = { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' }, screens: { type: 'array', items: { type: 'string' } } }, required: ['id', 'area', 'screens'] }
 
-const UILOOP_RAW = {
-  type: 'object',
-  properties: {
-    batch: { type: 'string' },
-    basis: { type: 'string' },
-    area: { type: 'string' },
-    findings: { type: 'array', items: { type: 'object' } },
-    acceptance: { type: 'array', items: { type: 'object' } },
-    screensRead: { type: 'array', items: { type: 'string' } },
-    unreviewed: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['batch', 'area', 'basis', 'screensRead'],
-}
+const UILOOP_LANE = { type: 'object', properties: { lane: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'dirs', 'keys'] }
 
 const UILOOP_PREP_SCHEMA = {
   type: 'object',
@@ -606,38 +407,22 @@ const UILOOP_PREP_SCHEMA = {
     configured: { type: 'boolean' },
     branch: { type: 'string' },
     repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
-    config: UILOOP_CONFIG,
-    headSha: { type: 'string' },
-    capturedHeadSha: { type: 'string', description: 'capture.json revision, empty for legacy passes' },
-    sourceUnchanged: { type: 'boolean', description: 'application tree matches captured revision, including uncommitted changes' },
-    reviewBasis: { type: 'string', description: 'SHA256 of sorted pass capture files, manifest and spec contents; empty only without a pass' },
-    backlogBasis: { type: 'string' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
-    pass: { type: 'integer', description: 'the pass inspected; 0 when <out> holds none' },
-    passDir: { type: 'string' },
-    shots: { type: 'integer', description: 'shot records under <passDir>/shots' },
-    published: { type: 'boolean', description: 'publish/index.json exists and every set in plan.json is pushed with no refused captures' },
-    screens: { type: 'array', description: 'EVERY screen with a shot record, one {id, area} each — never omitted or summarized, however long: it is the review scope', items: { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' } }, required: ['id', 'area'] } },
-    reviewedAreas: { type: 'array', items: { type: 'string' }, description: 'areas every batch of which has a raw review file' },
-    raw: { type: 'array', items: UILOOP_RAW, description: 'every <passDir>/review/raw/*.json, verbatim' },
-    hasBacklog: { type: 'boolean', description: '<passDir>/review/backlog.json exists' },
-    backlog: { type: 'array', items: UILOOP_ITEM, description: 'its findings, [] when absent' },
-    previousBacklog: { type: 'array', items: UILOOP_ITEM, description: 'the findings of the newest earlier pass that has a backlog, [] when none' },
-    checkpoints: { type: 'array', items: UILOOP_CHECKPOINT, description: 'every <passDir>/fix/*.json' },
-    boards: { type: 'array', description: 'the area set boards of publish/boards.json', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
+    state: UILOOP_STATE,
+    batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } } }, required: ['screens', 'batches', 'done', 'left'] },
+    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'headSha', 'capturedHeadSha', 'sourceUnchanged', 'reviewBasis', 'pass', 'shots', 'published', 'screens'],
+  required: ['configured', 'branch', 'repo'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
   type: 'object',
   properties: {
+    capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' },
     pass: { type: 'integer' },
     passDir: { type: 'string' },
     shots: { type: 'integer' },
-    capturedHeadSha: { type: 'string' },
-    sourceUnchanged: { type: 'boolean' },
     byStatus: { type: 'object' },
     published: { type: 'boolean' },
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
@@ -655,27 +440,31 @@ const UILOOP_BOARDS_SCHEMA = {
   required: ['boards'],
 }
 
+// A reviewer writes its whole batch to <passDir>/review/raw/<batch>.json and
+// returns only this receipt: the raw file, never the workflow, carries it.
 const UILOOP_REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     batch: { type: 'string' },
-    basis: { type: 'string' },
-    screensRead: { type: 'array', items: { type: 'string' } },
     area: { type: 'string' },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: Object.assign({}, UILOOP_ITEM.properties, { systemic: { type: 'boolean', description: 'a shared primitive or token is the cause' } }),
-        required: ['screen', 'area', 'severity', 'title', 'acceptance', 'files'],
-      },
-    },
-    acceptance: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, screen: { type: 'string' }, verdict: { type: 'string', enum: ['met', 'partly', 'not-met'] }, note: { type: 'string' } }, required: ['key', 'verdict'] } },
+    file: { type: 'string', description: 'the raw file you wrote' },
+    findings: { type: 'integer' },
+    verdicts: { type: 'integer' },
     unreviewed: { type: 'array', items: { type: 'string' } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['batch', 'area', 'basis', 'screensRead', 'findings', 'acceptance'],
+  required: ['batch', 'area', 'file', 'findings', 'verdicts'],
 }
+
+// The raw file a reviewer writes (merge-review reads it): findings in the
+// backlog item shape (key optional) plus systemic, verdicts on previous items.
+const UILOOP_RAW_SHAPE = JSON.stringify({
+  batch: '<id>', area: '<area>',
+  findings: [{ screen: '<id>', area: '<area>', severity: 'broken|needs-work|polish', title: '', detail: '', files: ['repo-relative'], acceptance: '', viewports: [], themes: [], shots: ['<id>@<viewport>.<theme>'], systemic: false }],
+  acceptance: [{ key: '<previous key>', screen: '<id>', verdict: 'met|partly|not-met', note: '' }],
+  unreviewed: ['<screen id> (why)'],
+  problems: [],
+})
 
 const UILOOP_SYNTH_SCHEMA = {
   type: 'object',
@@ -683,7 +472,9 @@ const UILOOP_SYNTH_SCHEMA = {
     backlogFile: { type: 'string' },
     findings: { type: 'integer' },
     open: { type: 'integer', description: 'findings whose status is not met' },
-    merged: { type: 'integer', description: 'items folded into another as one root cause' },
+    judged: { type: 'integer', description: 'merge-review\'s unjudged + problems keys you settled' },
+    reviewed: { type: 'integer', description: 'len(reviewed) of the written backlog' },
+    unreviewed: { type: 'array', items: { type: 'string' }, description: 'merge-review\'s unreviewed screen ids, verbatim' },
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['backlogFile', 'findings', 'open'],
@@ -693,11 +484,12 @@ const UILOOP_SCORE_SCHEMA = {
   type: 'object',
   properties: {
     scoreboardFile: { type: 'string' },
+    receiptVerified: { type: 'boolean' },
     totals: { type: 'object' },
     posted: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' } }, required: ['area', 'url'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['scoreboardFile', 'posted'],
+  required: ['scoreboardFile', 'posted', 'receiptVerified'],
 }
 
 const UILOOP_LANE_SCHEMA = {
@@ -706,14 +498,30 @@ const UILOOP_LANE_SCHEMA = {
     lane: { type: 'string' },
     done: { type: 'array', items: { type: 'string' } },
     skipped: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, why: { type: 'string' } }, required: ['key', 'why'] } },
-    blocked: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, ask: { type: 'string', description: 'the exact primitive change it needs' } }, required: ['key', 'ask'] } },
+    blocked: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, ask: { type: 'string', description: 'the exact change it needs, outside this lane\'s dirs' } }, required: ['key', 'ask'] } },
+    remaining: { type: 'array', items: { type: 'string' }, description: 'keys not reached (context or time), for the next run' },
     commits: { type: 'array', items: { type: 'string' } },
     touchedScreens: { type: 'array', items: { type: 'string' } },
     apiChanges: { type: 'array', items: { type: 'string' }, description: 'primitive lanes: every public API addition, additive only' },
+    i18n: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }, description: 'strings the fixes need: {key, <locale>: text} — also in each item\'s checkpoint' },
     treeCleanOfMine: { type: 'boolean' },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['lane', 'done', 'skipped', 'commits', 'treeCleanOfMine'],
+  required: ['lane', 'done', 'skipped', 'remaining', 'commits', 'treeCleanOfMine'],
+}
+
+const UILOOP_SETTLE_SCHEMA = {
+  type: 'object',
+  properties: {
+    green: { type: 'boolean', description: 'typecheck clean of this round\'s errors and the dev server green' },
+    i18nAdded: { type: 'integer' },
+    checkpointed: { type: 'array', items: { type: 'string' }, description: 'foreign and i18n-only keys you wrote a checkpoint for' },
+    ran: { type: 'array', items: { type: 'string' } },
+    failures: { type: 'array', items: { type: 'string' } },
+    commits: { type: 'array', items: { type: 'string' } },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['green', 'ran', 'failures'],
 }
 
 const UILOOP_MANIFEST_SCHEMA = {
