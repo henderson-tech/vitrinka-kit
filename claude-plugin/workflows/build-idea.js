@@ -247,13 +247,14 @@ if (!gate || !gate.green) log(`build-idea: implementation gate red — ${JSON.st
 phase('Verify')
 let terrain = null
 try {
-  terrain = await workflow('vitrinka:map', { scope: 'app', project: A.project, task: A.task, push: false })
+  terrain = await workflow('vitrinka:map', { scope: 'app', screens: false, project: A.project, task: A.task, push: false })
 } catch (e) {
   log(`build-idea: map workflow unavailable (${e && e.message}); the review loop inventories inline`)
 }
 let loop = { boardUrl: '', passes: [], converged: false, gateRed: false, open: [], unverified: [], error: '' }
 try {
   loop = await workflow('vitrinka:review-loop', {
+    mode: 'routes',
     routes: terrain ? terrain.routes : undefined,
     journeys: terrain ? terrain.journeys : undefined,
     projectType: terrain ? terrain.projectType : undefined,
