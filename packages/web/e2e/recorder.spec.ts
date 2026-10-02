@@ -400,6 +400,24 @@ test('stop lives in the pill: confirm inline, then saving, then saved with the b
   expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.recents'))) ?? '[]')).toHaveLength(1);
 });
 
+test('the ⋯ menu opens from the keyboard with focus on its first item; ↓ walks it, Esc returns to ⋯', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).focus();
+  const more = page.locator('.seg.on .b-more');
+  await more.focus();
+  await page.keyboard.press('Enter');
+  const items = page.locator('[data-e2e="recorder-menu"] [role^="menuitem"]:not([aria-disabled="true"])');
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(more).toBeFocused();
+  // ↓ on ⋯ opens it too.
+  await page.keyboard.press('ArrowDown');
+  await expect(items.first()).toBeFocused();
+});
+
 test('a note or annotation says Saved on the pill', async ({ page }) => {
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();

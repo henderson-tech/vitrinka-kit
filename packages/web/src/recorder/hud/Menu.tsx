@@ -180,7 +180,7 @@ export function Menu(p: MenuProps): ReactElement {
         className="m-row toggle"
         role="menuitemcheckbox"
         aria-checked={snap.prefs.verbose}
-        tabIndex={-1}
+        tabIndex={0}
         onClick={() => p.onVerbose(!snap.prefs.verbose)}
         onKeyDown={(e) => {
           if (e.key !== 'Enter' && e.key !== ' ') return;
