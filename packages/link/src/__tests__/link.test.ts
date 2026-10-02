@@ -50,13 +50,40 @@ describe('link', () => {
     expect(isUnauthorized(403)).toBe(false);
   });
 
-  it('surfaces a non-202/200 claim as LinkError with its status, and 410 as expired', async () => {
-    const boom = (async () => json(503)) as unknown as typeof globalThis.fetch;
-    await expect(pollLink('https://x.test', 'dc', { fetch: boom, sleep: async () => undefined })).rejects.toMatchObject({ name: 'LinkError', status: 503 });
+  it('surfaces a definitive non-202/200 claim as LinkError with its status, and 410 as expired', async () => {
+    const boom = (async () => json(400)) as unknown as typeof globalThis.fetch;
+    await expect(pollLink('https://x.test', 'dc', { fetch: boom, sleep: async () => undefined })).rejects.toMatchObject({ name: 'LinkError', status: 400 });
     const forbidden = (async () => json(403)) as unknown as typeof globalThis.fetch;
     await expect(pollLink('https://x.test', 'dc', { fetch: forbidden, sleep: async () => undefined })).rejects.toBeInstanceOf(LinkError);
     const gone = (async () => json(410)) as unknown as typeof globalThis.fetch;
     await expect(pollLink('https://x.test', 'dc', { fetch: gone, sleep: async () => undefined })).rejects.toBeInstanceOf(LinkExpired);
+  });
+
+  it('survives a rejected fetch, a 503 and a 429 with bounded backoff, then stops on 404', async () => {
+    const answers: (() => Response)[] = [
+      () => json(202),
+      () => {
+        throw new TypeError('Failed to fetch');
+      },
+      () => json(503),
+      () => new Response(null, { status: 429, headers: { 'retry-after': '20' } }),
+      () => json(202),
+      () => json(404),
+    ];
+    let n = 0;
+    const fetch = (async () => answers[n++]!()) as unknown as typeof globalThis.fetch;
+    const sleeps: number[] = [];
+    const err = await pollLink('https://x.test', 'dc', { fetch, expiresIn: 600, sleep: async (ms) => void sleeps.push(ms) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LinkExpired);
+    expect(n).toBe(answers.length);
+    // Pending cadence, then doubling backoff (Retry-After wins when longer), back to cadence once a 202 lands.
+    expect(sleeps).toEqual([2000, 4000, 8000, 20000, 2000]);
+    // Failing until the code's own expiry ends as LinkExpired, never an endless loop.
+    let clock = 0;
+    const down = (async () => json(502)) as unknown as typeof globalThis.fetch;
+    const late = await pollLink('https://x.test', 'dc', { fetch: down, expiresIn: 60, now: () => clock, sleep: async (ms) => void (clock += ms) }).catch((e: unknown) => e);
+    expect(late).toBeInstanceOf(LinkExpired);
+    expect(clock).toBeLessThan(60_000);
   });
 
   it('refuses a malformed start payload instead of yielding undefined URLs', async () => {

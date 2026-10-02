@@ -227,11 +227,42 @@ export async function startLink(base: string, opts: { label: string; workspace?:
 export interface PollOptions extends LinkOptions {
   /** Seconds between claims (min 2). */
   interval?: number;
+  /**
+   * Seconds the code lives (`LinkStart.expires_in`): transient claim failures
+   * are retried until then. Omitted or 0 → the server's code TTL (600).
+   */
+  expiresIn?: number;
   /** The workspace the recorder records into; a claim pinned elsewhere rejects with LinkWorkspaceMismatch. */
   workspace?: string;
   signal?: AbortSignal;
   /** Test seam: the sleep. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Test seam: the clock (epoch ms). */
+  now?: () => number;
+}
+
+/** The server's link-code TTL, assumed when the start answer named none. */
+const CODE_TTL_S = 600;
+/** Ceiling of the backoff between claims that failed transiently. */
+const MAX_BACKOFF_MS = 30_000;
+
+/** A claim answer worth retrying: the edge or the server hiccuped, or asked us to slow down. */
+function transientStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429;
+}
+
+/**
+ * `Retry-After` in ms (delta-seconds or an HTTP date), when the answer
+ * carries one. Cross-origin it is only readable when the server exposes it;
+ * otherwise the backoff alone paces the retry.
+ */
+function retryAfterMs(res: Response, now: number): number | undefined {
+  const v = res.headers.get('retry-after');
+  if (!v) return undefined;
+  const s = Number(v);
+  if (Number.isFinite(s) && s >= 0) return s * 1000;
+  const at = Date.parse(v);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -256,25 +287,56 @@ function abortError(): Error {
 }
 
 /**
- * Claim until approved. Resolves with the token; throws LinkExpired on 404,
- * LinkWorkspaceMismatch when approved into another workspace than
- * `opts.workspace`, AbortError on abort.
+ * Claim until approved. Resolves with the token; throws LinkExpired on 404
+ * (or once the code's own expiry passes), LinkWorkspaceMismatch when approved
+ * into another workspace than `opts.workspace`, LinkError on any other
+ * definitive refusal, AbortError on abort.
+ *
+ * A claim that fails transiently — the fetch rejects with a network
+ * TypeError (offline, an edge reset, a CORS-less error page), or answers
+ * 5xx, 408 or 429 — never ends the link: the next claim waits a doubling
+ * backoff (capped at 30s, at least any readable `Retry-After`) and the
+ * pending cadence resumes on the next 202.
  */
 export async function pollLink(base: string, deviceCode: string, opts: PollOptions = {}): Promise<Linked> {
   const origin = linkOrigin(base);
   const f = fetcher(opts);
   const sleep = opts.sleep ?? defaultSleep;
+  const now = opts.now ?? Date.now;
   const interval = Math.max(2, opts.interval ?? 2);
+  const deadline = now() + (opts.expiresIn && opts.expiresIn > 0 ? opts.expiresIn : CODE_TTL_S) * 1000;
+  let failures = 0;
+  /** Back off after a transient failure, or give up once the code has expired anyway. */
+  const backOff = async (cause: string, retryAfter?: number) => {
+    failures++;
+    const wait = Math.max(Math.min(MAX_BACKOFF_MS, interval * 1000 * 2 ** failures), retryAfter ?? 0);
+    if (now() + wait >= deadline) throw new LinkExpired(`link code expired (last claim: ${cause})`);
+    await sleep(wait, opts.signal);
+  };
   for (;;) {
     if (opts.signal?.aborted) throw abortError();
-    const res = await f(`${origin}/api/v1/cli/auth/claim`, {
-      method: 'POST',
-      mode: 'cors',
-      credentials: 'omit',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ device_code: deviceCode }),
-      signal: opts.signal,
-    });
+    let res: Response;
+    try {
+      res = await f(`${origin}/api/v1/cli/auth/claim`, {
+        method: 'POST',
+        mode: 'cors',
+        credentials: 'omit',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ device_code: deviceCode }),
+        signal: opts.signal,
+      });
+    } catch (e) {
+      // fetch rejects with a TypeError for every network-level failure; an
+      // abort (ours) or anything else is not a hiccup and propagates.
+      if (opts.signal?.aborted || !(e instanceof TypeError)) throw e;
+      await backOff(e.message);
+      continue;
+    }
+    if (transientStatus(res.status)) {
+      await backOff(String(res.status), retryAfterMs(res, now()));
+      continue;
+    }
+    failures = 0;
     if (res.status === 200) {
       const linked = (await res.json()) as Linked;
       // Fail closed: a recorder claim always names its workspace (the server

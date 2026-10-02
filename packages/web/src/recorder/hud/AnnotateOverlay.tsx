@@ -30,6 +30,7 @@ import { elementText, shortSelector } from '../capture/selector';
 import { RRWEB_BLOCK_ATTR } from '../block';
 import { AnnotateIcon } from './icons';
 import { insideHud } from './host';
+import { listen } from './listen';
 import { ANNOTATE_PAGE_CSS } from './styles';
 
 export interface Pick {
@@ -70,11 +71,11 @@ function swallowGestureTail(): void {
     e.stopImmediatePropagation();
     if (e.type === 'click') off();
   };
+  const offs = TAIL.map((t) => listen(window, t, eat, { capture: true }));
   const off = () => {
-    for (const t of TAIL) window.removeEventListener(t, eat, true);
+    for (const o of offs) o();
     window.removeEventListener('pointerdown', off, true);
   };
-  for (const t of TAIL) window.addEventListener(t, eat, { capture: true, passive: false });
   window.addEventListener('pointerdown', off, true);
 }
 
@@ -223,31 +224,28 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
       }
     };
     window.addEventListener('pointermove', move, true);
-    window.addEventListener('pointerdown', down, true);
-    window.addEventListener('pointerup', up, true);
-    window.addEventListener('click', swallowClick, true);
     window.addEventListener('pointercancel', cancel, true);
-    window.addEventListener('dragstart', noDrag, true);
-    window.addEventListener('mousedown', noSelect, true);
-    window.addEventListener('selectstart', noSelect, true);
     for (const t of HUSHED) window.addEventListener(t, hush, true);
-    document.addEventListener('keydown', key, true);
-    // Explicitly non-passive: window/document touch listeners default to passive.
-    for (const t of TOUCH) window.addEventListener(t, blockTouch, { capture: true, passive: false });
+    // Every cancelling listener goes through `listen`: non-passive (window
+    // touch listeners default to passive) and native, so a zone.js host
+    // cannot fold it into a passive listener registered before it.
+    const offs = [
+      listen(window, 'pointerdown', down, { capture: true }),
+      listen(window, 'pointerup', up, { capture: true }),
+      listen(window, 'click', swallowClick, { capture: true }),
+      listen(window, 'dragstart', noDrag, { capture: true }),
+      listen(window, 'mousedown', noSelect, { capture: true }),
+      listen(window, 'selectstart', noSelect, { capture: true }),
+      listen(document, 'keydown', key, { capture: true }),
+      ...TOUCH.map((t) => listen(window, t, blockTouch, { capture: true })),
+    ];
     return () => {
       pageCss.remove();
       if (raf !== 0) cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', move, true);
-      window.removeEventListener('pointerdown', down, true);
-      window.removeEventListener('pointerup', up, true);
-      window.removeEventListener('click', swallowClick, true);
       window.removeEventListener('pointercancel', cancel, true);
-      window.removeEventListener('dragstart', noDrag, true);
-      window.removeEventListener('mousedown', noSelect, true);
-      window.removeEventListener('selectstart', noSelect, true);
       for (const t of HUSHED) window.removeEventListener(t, hush, true);
-      document.removeEventListener('keydown', key, true);
-      for (const t of TOUCH) window.removeEventListener(t, blockTouch, true);
+      for (const off of offs) off();
     };
   }, [onPick, onCancel]);
 

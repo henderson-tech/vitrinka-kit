@@ -95,7 +95,7 @@ export interface HudSnapshot {
   recents: readonly HudRecent[];
   /** "Go to vitrinka": the configured workspace URL. */
   workspaceUrl: string;
-  /** Recorder id, e.g. `web/0.2.0` (verbose mode shows it). */
+  /** Recorder id, e.g. `web/0.2.1` (verbose mode shows it). */
   version: string;
 }
 

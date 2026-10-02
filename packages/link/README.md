@@ -14,7 +14,7 @@ const start = await startLink(base, { label: 'Safari on macOS · app.example.tes
 start.user_code;  // 'ABCD-EFGH' — show it
 start.verifyUrl;  // open on the same device (…&workspace=acme preselects it)
 start.qrUrl;      // <img src> for the desktop→phone path (SVG from the server)
-const linked = await pollLink(start.base, start.device_code, { interval: start.interval, workspace });
+const linked = await pollLink(start.base, start.device_code, { interval: start.interval, expiresIn: start.expires_in, workspace });
 linked.token;     // 'vkr_…' — store it, send it as the bearer
 ```
 
@@ -22,6 +22,9 @@ Doors (at the base URL's origin): `POST /api/v1/cli/auth {kind:"recorder",label}
 201 `{device_code, user_code, verify_path, verify_url?, qr_path, interval,
 expires_in}`; `POST /api/v1/cli/auth/claim {device_code}` → 202 pending ·
 200 `{token, kind, workspace, label, expires_in}` · 404 expired (`LinkExpired`).
+A transient claim failure (network `TypeError`, 5xx, 408, 429) never ends the poll: it
+backs off (doubling, capped at 30s, honouring a readable `Retry-After`) until `expiresIn`
+passes, then rejects with `LinkExpired`; any other 4xx rejects with `LinkError`.
 A 401 from any session door means the token is dead: forget it and link again.
 
 A token only authenticates in the workspace it was approved into, so a
