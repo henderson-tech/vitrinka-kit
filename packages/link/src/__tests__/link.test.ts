@@ -78,12 +78,15 @@ describe('link', () => {
     expect(n).toBe(answers.length);
     // Pending cadence, then doubling backoff (Retry-After wins when longer), back to cadence once a 202 lands.
     expect(sleeps).toEqual([2000, 4000, 8000, 20000, 2000]);
-    // Failing until the code's own expiry ends as LinkExpired, never an endless loop.
+    // Failing until the code's own expiry ends as LinkExpired, never an endless loop —
+    // and a wait that would cross the expiry is cut to it, so the last valid moment still claims.
     let clock = 0;
-    const down = (async () => json(502)) as unknown as typeof globalThis.fetch;
+    let claims = 0;
+    const down = (async () => (++claims === 1 ? new Response(null, { status: 429, headers: { 'retry-after': '60' } }) : json(502))) as unknown as typeof globalThis.fetch;
     const late = await pollLink('https://x.test', 'dc', { fetch: down, expiresIn: 60, now: () => clock, sleep: async (ms) => void (clock += ms) }).catch((e: unknown) => e);
     expect(late).toBeInstanceOf(LinkExpired);
-    expect(clock).toBeLessThan(60_000);
+    expect(claims).toBe(2);
+    expect(clock).toBe(60_000);
   });
 
   it('refuses a malformed start payload instead of yielding undefined URLs', async () => {

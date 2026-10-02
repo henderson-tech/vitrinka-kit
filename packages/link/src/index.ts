@@ -306,12 +306,17 @@ export async function pollLink(base: string, deviceCode: string, opts: PollOptio
   const interval = Math.max(2, opts.interval ?? 2);
   const deadline = now() + (opts.expiresIn && opts.expiresIn > 0 ? opts.expiresIn : CODE_TTL_S) * 1000;
   let failures = 0;
-  /** Back off after a transient failure, or give up once the code has expired anyway. */
+  /**
+   * Back off after a transient failure; give up only once the code HAS
+   * expired. A wait that would cross the expiry is cut to it, so a code's
+   * last valid moment still gets its claim.
+   */
   const backOff = async (cause: string, retryAfter?: number) => {
     failures++;
+    const left = deadline - now();
+    if (left <= 0) throw new LinkExpired(`link code expired (last claim: ${cause})`);
     const wait = Math.max(Math.min(MAX_BACKOFF_MS, interval * 1000 * 2 ** failures), retryAfter ?? 0);
-    if (now() + wait >= deadline) throw new LinkExpired(`link code expired (last claim: ${cause})`);
-    await sleep(wait, opts.signal);
+    await sleep(Math.min(wait, left), opts.signal);
   };
   for (;;) {
     if (opts.signal?.aborted) throw abortError();
