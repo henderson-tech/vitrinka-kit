@@ -3,6 +3,8 @@
  *
  * Ingest contract, shared with the Expo recorder and the browser extension:
  *   GET   /api/v1/recorder/policy          workspace redaction policy
+ *   GET   /api/v1/recorder/me              who the token is + HUD prefs (me.ts)
+ *   PATCH /api/v1/recorder/me              {prefs}  (me.ts)
  *   POST  /api/v1/sessions                 {host, title, environment?, meta} → session
  *   POST  /api/v1/sessions/:id/events      {events: [...]}
  *   POST  /api/v1/sessions/:id/chunk?seq=N (rrweb batch body, application/json)

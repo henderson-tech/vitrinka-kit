@@ -6,7 +6,10 @@ import { type Linked, type LinkStart, linkWorkspace, pollLink, startLink } from 
 
 import { onUnauthorized } from './api';
 import { clearLink, defaultLinkLabel, recorderConfig, storeLink } from './config';
+import { clearAccount } from './me';
 import { getState, resetQueues, setState } from './queue';
+import { updateRecent } from './recents';
+import { elapsedOf } from './session';
 import { notify } from './state';
 
 export { LinkExpired } from '@vitrinka/link';
@@ -35,10 +38,13 @@ export async function linkDevice(): Promise<DeviceLink> {
   return { start, linked, cancel: () => ac.abort() };
 }
 
-/** Forget the stored link; a live session ends locally (its tail is dropped). */
+/** Forget the stored link and its account; a live session ends locally (its tail is dropped). */
 export function forgetLink(): void {
   clearLink();
-  if (getState()) {
+  clearAccount();
+  const rec = getState();
+  if (rec) {
+    updateRecent(rec.sessionId, { status: 'unsaved', durationMs: elapsedOf(rec) });
     setState(null);
     resetQueues();
   }

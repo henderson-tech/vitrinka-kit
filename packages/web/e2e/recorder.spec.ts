@@ -2,142 +2,26 @@
  * The recorder end to end in headless Chromium: a node:http page server
  * serves the fixture (bundled with `bun build --format=iife` into a temp
  * dir), a second node:http "vitrinka" stub records every call to the session
- * doors. The test starts a recording from the pill, clicks, pushes a route,
- * sends a note, drags a region annotation and stops — then asserts what the
- * stub saw.
+ * doors (both in fixture/servers.ts). The test starts a recording from the
+ * pill, clicks, pushes a route, sends a note, drags a region annotation and
+ * stops — then asserts what the stub saw.
  */
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
-const here = dirname(fileURLToPath(import.meta.url));
+import { type Seen, type Servers, startServers } from './fixture/servers';
 
-interface Seen {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body: unknown;
-}
-
-let tmp: string;
-let bundle: string;
-let pageServer: Server;
-let stubServer: Server;
+let servers: Servers;
 let pageUrl: string;
 let stubUrl: string;
-const seen: Seen[] = [];
-let claims = 0;
-
-function listen(server: Server): Promise<string> {
-  return new Promise((res) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      res(typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '');
-    });
-  });
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((res) => {
-    let s = '';
-    req.on('data', (c: Buffer) => {
-      s += c.toString();
-    });
-    req.on('end', () => res(s));
-  });
-}
-
-function cors(res: ServerResponse): void {
-  res.setHeader('access-control-allow-origin', '*');
-  res.setHeader('access-control-allow-headers', 'authorization, content-type');
-  res.setHeader('access-control-allow-methods', 'GET, POST, PATCH, OPTIONS');
-}
+let seen: Seen[];
 
 test.beforeAll(async () => {
-  tmp = mkdtempSync(join(tmpdir(), 'vt-web-e2e-'));
-  const out = join(tmp, 'app.js');
-  execFileSync(
-    'bun',
-    ['build', join(here, 'fixture/app.tsx'), '--format=iife', '--outfile', out, '--define', 'process.env.NODE_ENV="development"'],
-    { stdio: 'inherit', cwd: join(here, '..') },
-  );
-  bundle = readFileSync(out, 'utf8');
-
-  stubServer = createServer(async (req, res) => {
-    cors(res);
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204).end();
-      return;
-    }
-    const raw = await readBody(req);
-    let body: unknown = raw;
-    try {
-      body = raw ? JSON.parse(raw) : undefined;
-    } catch {
-      body = raw;
-    }
-    const headers: Record<string, string> = {};
-    for (const [k, v] of Object.entries(req.headers)) headers[k] = String(v);
-    const path = req.url ?? '';
-    seen.push({ method: req.method ?? '', path, headers, body });
-    res.setHeader('content-type', 'application/json');
-    if (path === '/api/v1/cli/auth') {
-      claims = 0;
-      res.writeHead(201);
-      return void res.end(JSON.stringify({ device_code: 'dc-e2e', user_code: 'WXYZ-1234', verify_path: '/link?c=WXYZ-1234', qr_path: '/link/qr?c=WXYZ-1234', interval: 2, expires_in: 600 }));
-    }
-    if (path === '/api/v1/cli/auth/claim') {
-      if (++claims < 2) return void res.writeHead(202).end();
-      return void res.end(JSON.stringify({ token: 'vkr_test', kind: 'recorder', workspace: 'acme', label: 'e2e', expires_in: 2592000 }));
-    }
-    if (path === '/api/v1/recorder/policy') return void res.end(JSON.stringify({ policy: null }));
-    if (path === '/api/v1/sessions' && req.method === 'POST') {
-      res.writeHead(201);
-      return void res.end(
-        JSON.stringify({
-          id: 'sess-e2e',
-          project: 'fixture',
-          environment: 'development',
-          title: (body as { title?: string }).title ?? '',
-          workspace: 'acme',
-          boardSlug: 'fixture-session-1',
-          boardUrl: `${stubUrl}/acme/b/fixture-session-1`,
-        }),
-      );
-    }
-    if (path.includes('/chunk?seq=')) return void res.end(JSON.stringify({ blobKey: `blob-${path.split('seq=')[1]}` }));
-    if (path.endsWith('/events') || path.endsWith('/tags')) return void res.end('{}');
-    if (req.method === 'PATCH') return void res.end(JSON.stringify({ board: { url: `${stubUrl}/acme/b/fixture-session-1` } }));
-    if (req.method === 'GET') return void res.end(JSON.stringify({ maxSeq: 0, status: 'recording' }));
-    res.writeHead(404).end();
-  });
-  stubUrl = await listen(stubServer);
-
-  pageServer = createServer((req, res) => {
-    if (req.url === '/app.js') {
-      res.setHeader('content-type', 'text/javascript');
-      return void res.end(bundle);
-    }
-    res.setHeader('content-type', 'text/html');
-    res.end(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixture</title></head><body>` +
-        `<div id="root"></div>` +
-        `<script>window.__VT_CFG=${JSON.stringify({ url: stubUrl, key: (req.url ?? '').includes('nokey') ? '' : 'vkr_e2e' })}</script>` +
-        `<script src="/app.js"></script></body></html>`,
-    );
-  });
-  pageUrl = await listen(pageServer);
+  servers = await startServers();
+  ({ pageUrl, stubUrl, seen } = servers);
 });
 
 test.afterAll(async () => {
-  await new Promise((r) => pageServer?.close(r));
-  await new Promise((r) => stubServer?.close(r));
-  if (tmp) rmSync(tmp, { recursive: true, force: true });
+  await servers?.close();
 });
 
 test('records a journey: create · click · nav · note · region annotation · rrweb · stop', async ({ page }) => {
@@ -147,7 +31,8 @@ test('records a journey: create · click · nav · note · region annotation · 
   await expect(pill).toBeVisible();
   // At rest the capsule is the dot and the clock; the tools unfold on intent.
   const handle = page.getByRole('button', { name: 'Recorder controls' });
-  await expect(pill).toHaveText(/^\d\d:\d\d/);
+  await expect(pill).toHaveAttribute('data-face', 'rec');
+  await expect(handle).toHaveText(/^\d\d:\d\d/);
   await page.mouse.move(600, 400);
   await expect(handle).toHaveAttribute('aria-expanded', 'false', { timeout: 5_000 });
 
@@ -179,13 +64,14 @@ test('records a journey: create · click · nav · note · region annotation · 
   await ta.press('Enter');
   await expect(ta).toBeHidden();
 
-  // Stop from the menu; the drain must reach a PATCH done.
+  // Stop from the pill, confirmed inline; the drain must reach a PATCH done.
   await handle.hover();
-  await page.getByRole('button', { name: 'More' }).click();
-  await page.getByRole('menuitem', { name: 'Stop recording' }).click();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
   await expect.poll(() => seen.some((s) => s.method === 'PATCH' && (s.body as { status?: string })?.status === 'done'), {
     timeout: 30_000,
   }).toBe(true);
+  await page.getByRole('button', { name: 'Dismiss' }).click();
   await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
 
   const create = seen.find((s) => s.method === 'POST' && s.path === '/api/v1/sessions')!;
@@ -233,23 +119,45 @@ test('links the device from the pill, then records with the minted token', async
   await expect(page.getByAltText('Scan to link')).toHaveAttribute('src', `${stubUrl}/link/qr?c=WXYZ-1234`);
   await expect(sheet).toContainText('waiting for approval…');
   // The stub answers 202 once, then 200 — approval lands on the second claim.
-  await expect(page.locator('[data-e2e="recorder-pill"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: 'Recorder controls' })).toBeVisible({ timeout: 20_000 });
   const start = seen.find((s) => s.path === '/api/v1/cli/auth')!;
   expect(start.body).toEqual({ kind: 'recorder', label: expect.stringMatching(/ on .* · 127\.0\.0\.1:\d+$/) });
   expect(seen.filter((s) => s.path === '/api/v1/cli/auth/claim').length).toBeGreaterThanOrEqual(2);
   const create = seen.find((s) => s.method === 'POST' && s.path === '/api/v1/sessions')!;
   expect(create.headers.authorization).toBe('Bearer vkr_test');
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toContain('vkr_test');
-  // Unlink from the menu → back to the unlinked pill.
+  // The menu names the linked account (GET /recorder/me with the minted token).
   await page.getByRole('button', { name: 'Recorder controls' }).hover();
   await page.getByRole('button', { name: 'More' }).click();
-  await page.getByRole('menuitem', { name: 'Unlink' }).click();
+  await expect(page.locator('[data-e2e="menu-account"]')).toContainText('lukas@henderson.tech');
+  await expect(page.locator('[data-e2e="menu-account"]')).toContainText('ADF');
+  // Unlink asks first: Cancel keeps the link…
+  await page.getByRole('menuitem', { name: 'Unlink this device' }).click();
+  const confirm = page.getByRole('group', { name: 'Unlink' });
+  await expect(confirm).toContainText('Unlink this device?');
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toContain('vkr_test');
+  // …Unlink forgets it → back to the unlinked pill.
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('menuitem', { name: 'Unlink this device' }).click();
+  await confirm.getByRole('button', { name: 'Unlink' }).click();
   await expect(page.getByRole('button', { name: 'Link recorder' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
 });
 
 /** Drag the element's centre to (x, y) with a real pointer, then let the spring settle. */
 async function dragTo(page: Page, el: Locator, x: number, y: number): Promise<void> {
+  // A face change tweens the handle into place: grab it once it holds still.
+  await expect
+    .poll(async () => {
+      const a = await el.boundingBox();
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      const b = await el.boundingBox();
+      return a !== null && b !== null && a.x === b.x && a.width === b.width;
+    })
+    .toBe(true);
   const b = (await el.boundingBox())!;
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.mouse.down();
@@ -315,6 +223,9 @@ test('moves without a drag: arrow keys on the handle and the Move to picker', as
   const handle = page.getByRole('button', { name: 'Recorder controls' });
   const dock = page.locator('.dock');
   await handle.focus();
+  // Up from bottom right passes the middle row, Left from the top steps to the centre.
+  await page.keyboard.press('ArrowUp');
+  await expect(dock).toHaveAttribute('data-row', 'm');
   await page.keyboard.press('ArrowUp');
   await expect(dock).toHaveAttribute('data-row', 't');
   await page.keyboard.press('ArrowLeft');
@@ -324,6 +235,95 @@ test('moves without a drag: arrow keys on the handle and the Move to picker', as
   await page.getByRole('menuitemradio', { name: 'Move to bottom left' }).click();
   await expect(dock).toHaveAttribute('data-row', 'b');
   await expect(dock).toHaveAttribute('data-col', 'l');
+});
+
+test('eight spots: the middle row stands the pill up, and its menu and tooltips open sideways into the viewport', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const pill = page.locator('[data-e2e="recorder-pill"]');
+  const dock = page.locator('.dock');
+  const view = page.viewportSize()!;
+  const spots = [
+    ['top left', 't', 'l'],
+    ['top centre', 't', 'c'],
+    ['top right', 't', 'r'],
+    ['middle left', 'm', 'l'],
+    ['middle right', 'm', 'r'],
+    ['bottom left', 'b', 'l'],
+    ['bottom centre', 'b', 'c'],
+    ['bottom right', 'b', 'r'],
+  ] as const;
+  const menu = page.locator('[data-e2e="recorder-menu"]');
+  await handle.hover();
+  await page.getByRole('button', { name: 'More' }).click();
+  await expect(page.locator('.screen button')).toHaveCount(8);
+  // The picker's labels never select.
+  expect(await menu.locator('#vt-move').evaluate((el) => getComputedStyle(el).userSelect)).toBe('none');
+  for (const [name, row, col] of spots) {
+    if (!(await menu.isVisible())) {
+      await handle.hover();
+      await page.locator('.seg.on .b-more').click();
+    }
+    await expect(menu).toHaveClass(/is-open/);
+    await page.getByRole('menuitemradio', { name: `Move to ${name}` }).click();
+    await expect(menu).toBeHidden();
+    await expect(dock).toHaveAttribute('data-row', row);
+    await expect(dock).toHaveAttribute('data-col', col);
+    await expect(pill).toHaveAttribute('data-orient', row === 'm' ? 'v' : 'h');
+  }
+
+  // Middle left: a column hugging the left edge; the menu opens to its right, inside the viewport.
+  await handle.hover();
+  await page.locator('.seg.on .b-more').click();
+  await page.getByRole('menuitemradio', { name: 'Move to middle left' }).click();
+  await expect(pill).toHaveAttribute('data-orient', 'v');
+  await expect.poll(async () => (await pill.evaluate((el) => el.getAnimations().length))).toBe(0);
+  const pb = (await pill.boundingBox())!;
+  expect(pb.height).toBeGreaterThan(pb.width);
+  expect(pb.x).toBeLessThan(40);
+  await handle.hover();
+  await page.locator('.seg.on .b-more').click();
+  await expect(menu).toHaveClass(/is-open/);
+  const mb = (await menu.boundingBox())!;
+  expect(mb.x).toBeGreaterThan(pb.x + pb.width);
+  expect(mb.y).toBeGreaterThanOrEqual(0);
+  expect(mb.y + mb.height).toBeLessThanOrEqual(view.height);
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  // Its tooltip opens to the right of the hovered tool, fully inside the viewport.
+  await handle.hover();
+  await page.getByRole('button', { name: 'Annotate' }).hover();
+  const tip = page.locator('[data-e2e="tooltip"]');
+  await expect(tip).toHaveAttribute('data-show', 'true');
+  await expect(tip).toContainText('Annotate');
+  const tb = (await tip.boundingBox())!;
+  const ab = (await page.getByRole('button', { name: 'Annotate' }).boundingBox())!;
+  expect(tb.x).toBeGreaterThan(ab.x + ab.width);
+  expect(tb.x + tb.width).toBeLessThanOrEqual(view.width);
+});
+
+test('a tooltip near a viewport edge flips and shifts inside it', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const view = page.viewportSize()!;
+  // Top right: the tray grows left from the edge, tooltips open below and stay on screen.
+  await handle.focus();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('.dock')).toHaveAttribute('data-row', 't');
+  await handle.hover();
+  const more = page.locator('.seg.on .b-more');
+  await more.hover();
+  const tip = page.locator('[data-e2e="tooltip"]');
+  await expect(tip).toHaveAttribute('data-show', 'true');
+  await expect(tip).toHaveAttribute('data-side', 'bottom');
+  const tb = (await tip.boundingBox())!;
+  expect(tb.x).toBeGreaterThanOrEqual(0);
+  expect(tb.x + tb.width).toBeLessThanOrEqual(view.width);
+  expect(tb.y).toBeGreaterThan(0);
 });
 
 test('reduced motion stills the recording ripple', async ({ page }) => {
@@ -344,6 +344,179 @@ test('a click pick never presses the page: the button under it stays untouched',
   await page.locator('#buy').click();
   await expect(page.getByText('Annotate element')).toBeVisible();
   await expect(page.locator('#buy')).toHaveText('Buy now (0)');
+});
+
+test('stop lives in the pill: confirm inline, then saving, then saved with the board link — and it lands in Recents', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const pill = page.locator('[data-e2e="recorder-pill"]');
+  const confirm = page.getByRole('group', { name: 'Stop and save' });
+  // Esc and Keep recording both cancel; focus starts on the safe choice and returns to ■.
+  await handle.hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(confirm).toContainText('Stop & save?');
+  await expect(confirm.getByRole('button', { name: 'Keep recording' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(confirm).toBeHidden();
+  await expect(pill).toHaveAttribute('data-face', 'rec');
+  await handle.hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await confirm.getByRole('button', { name: 'Keep recording' }).click();
+  await expect(confirm).toBeHidden();
+  expect(seen.some((s) => s.method === 'PATCH' && (s.body as { status?: string })?.status === 'done')).toBe(false);
+
+  // Stop: the PATCH done is held, so "Saving…" with its progress stays on screen.
+  const release = servers.holdStop();
+  await handle.hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await confirm.getByRole('button', { name: 'Stop', exact: true }).click();
+  const saving = page.locator('[data-e2e="saving"]');
+  await expect(saving).toBeVisible();
+  await expect(saving).toContainText('Saving…');
+  await expect(saving.getByRole('progressbar')).toBeVisible();
+  release();
+  const saved = page.locator('[data-e2e="saved"]');
+  await expect(saved).toBeVisible({ timeout: 30_000 });
+  const open = saved.getByRole('link', { name: /Open board/ });
+  await expect(open).toHaveAttribute('href', `${stubUrl}/acme/b/fixture-session-1`);
+  await expect(open).toHaveAttribute('target', '_blank');
+  // It stays until dismissed.
+  await page.mouse.move(600, 400);
+  await page.waitForTimeout(3000);
+  await expect(saved).toBeVisible();
+
+  await saved.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
+
+  // Recents: the device's last recordings, linked to their boards.
+  await page.getByRole('button', { name: 'Start recording' }).hover();
+  await page.locator('.seg.on .b-more').click();
+  const recent = page.locator('[data-e2e="recent"]').first();
+  await expect(recent).toContainText('e2e journey');
+  await expect(recent).toContainText('saved');
+  await expect(recent).toHaveAttribute('href', `${stubUrl}/acme/b/fixture-session-1`);
+  await expect(page.getByRole('menuitem', { name: 'Go to vitrinka' })).toHaveAttribute('href', stubUrl);
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.recents'))) ?? '[]')).toHaveLength(1);
+});
+
+test('a note or annotation says Saved on the pill', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note' }).click();
+  const ta = page.getByPlaceholder("what's wrong / what to refine…");
+  await ta.fill('button too small');
+  await ta.press('Enter');
+  const flash = page.locator('[data-e2e="saved-flash"]');
+  await expect(flash).toBeVisible();
+  await expect(flash).toBeHidden({ timeout: 5_000 });
+});
+
+test('annotate: a drag over text draws a region and never selects the page', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  // The page counts every press and move it hears.
+  await page.evaluate(() => {
+    const w = window as unknown as { heard: number };
+    w.heard = 0;
+    for (const t of ['pointerdown', 'pointermove', 'mousedown', 'mousemove', 'mouseover', 'selectstart'])
+      document.addEventListener(t, () => w.heard++);
+  });
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Annotate' }).click();
+  await expect(page.locator('[data-e2e="annotate-dim"]')).toBeVisible();
+  await page.evaluate(() => ((window as unknown as { heard: number }).heard = 0));
+  const h1 = (await page.locator('h1').boundingBox())!;
+  const target = (await page.locator('#target').boundingBox())!;
+  await page.mouse.move(h1.x - 10, h1.y + h1.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + 200, target.y + 40, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByText('Annotate region')).toBeVisible();
+  expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toBe('');
+  expect(await page.evaluate(() => (window as unknown as { heard: number }).heard)).toBe(0);
+});
+
+test('size and details: the menu scales the HUD, shows technical details, and both survive a reload', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  const pill = page.locator('[data-e2e="recorder-pill"]');
+  const md = (await pill.boundingBox())!.height;
+  await handle.hover();
+  await page.getByRole('button', { name: 'More' }).click();
+  // A key build: the account line names the key, prefs stay on the device (PATCH 409).
+  await expect(page.locator('[data-e2e="menu-account"]')).toContainText('Recorder key · e2e key · project fixture');
+  await page.getByRole('menuitemradio', { name: 'Size Large' }).click();
+  await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'lg');
+  await page.getByRole('menuitemcheckbox', { name: 'Technical details' }).click();
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await pill.boundingBox())!.height).toBeGreaterThan(md);
+  const detail = page.locator('[data-e2e="recorder-detail"]');
+  await expect(detail).toContainText('sess-e2e');
+  await expect(detail).toContainText('web/0.2.0');
+  await expect(detail).toContainText('events');
+  await page.reload();
+  await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'lg');
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs'))) ?? '{}')).toEqual({ size: 'lg', verbose: true });
+  await expect(page.locator('[data-e2e="recorder-detail"]')).toContainText('sess-e2e');
+});
+
+test('a linked device keeps its size on the server', async ({ page }) => {
+  servers.me.prefs = { size: 'sm', verbose: false };
+  await page.goto(`${pageUrl}/?nokey=1`);
+  await page.evaluate(() =>
+    localStorage.setItem('vitrinka.recorder.link', JSON.stringify({ token: 'vkr_test', workspace: 'acme', label: 'e2e', expires_in: 60 })),
+  );
+  await page.reload();
+  // The server's prefs win on load…
+  await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'sm');
+  await page.getByRole('button', { name: 'Start recording' }).hover();
+  await page.locator('.seg.on .b-more').click();
+  await page.getByRole('menuitemradio', { name: 'Size Large' }).click();
+  // …and a change is PATCHed back.
+  await expect.poll(() => servers.me.prefs.size).toBe('lg');
+  const patch = seen.filter((s) => s.method === 'PATCH' && s.path === '/api/v1/recorder/me').at(-1)!;
+  expect(patch.body).toEqual({ prefs: { size: 'lg' } });
+  expect(patch.headers.authorization).toBe('Bearer vkr_test');
+});
+
+test('the HUD never enters the recording: its surfaces are blocked, its clicks and calls are not captured', async ({ page }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const handle = page.getByRole('button', { name: 'Recorder controls' });
+  await handle.hover();
+  await page.getByRole('button', { name: 'Pause' }).hover();
+  await page.getByRole('button', { name: 'More' }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Note' }).click();
+  await page.keyboard.press('Escape');
+  // Every HUD surface lives under the one rrweb-blocked host.
+  const unblocked = await page.evaluate(() => {
+    const host = document.querySelector('[data-vitrinka-hud]');
+    return {
+      blocked: host?.hasAttribute('data-vitrinka-recorder') ?? false,
+      inShadow: ['.pill', '.tip', '.dock'].every((s) => host?.shadowRoot?.querySelector(s) != null),
+      leaked: document.querySelectorAll('.pill, .tip, .menu, .detail, .pop, .dim').length,
+      htmlStyle: document.documentElement.getAttribute('style'),
+    };
+  });
+  expect(unblocked.blocked).toBe(true);
+  expect(unblocked.inShadow).toBe(true);
+  expect(unblocked.leaked).toBe(0);
+  expect(unblocked.htmlStyle).toBeNull();
+  await handle.hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.locator('[data-e2e="saved"]')).toBeVisible({ timeout: 30_000 });
+  const events = seen
+    .filter((s) => s.path.endsWith('/events'))
+    .flatMap((s) => (s.body as { events: { kind: string; payload?: Record<string, unknown> }[] }).events);
+  expect(events.filter((e) => e.kind === 'click')).toEqual([]);
+  expect(events.filter((e) => e.kind === 'net')).toEqual([]);
+  expect(events.filter((e) => e.kind === 'console')).toEqual([]);
 });
 
 /** Start recording and enter annotate mode by finger, the way a phone does it. */

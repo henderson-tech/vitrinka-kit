@@ -1,11 +1,13 @@
 /**
- * The HUD tree, rendered into the shadow host by its own React root. Owns
- * the dock (where the HUD rests), the sheet (open/title/ctx/pick + the
- * surviving draft) and where it opens, annotate mode, the keyboard
- * shortcuts, the Esc-anywhere / click-outside close and the status line a
- * screen reader hears while the capsule is folded.
+ * The HUD tree, rendered into the shadow host by its own React root and
+ * driven ONLY through a `HudController` (controller.ts) — the in-page
+ * recorder's, or another host's. Owns the dock (where the HUD rests), the
+ * pill's inline flows (flow.ts), the sheet (open/title/ctx/pick + the
+ * surviving draft) and where it opens, the ⋯ menu, the tooltip and details
+ * floats, annotate mode, the keyboard shortcuts, the Esc-anywhere /
+ * click-outside close and the status line a screen reader hears while the
+ * pill is folded.
  */
-import { colOf, rowOf } from '@vitrinka/link/dock';
 import {
   type CSSProperties,
   type ReactElement,
@@ -13,24 +15,38 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { readLink, recorderConfig, vitrinkaLinked } from '../config';
-import { forgetLink, linkDevice, LinkExpired, type DeviceLink } from '../link';
-import { getState, health } from '../queue';
-import { addAnnotation, addNote, startSession, stopSession, togglePause } from '../session';
-import { annotateState, setAnnotating, subscribe } from '../state';
+import type { RecorderStorage } from '../storage';
+import type { HudController, HudLinkFlow } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
+import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
-import { anchoredLayer, hostOrigin, PHONE_QUERY, phoneLayer, restingBox, useMedia, usePresence, useViewportTick } from './layer';
+import {
+  anchoredLayer,
+  hostOrigin,
+  PHONE_QUERY,
+  phoneLayer,
+  restingBox,
+  useFloat,
+  useMedia,
+  usePresence,
+  useViewportTick,
+} from './layer';
 import { type LinkPhase, LinkSheet } from './LinkSheet';
+import { Menu } from './Menu';
+import { alignFor, towardCentre } from './place';
 import { RecorderPill } from './RecorderPill';
 import { Sheet } from './Sheet';
+import { colOf, rowOf } from './spots';
+import { fmtAgo, healthLine } from './status';
 import { HUD_CSS } from './styles';
+import { Tooltip } from './Tooltip';
 import { useDock } from './useDock';
 
 interface SheetState {
@@ -39,152 +55,237 @@ interface SheetState {
   pick: Pick | null;
 }
 
-let version = 0;
-const bump = () => ++version;
+/** "Saving…" stays at least this long, so a fast save still reads as one. */
+const MIN_SAVING_MS = 700;
+/** How long the clock says "Saved" after a note or annotation. */
+const FLASH_MS = 1600;
 
-function useRecorderState(): number {
-  return useSyncExternalStore(
-    (cb) => subscribe(() => { bump(); cb(); }),
-    () => version,
-    () => version,
-  );
+/** A clock that ticks every second while `active` (the timer, ages, the sync chip). */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return active ? now : Date.now();
 }
 
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 export interface HudProps {
+  controller: HudController;
   /** The HUD host's own mount (the sheet portals here when no dialog is open). */
   hostMount: HTMLElement;
   defaultTitle: () => string;
+  /** Where the HUD remembers its own UI state (the dock spot). */
+  storage: RecorderStorage;
 }
 
-export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
-  useRecorderState();
-  const rec = getState();
+export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps): ReactElement {
+  const snap = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const rec = snap.recording;
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [draft, setDraft] = useState('');
   const [starting, setStarting] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const annotating = annotateState.active;
-  const linked = vitrinkaLinked();
-  const canUnlink = !recorderConfig().key && readLink() !== null;
+  const [menu, setMenu] = useState(false);
+  const [flow, dispatch] = useReducer(flowReducer, NO_FLOW);
+  const [flash, setFlash] = useState(false);
+  const annotating = snap.annotating;
+  const now = useNow(rec !== null || menu || flow.face !== 'none');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
 
   // Device link (Netflix-style code): the sheet paints the phase, this owns it.
-  const [link, setLink] = useState<{ phase: LinkPhase; flow: DeviceLink | null; error?: string } | null>(null);
-  const linkRef = useRef<DeviceLink | null>(null);
+  const [link, setLink] = useState<{ phase: LinkPhase; flow: HudLinkFlow | null; error?: string } | null>(null);
+  const linkRef = useRef<HudLinkFlow | null>(null);
   const closeLink = useCallback(() => {
     linkRef.current?.cancel();
     linkRef.current = null;
     setLink(null);
   }, []);
+  const onStartRef = useRef<() => void>(() => undefined);
   const beginLink = useCallback(() => {
     linkRef.current?.cancel();
     setSheet(null);
+    setMenu(false);
     setLink({ phase: 'starting', flow: null });
-    linkDevice()
-      .then((flow) => {
-        linkRef.current = flow;
-        setLink({ phase: 'waiting', flow });
-        return flow.linked.then(
+    controller
+      .link()
+      .then((lf) => {
+        linkRef.current = lf;
+        setLink({ phase: 'waiting', flow: lf });
+        return lf.linked.then(
           () => {
-            if (linkRef.current !== flow) return;
+            if (linkRef.current !== lf) return;
             linkRef.current = null;
             setLink(null);
             // Linked: start recording exactly as if a key had been passed.
             onStartRef.current();
           },
           (e: unknown) => {
-            if (linkRef.current !== flow) return;
+            if (linkRef.current !== lf) return;
             linkRef.current = null;
-            if (e instanceof LinkExpired) setLink({ phase: 'expired', flow });
-            else if (!(e instanceof Error && e.name === 'AbortError'))
-              setLink({ phase: 'error', flow, error: e instanceof Error ? e.message : String(e) });
+            const name = e instanceof Error ? e.name : '';
+            if (name === 'LinkExpired') setLink({ phase: 'expired', flow: lf });
+            else if (name !== 'AbortError') setLink({ phase: 'error', flow: lf, error: errorText(e) });
           },
         );
       })
-      .catch((e: unknown) => setLink({ phase: 'error', flow: null, error: e instanceof Error ? e.message : String(e) }));
-  }, []);
-  const onUnlink = useCallback(() => {
-    closeLink();
-    setSheet(null);
-    setAnnotating(false);
-    forgetLink();
-  }, [closeLink]);
+      .catch((e: unknown) => setLink({ phase: 'error', flow: null, error: errorText(e) }));
+  }, [controller]);
 
   const closeSheet = useCallback(() => setSheet(null), []);
-  // A drag closes the composer (its draft survives); the link sheet follows the dock.
-  const dock = useDock(closeSheet);
+  // A drag closes the composer (its draft survives) and the menu; the link sheet follows the dock.
+  const onMoveStart = useCallback(() => {
+    setSheet(null);
+    setMenu(false);
+  }, []);
+  const dock = useDock(onMoveStart, storage);
   const phone = useMedia(PHONE_QUERY);
   const openNote = useCallback(() => {
-    if (!getState()) return;
-    setAnnotating(false);
+    if (!controller.getSnapshot().recording) return;
+    controller.setAnnotating(false);
+    setMenu(false);
     setSheet({ title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
-  }, []);
+  }, [controller]);
   const toggleAnnotate = useCallback(() => {
-    if (!getState()) return;
+    const s = controller.getSnapshot();
+    if (!s.recording) return;
     setSheet(null);
-    setAnnotating(!annotateState.active);
+    setMenu(false);
+    controller.setAnnotating(!s.annotating);
+  }, [controller]);
+  const onPick = useCallback(
+    (pick: Pick) => {
+      controller.setAnnotating(false);
+      const ctx = pick.selector
+        ? `${pick.selector} · ${location.pathname}`
+        : `${Math.round(pick.rect.w)}×${Math.round(pick.rect.h)} · ${location.pathname}`;
+      setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx, pick });
+    },
+    [controller],
+  );
+  const cancelAnnotate = useCallback(() => controller.setAnnotating(false), [controller]);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saidSaved = useCallback(() => {
+    clearTimeout(flashTimer.current);
+    setFlash(true);
+    flashTimer.current = setTimeout(() => setFlash(false), FLASH_MS);
   }, []);
-  const onPick = useCallback((pick: Pick) => {
-    setAnnotating(false);
-    const ctx = pick.selector
-      ? `${pick.selector} · ${location.pathname}`
-      : `${Math.round(pick.rect.w)}×${Math.round(pick.rect.h)} · ${location.pathname}`;
-    setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx, pick });
-  }, []);
-  const cancelAnnotate = useCallback(() => setAnnotating(false), []);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
   const onSend = useCallback(
     (text: string, task: boolean) => {
       const s = sheet;
       setSheet(null);
       if (!s) return;
       if (s.pick) {
-        addAnnotation(text, s.pick.rect, s.pick.selector, { task });
+        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task });
         setDraft('');
+        saidSaved();
       } else if (text) {
-        addNote(text);
+        controller.note(text);
         setDraft('');
+        saidSaved();
       }
     },
-    [sheet],
+    [sheet, controller, saidSaved],
   );
   const onStart = useCallback(() => {
-    if (!vitrinkaLinked()) {
+    if (!controller.getSnapshot().linked) {
       beginLink();
       return;
     }
     setStarting(true);
-    startSession({ title: defaultTitle() })
+    controller
+      .start({ title: defaultTitle() })
       .catch((e) => console.warn('vitrinka: start failed', e))
       .finally(() => setStarting(false));
-  }, [defaultTitle, beginLink]);
-  const onStartRef = useRef(onStart);
+  }, [controller, defaultTitle, beginLink]);
   onStartRef.current = onStart;
-  const onStop = useCallback(() => {
-    setSheet(null);
-    setAnnotating(false);
-    setStopping(true);
-    stopSession()
-      .catch((e) => console.warn('vitrinka: stop —', e instanceof Error ? e.message : e))
-      .finally(() => setStopping(false));
-  }, []);
   const onPause = useCallback(() => {
-    void togglePause();
+    void controller.togglePause();
+  }, [controller]);
+
+  // The inline flows. Stop drains first; a refusal (offline) keeps the session.
+  const runStop = useCallback(() => {
+    const t0 = Date.now();
+    const settle = (ev: Parameters<typeof dispatch>[0]) =>
+      setTimeout(() => dispatch(ev), Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
+    controller.stop().then(
+      (r) => settle({ type: 'saved', ...(r.boardUrl ? { boardUrl: r.boardUrl } : {}) }),
+      (e: unknown) => {
+        console.warn('vitrinka: stop —', errorText(e));
+        settle({ type: 'failed', message: errorText(e) });
+      },
+    );
+  }, [controller]);
+  const askStop = useCallback(() => {
+    if (!controller.getSnapshot().recording) return;
+    setSheet(null);
+    setMenu(false);
+    controller.setAnnotating(false);
+    dispatch({ type: 'ask', action: 'stop' });
+  }, [controller]);
+  const askUnlink = useCallback(() => {
+    setSheet(null);
+    setMenu(false);
+    dispatch({ type: 'ask', action: 'unlink' });
   }, []);
+  const onConfirm = useCallback(() => {
+    if (flow.face !== 'confirm') return;
+    dispatch({ type: 'confirm', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
+    if (flow.action === 'stop') {
+      runStop();
+      return;
+    }
+    closeLink();
+    setSheet(null);
+    controller.setAnnotating(false);
+    controller.unlink();
+  }, [flow, controller, runStop, closeLink]);
+  const onCancel = useCallback(() => dispatch({ type: 'cancel' }), []);
+  const onDismiss = useCallback(() => dispatch({ type: 'dismiss' }), []);
+  const onRetry = useCallback(() => {
+    dispatch({ type: 'retry', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
+    runStop();
+  }, [controller, runStop]);
+  // A stop confirm outlives nothing: the session ended under it (401, the server).
+  useEffect(() => {
+    if (!rec && flow.face === 'confirm' && flow.action === 'stop') dispatch({ type: 'cancel' });
+  }, [rec, flow]);
+
+  // Who the token is (and the user's server-side prefs): on mount and once linked.
+  useEffect(() => {
+    if (snap.linked) void controller.getMe();
+  }, [snap.linked, controller]);
+  const toggleMenu = useCallback(() => setMenu((m) => !m), []);
+  useEffect(() => {
+    if (!menu) return;
+    void controller.getMe();
+    void controller.refreshRecents();
+  }, [menu, controller]);
 
   // Shortcuts (window keydown, CAPTURE — the host's shield stops a keydown
   // from a focused HUD control before it could bubble to window, and a drag
-  // leaves the handle focused): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause.
+  // leaves the handle focused): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause · ⌥⇧S stop.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!e.altKey || !e.shiftKey || e.metaKey || e.ctrlKey) return;
       if (e.code === 'KeyA') toggleAnnotate();
       else if (e.code === 'KeyN') openNote();
       else if (e.code === 'KeyP') onPause();
+      else if (e.code === 'KeyS') askStop();
       else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', key, true);
     return () => window.removeEventListener('keydown', key, true);
-  }, [toggleAnnotate, openNote, onPause]);
+  }, [toggleAnnotate, openNote, onPause, askStop]);
 
   // Esc anywhere and click-outside close the sheet (capture-phase, so the
   // page's own dialog never sees the Esc that closed ours).
@@ -206,12 +307,38 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
       document.removeEventListener('keydown', key, true);
       document.removeEventListener('pointerdown', down, true);
     };
-  }, [sheet, link, closeSheet, closeLink]);
+  }, [sheet, closeSheet]);
 
-  // Sheets enter and leave (presence) with their last content kept for the
-  // closing frames.
+  // The menu closes on Esc (focus back on its ⋯) and on a press outside it and the pill.
+  useEffect(() => {
+    if (!menu) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      pillRef.current?.querySelector<HTMLElement>('.seg.on .b-more')?.focus();
+    };
+    const down = (e: Event) => {
+      const path = e.composedPath();
+      if (!path.includes(menuRef.current as EventTarget) && !path.includes(pillRef.current as EventTarget)) setMenu(false);
+    };
+    document.addEventListener('keydown', key, true);
+    document.addEventListener('pointerdown', down, true);
+    return () => {
+      document.removeEventListener('keydown', key, true);
+      document.removeEventListener('pointerdown', down, true);
+    };
+  }, [menu]);
+  useEffect(() => {
+    if (dock.dragging) setMenu(false);
+  }, [dock.dragging]);
+
+  // Sheets and the menu enter and leave (presence) with their last content
+  // kept for the closing frames.
   const sheetP = usePresence(sheet !== null, 150);
   const linkP = usePresence(link !== null, 150);
+  const menuP = usePresence(menu, 150);
   const lastSheet = useRef<SheetState | null>(null);
   const lastLink = useRef<typeof link>(null);
   if (sheet) lastSheet.current = sheet;
@@ -230,25 +357,49 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
   }, [sheetP.mounted, hostMount]);
   useEffect(() => () => portal?.destroy(), [portal]);
 
-  // Where the open layer sits (D5): anchored to the dock's resting box and
-  // opening toward the centre, or a phone bottom sheet over the visual viewport.
+  // Where the open layer sits (D5): beside the dock's resting box, toward the
+  // centre and inside the viewport, or a phone bottom sheet over the visual viewport.
   const layerOpen = sheet !== null || link !== null;
   const vvTick = useViewportTick(layerOpen && phone);
-  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom-right' });
+  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom right' });
   useLayoutEffect(() => {
     const el = dock.ref.current;
     if (!layerOpen || !el) return;
     const o = hostOrigin(sheet && portal ? portal.mount : hostMount);
-    setLayer(phone ? { style: phoneLayer(o), origin: 'bottom-center' } : anchoredLayer(restingBox(el), dock.place, o));
-  }, [layerOpen, sheet, portal, hostMount, dock.place, dock.ref, phone, vvTick]);
+    if (phone) {
+      setLayer({ style: phoneLayer(o), origin: 'bottom center' });
+      return;
+    }
+    const pop = layerRef.current?.firstElementChild as HTMLElement | null;
+    const size = pop ? { w: pop.offsetWidth, h: pop.offsetHeight } : { w: 288, h: 200 };
+    setLayer(anchoredLayer(restingBox(el), size, dock.place, o));
+  }, [layerOpen, sheet, link?.phase, portal, hostMount, dock.place, dock.ref, phone, vvTick, snap.prefs.size]);
   const layerCls = phone ? 'phone' : 'anchor';
   const motionCls = phone ? 'rise' : 'grow';
 
+  // The floats: menu and details card beside the dock, toward the centre.
+  const side = towardCentre(dock.place);
+  const align = alignFor(dock.place);
+  const anchor = useCallback(() => {
+    const el = dock.ref.current;
+    return el ? { el, box: restingBox(el) } : null;
+  }, [dock.ref]);
+  useFloat(menuRef, anchor, side, align, menuP.mounted);
+  const tucked = 'tuck' in dock.place;
+  const line = rec ? healthLine(rec.sync, now) : '';
+  const detailOn =
+    rec !== null && (snap.prefs.verbose || line !== '') && !menu && !layerOpen && flow.face === 'none' && !dock.dragging && !tucked;
+  const detailP = usePresence(detailOn, 150);
+  useFloat(detailRef, anchor, side, align, detailP.mounted);
+  const lastRec = useRef(rec);
+  if (rec) lastRec.current = rec;
+  const detailRec = rec ?? lastRec.current;
+
   const sheetEl =
     shownSheet && portal ? (
-      <div className="hud">
+      <div className="hud" data-size={snap.prefs.size}>
         {portal.own ? <style>{HUD_CSS}</style> : null}
-        <div className={layerCls} style={layer.style}>
+        <div ref={layerRef} className={layerCls} style={layer.style}>
           <Sheet
             className={`${motionCls} ${sheetP.cls}`}
             origin={layer.origin}
@@ -265,9 +416,9 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
     ) : null;
 
   // Stable phrases only: a live region re-announces on every text change.
-  const hs = rec ? health().state : null;
+  const hs = rec?.sync.state ?? null;
   const status = !rec
-    ? linked
+    ? snap.linked
       ? 'Recorder ready'
       : 'Recorder not linked'
     : hs === 'dead'
@@ -285,34 +436,91 @@ export function Hud({ hostMount, defaultTitle }: HudProps): ReactElement {
       : { 'data-row': rowOf(place.spot), 'data-col': colOf(place.spot) };
 
   return (
-    <div className="hud" data-spot={'spot' in place ? place.spot : undefined}>
+    <div ref={rootRef} className="hud" data-size={snap.prefs.size} data-spot={'spot' in place ? place.spot : undefined}>
       <style>{HUD_CSS}</style>
       {annotating && rec ? <AnnotateOverlay onPick={onPick} onCancel={cancelAnnotate} /> : null}
       <div ref={dock.ref} className={dock.dragging ? 'dock dragging' : 'dock'} {...dockAttrs} onClickCapture={dock.onClickCapture}>
         <RecorderPill
-          rec={rec}
+          snap={snap}
+          now={now}
+          flow={flow}
+          flash={flash}
           composing={sheet !== null}
-          annotating={annotating}
-          stopping={stopping}
           starting={starting}
-          linked={linked}
-          canUnlink={canUnlink}
+          menuOpen={menu}
           place={place}
           dragging={dock.dragging}
           handle={dock.handle}
+          pillRef={pillRef}
           onMove={dock.moveTo}
           onLink={beginLink}
-          onUnlink={onUnlink}
           onStart={onStart}
           onPause={onPause}
           onNote={openNote}
           onAnnotate={toggleAnnotate}
-          onStop={onStop}
+          onMenu={toggleMenu}
+          onAskStop={askStop}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+          onRetry={onRetry}
+          onDismiss={onDismiss}
         />
       </div>
+      {menuP.mounted ? (
+        <Menu
+          snap={snap}
+          now={now}
+          place={place}
+          className={`grow ${menuP.cls}`}
+          menuRef={menuRef}
+          onClose={() => setMenu(false)}
+          onMove={dock.moveTo}
+          onSize={(size) => void controller.setPrefs({ size })}
+          onVerbose={(verbose) => void controller.setPrefs({ verbose })}
+          onAskUnlink={askUnlink}
+          onLink={beginLink}
+        />
+      ) : null}
+      {/* before the details card: a showing tooltip fades it (styles.ts), they share a side */}
+      <Tooltip root={rootRef} side={side} suppressed={dock.dragging || menu || layerOpen} />
+      {detailP.mounted && detailRec ? (
+        <div
+          ref={detailRef}
+          className={['float detail grow', detailP.cls, snap.prefs.verbose ? '' : 'line', line ? 'bad' : ''].filter(Boolean).join(' ')}
+          data-e2e="recorder-detail"
+          aria-hidden="true"
+        >
+          {snap.prefs.verbose ? (
+            <>
+              <dl>
+                <dt>events</dt>
+                <dd>{detailRec.sync.events}</dd>
+                <dt>queue</dt>
+                <dd>
+                  {detailRec.sync.queued}
+                  {detailRec.sync.chunks ? ` (${detailRec.sync.chunks} chunk${detailRec.sync.chunks === 1 ? '' : 's'})` : ''}
+                </dd>
+                <dt>last sync</dt>
+                <dd>
+                  {detailRec.sync.lastSyncAt === null ? '—' : `${fmtAgo(now - detailRec.sync.lastSyncAt)} · ${detailRec.sync.state}`}
+                </dd>
+                <dt>server seq</dt>
+                <dd>{Math.max(0, detailRec.sync.serverMaxSeq)}</dd>
+                <dt>session</dt>
+                <dd>{detailRec.sessionId}</dd>
+                <dt>recorder</dt>
+                <dd>{snap.version}</dd>
+              </dl>
+              {line ? <div className="warnline">{line}</div> : null}
+            </>
+          ) : (
+            line
+          )}
+        </div>
+      ) : null}
       {sheetEl && portal ? createPortal(sheetEl, portal.mount) : null}
       {linkP.mounted && shownLink ? (
-        <div className={layerCls} style={layer.style}>
+        <div ref={layerRef} className={layerCls} style={layer.style}>
           <LinkSheet
             className={`${motionCls} ${linkP.cls}`}
             origin={layer.origin}

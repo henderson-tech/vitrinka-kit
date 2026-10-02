@@ -6,7 +6,13 @@
  * restyle it; the pointer handlers are document-level CAPTURE listeners.
  *
  * The mode owns the pointer, mouse and finger alike — the page never sees a
- * press, a pick's click or a touch, and the HUD's own surfaces are exempt:
+ * press, a move, a hover, a pick's click or a touch, and nothing on it gets
+ * selected; the HUD's own surfaces are exempt. Every listener sits on WINDOW
+ * capture, ahead of anything the page registered on its document:
+ * - A drag over text never selects it: `user-select:none` page-wide
+ *   (ANNOTATE_PAGE_CSS), the mousedown default cancelled and `selectstart`
+ *   refused. The crosshair rides the same blocked stylesheet, so the page's
+ *   own elements are never restyled (and rrweb records no mutation).
  * - A finger never pans, zooms, selects or long-presses the page: every
  *   element gets `touch-action:none` (ANNOTATE_PAGE_CSS) and window-capture
  *   non-passive touch listeners cancel each touch, which also stops the
@@ -20,8 +26,8 @@
  */
 import { type ReactElement, useEffect, useState } from 'react';
 
-import { elementText, shortSelector } from '../capture/click';
-import { RRWEB_BLOCK_ATTR } from '../capture/rrweb';
+import { elementText, shortSelector } from '../capture/selector';
+import { RRWEB_BLOCK_ATTR } from '../block';
 import { AnnotateIcon } from './icons';
 import { insideHud } from './host';
 import { ANNOTATE_PAGE_CSS } from './styles';
@@ -40,6 +46,12 @@ export interface AnnotateOverlayProps {
 
 const TOUCH = ['touchstart', 'touchmove', 'touchend'] as const;
 const TAIL = ['touchend', 'mousedown', 'mouseup', 'click'] as const;
+/** Pointer traffic the page must not see while the mode is on (the gesture's own events are handled below). */
+const HUSHED = [
+  'pointerover', 'pointerout', 'pointerenter', 'pointerleave',
+  'mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousemove', 'mouseup',
+  'dblclick', 'auxclick', 'contextmenu',
+] as const;
 
 /**
  * Eat the rest of the gesture that ended annotate mode. The pick flips the
@@ -74,7 +86,6 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
     let dragging = false;
     let pid = -1; // the pointer steering the gesture
     let slop = 6;
-    document.documentElement.style.cursor = 'crosshair';
     const pageCss = document.createElement('style');
     pageCss.setAttribute(RRWEB_BLOCK_ATTR, '');
     pageCss.textContent = ANNOTATE_PAGE_CSS;
@@ -112,6 +123,8 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
       place({ x: r.x - 3, y: r.y - 3, w: r.width + 2, h: r.height + 2 });
     };
     const move = (e: PointerEvent) => {
+      if (insideHud(e.target)) return;
+      e.stopPropagation();
       if (downAt && e.pointerId !== pid) return; // a second finger never steers the marquee
       last = { x: e.clientX, y: e.clientY };
       if (raf === 0) raf = requestAnimationFrame(frame);
@@ -192,6 +205,16 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
     const noDrag = (e: DragEvent) => {
       if (!insideHud(e.target)) e.preventDefault();
     };
+    const hush = (e: Event) => {
+      if (!insideHud(e.target)) e.stopPropagation();
+    };
+    // A mousedown's default starts a text selection (cancelling pointerdown
+    // does not stop it in Chromium); selectstart catches keyboard and other paths.
+    const noSelect = (e: Event) => {
+      if (insideHud(e.target)) return;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+    };
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -199,26 +222,31 @@ export function AnnotateOverlay({ onPick, onCancel }: AnnotateOverlayProps): Rea
         onCancel();
       }
     };
-    document.addEventListener('pointermove', move, true);
-    document.addEventListener('pointerdown', down, true);
-    document.addEventListener('pointerup', up, true);
-    document.addEventListener('click', swallowClick, true);
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('click', swallowClick, true);
+    window.addEventListener('pointercancel', cancel, true);
+    window.addEventListener('dragstart', noDrag, true);
+    window.addEventListener('mousedown', noSelect, true);
+    window.addEventListener('selectstart', noSelect, true);
+    for (const t of HUSHED) window.addEventListener(t, hush, true);
     document.addEventListener('keydown', key, true);
-    document.addEventListener('pointercancel', cancel, true);
-    document.addEventListener('dragstart', noDrag, true);
     // Explicitly non-passive: window/document touch listeners default to passive.
     for (const t of TOUCH) window.addEventListener(t, blockTouch, { capture: true, passive: false });
     return () => {
-      document.documentElement.style.cursor = '';
       pageCss.remove();
       if (raf !== 0) cancelAnimationFrame(raf);
-      document.removeEventListener('pointermove', move, true);
-      document.removeEventListener('pointerdown', down, true);
-      document.removeEventListener('pointerup', up, true);
-      document.removeEventListener('click', swallowClick, true);
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('click', swallowClick, true);
+      window.removeEventListener('pointercancel', cancel, true);
+      window.removeEventListener('dragstart', noDrag, true);
+      window.removeEventListener('mousedown', noSelect, true);
+      window.removeEventListener('selectstart', noSelect, true);
+      for (const t of HUSHED) window.removeEventListener(t, hush, true);
       document.removeEventListener('keydown', key, true);
-      document.removeEventListener('pointercancel', cancel, true);
-      document.removeEventListener('dragstart', noDrag, true);
       for (const t of TOUCH) window.removeEventListener(t, blockTouch, true);
     };
   }, [onPick, onCancel]);

@@ -1,19 +1,55 @@
 /**
- * The HUD's face (recorder-hud-subtle D1/D4). Idle: a 28px glass PUCK — a
- * hollow ring before the device is linked, a muted dot once it is — whose
- * label slides out on hover/focus. Recording: a CAPSULE of rec dot + timer
- * that unfolds into the TRAY (sync · ⏸ ✎ ⌖ ⋯, keycaps on hover) on hover,
- * focus or tap and folds back ~2.5s after the pointer and focus leave; a
- * one-line health detail unfolds only when something is wrong. Tucked: a 6px
- * edge TAB. The capsule handle, the puck and the tab are the drag handles.
+ * The HUD's face: ONE glass pill whose faces are collapsible segments, so a
+ * change of face tweens the pill's size instead of swapping boxes.
+ *
+ * - Idle: a puck — a hollow ring before the device is linked, a muted dot
+ *   once it is — whose label (and the ⋯ menu button) slide out on intent.
+ * - Recording: the handle (rec dot + clock) that unfolds into the tray
+ *   (sync chip · ⏸ ✎ ⌖ ■ ⋯) on hover, focus or tap and folds back ~2.5s
+ *   after the pointer and focus leave. On the middle row it stands up into a
+ *   vertical pill (a measured morph, see useMorph).
+ * - Flows (flow.ts): the pill itself asks "Stop & save?" / "Unlink this
+ *   device?", spins while saving, says "Saved · Open board" until dismissed,
+ *   or says why it could not save. Always horizontal.
+ * - Tucked: a 6px edge tab.
+ * The handle, the puck and the tab are the drag handles. Tooltips are
+ * `data-tip` / `data-keys` on the triggers (Tooltip.tsx paints them).
  */
-import { type Place, SPOTS, type Spot, untuck } from '@vitrinka/link/dock';
-import { type FocusEvent, type PointerEvent, type ReactElement, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 
-import { health, type RecorderHealth, type SessionState } from '../queue';
-import { elapsedOf } from '../session';
-import { AnnotateIcon, CheckIcon, CloseIcon, MoreIcon, NewTabIcon, PauseIcon, PencilIcon, PlayIcon, StopIcon } from './icons';
-import { usePresence } from './layer';
+import type { HudRecording, HudSnapshot } from './controller';
+import type { Flow } from './flow';
+import { saveProgress } from './flow';
+import {
+  AlertIcon,
+  AnnotateIcon,
+  CheckIcon,
+  CloseIcon,
+  CircleCheckIcon,
+  CloudOffIcon,
+  MoreIcon,
+  NewTabIcon,
+  PauseIcon,
+  PencilIcon,
+  PlayIcon,
+  SpinnerIcon,
+  StopIcon,
+  ArrowUpIcon,
+} from './icons';
+import { isVertical, type Place, untuck } from './spots';
+import { elapsedOf, fmtClock, type SyncChip, syncChip } from './status';
 import type { DockHandle } from './useDock';
 
 export const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '') ? '⌥⇧' : 'Alt⇧';
@@ -22,89 +58,150 @@ export const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '') 
 const FOLD_MS = 2500;
 /** …and after a touch interaction inside it (no hover to keep it open). */
 const FOLD_TOUCH_MS = 4000;
+/** The orientation morph (a resize: `--duration-resize`). */
+const MORPH_MS = 300;
 
-export const SPOT_NAMES: Record<Spot, string> = {
-  tl: 'top left',
-  tc: 'top centre',
-  tr: 'top right',
-  bl: 'bottom left',
-  bc: 'bottom centre',
-  br: 'bottom right',
-};
+export type Face = 'tab' | 'idle' | 'rec' | 'flow';
 
-function fmtAge(ms: number): string {
-  return ms < 1000 ? 'just now' : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`;
+/** Which face the pill shows. A flow wins over the recording it belongs to. */
+export function faceOf(snap: HudSnapshot, flow: Flow, place: Place): Face {
+  if ('tuck' in place) return 'tab';
+  if (flow.face !== 'none') return 'flow';
+  return snap.recording ? 'rec' : 'idle';
 }
 
-function fmtClock(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+function reducedMotion(): boolean {
+  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
-/** The extension's renderHealth: glyph + class + optional detail line. */
-export function healthLine(h: RecorderHealth, stopping: boolean): { glyph: ReactElement | string; cls: string; line: string; bad: boolean } {
-  if (stopping) return { glyph: '⟳', cls: 'busy', line: `wrapping up · ${h.queued} left`, bad: false };
-  switch (h.state) {
-    case 'offline':
-      return {
-        glyph: '⚠',
-        cls: 'bad',
-        line: `offline${h.sinceSyncMs ? ' ' + fmtAge(h.sinceSyncMs) : ''} · ${h.queued} held · retrying`,
-        bad: true,
-      };
-    case 'dead':
-      return { glyph: '⛔', cls: 'bad', line: h.deadReason || 'this session ended on the server', bad: true };
-    case 'backlog':
-      return { glyph: '⟳', cls: 'busy', line: `syncing · ${h.queued} queued`, bad: false };
-    default:
-      return { glyph: h.synced ? <CheckIcon /> : '·', cls: '', line: '', bad: false };
-  }
+/**
+ * The orientation morph: when `orient` flips, tween the pill from its last
+ * measured size to its new one, with the inner segments' own tweens held
+ * (`.morphing`) so the target is the settled size, then fade the content in.
+ */
+function useMorph(ref: RefObject<HTMLDivElement | null>, orient: 'h' | 'v'): void {
+  const size = useRef<{ w: number; h: number } | null>(null);
+  const prev = useRef(orient);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const was = size.current;
+    const flipped = prev.current !== orient;
+    prev.current = orient;
+    if (flipped && was && !reducedMotion() && typeof el.animate === 'function') {
+      for (const a of el.getAnimations()) a.cancel();
+      el.classList.add('morphing');
+      const next = { w: el.offsetWidth, h: el.offsetHeight };
+      size.current = next;
+      const ease = 'cubic-bezier(0.22, 1, 0.36, 1)';
+      const morph = el.animate(
+        [
+          { width: `${was.w}px`, height: `${was.h}px` },
+          { width: `${next.w}px`, height: `${next.h}px` },
+        ],
+        { duration: MORPH_MS, easing: ease },
+      );
+      for (const seg of el.querySelectorAll<HTMLElement>('.seg.on > .seg-in')) {
+        seg.animate([{ opacity: 0, filter: 'blur(2px)' }, { opacity: 1, filter: 'blur(0)' }], {
+          duration: 250,
+          delay: 80,
+          easing: 'ease-in-out',
+          fill: 'backwards',
+        });
+      }
+      const done = () => el.classList.remove('morphing');
+      morph.onfinish = done;
+      morph.oncancel = done;
+      return;
+    }
+    size.current = { w: el.offsetWidth, h: el.offsetHeight };
+  });
+  // Keep the last size current between commits (the tray and labels tween).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(() => {
+      if (!el.classList.contains('morphing')) size.current = { w: el.offsetWidth, h: el.offsetHeight };
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+}
+
+/** A collapsible segment: its width (height when vertical) tweens 0 ↔ content. */
+function Seg({ on, className, children }: { on: boolean; className: string; children: ReactNode }): ReactElement {
+  return (
+    <div className={`seg ${className}${on ? ' on' : ''}`} aria-hidden={!on}>
+      <div className="seg-in">{children}</div>
+    </div>
+  );
+}
+
+function SyncGlyph({ chip }: { chip: SyncChip }): ReactElement {
+  if (chip.kind === 'synced') return <CircleCheckIcon />;
+  if (chip.kind === 'offline') return <CloudOffIcon />;
+  if (chip.kind === 'error') return <AlertIcon />;
+  return <ArrowUpIcon />;
+}
+
+/** "Couldn't save" in a few words; the full sentence rides the tooltip. */
+function shortFailure(message: string): string {
+  if (/unreachable|offline|fetch|network/i.test(message)) return 'Offline — kept here';
+  if (/ended locally|rejected/i.test(message)) return 'Ended by the server';
+  return 'Couldn’t save';
 }
 
 export interface RecorderPillProps {
-  rec: SessionState | null;
+  snap: HudSnapshot;
+  now: number;
+  flow: Flow;
+  /** A note or annotation was just accepted: the clock briefly says so. */
+  flash: boolean;
   composing: boolean;
-  annotating: boolean;
-  stopping: boolean;
   starting: boolean;
-  /** Something to authenticate with (an explicit key or a stored link). */
-  linked: boolean;
-  /** A stored link can be forgotten; an explicit key cannot. */
-  canUnlink: boolean;
+  menuOpen: boolean;
   place: Place;
   dragging: boolean;
   handle: DockHandle;
+  pillRef: RefObject<HTMLDivElement | null>;
   onMove: (place: Place) => void;
   onLink: () => void;
-  onUnlink: () => void;
   onStart: () => void;
   onPause: () => void;
   onNote: () => void;
   onAnnotate: () => void;
-  onStop: () => void;
+  onMenu: () => void;
+  onAskStop: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
+  onDismiss: () => void;
 }
 
 export function RecorderPill(p: RecorderPillProps): ReactElement {
-  const [, tick] = useState(0);
-  const [menu, setMenu] = useState(false);
   const [open, setOpen] = useState(false);
   const fold = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hovered = useRef(false);
-  const barRef = useRef<HTMLDivElement>(null);
-  const moreRef = useRef<HTMLButtonElement>(null);
-  const menuP = usePresence(menu, 150);
-  const hold = menu || p.composing || p.annotating;
+  const stopRef = useRef<HTMLButtonElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const savedRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
+  const puckRef = useRef<HTMLButtonElement>(null);
+  const face = faceOf(p.snap, p.flow, p.place);
+  const rec = p.snap.recording;
+  const annotating = p.snap.annotating;
+  const hold = p.menuOpen || p.composing || annotating || face === 'flow';
+
+  // Content a closing segment keeps for its closing frames.
+  const lastRec = useRef<HudRecording | null>(rec);
+  if (rec) lastRec.current = rec;
+  const lastFlow = useRef<Flow>(p.flow);
+  if (p.flow.face !== 'none') lastFlow.current = p.flow;
+  const shownRec = rec ?? lastRec.current;
+  const shownFlow = p.flow.face !== 'none' ? p.flow : lastFlow.current;
 
   useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => {
-    if (!p.rec) {
-      setMenu(false);
-      setOpen(false);
-    }
-  }, [p.rec]);
+    if (!rec) setOpen(false);
+  }, [rec]);
 
   const cancelFold = useCallback(() => clearTimeout(fold.current), []);
   // A hovering pointer or keyboard focus inside keeps the tray; a tap's
@@ -113,18 +210,17 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     (ms: number) => {
       cancelFold();
       fold.current = setTimeout(() => {
-        if (!hovered.current && !barRef.current?.querySelector(':focus-visible')) setOpen(false);
+        if (!hovered.current && !p.pillRef.current?.querySelector(':focus-visible')) setOpen(false);
       }, ms);
     },
-    [cancelFold],
+    [cancelFold, p.pillRef],
   );
   useEffect(() => cancelFold, [cancelFold]);
-  // A drag folds everything; a held tray (menu, sheet, annotate) never folds,
-  // and folds on the usual delay once the hold ends and nothing keeps it.
+  // A drag folds everything; a held tray (menu, sheet, annotate, a flow)
+  // never folds, and folds on the usual delay once the hold ends.
   useEffect(() => {
     if (p.dragging) {
       cancelFold();
-      setMenu(false);
       setOpen(false);
     }
   }, [p.dragging, cancelFold]);
@@ -132,26 +228,21 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     if (hold) cancelFold();
     else if (open) foldIn(FOLD_MS);
   }, [hold, open, cancelFold, foldIn]);
-  // Folded tools are out of the tab order and the accessibility tree
-  // (imperative: React 18 and 19 disagree on the `inert` prop).
-  const trayRef = useRef<HTMLDivElement>(null);
-  const unfolded = open || hold;
-  useLayoutEffect(() => {
-    if (trayRef.current) trayRef.current.inert = !unfolded;
-  });
+  const unfolded = open || (hold && face !== 'flow');
+
   // Hover is read with NATIVE pointerenter/leave: React synthesises enter
   // from over/out pairs and drops an `over` whose related target belongs to
   // any React root — on a React page the pointer always arrives from the
   // app's own tree, so a synthetic onPointerEnter never fires on the HUD.
   const holdRef = useRef(hold);
   holdRef.current = hold;
-  const hasBar = p.rec !== null && !('tuck' in p.place);
+  const hasPill = face !== 'tab';
   useLayoutEffect(() => {
-    const bar = barRef.current;
-    if (!bar) return;
-    // The capsule often appears UNDER a resting pointer (it replaces the
-    // puck that was just clicked): that pointer never "enters", so seed it.
-    if (bar.matches(':hover')) {
+    const pill = p.pillRef.current;
+    if (!pill) return;
+    // The pill often changes face UNDER a resting pointer (the capsule
+    // replaces the puck that was just clicked): that pointer never "enters".
+    if (pill.matches(':hover')) {
       hovered.current = true;
       setOpen(true);
     }
@@ -166,75 +257,63 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
       hovered.current = false;
       if (!holdRef.current) foldIn(FOLD_MS);
     };
-    bar.addEventListener('pointerenter', enter);
-    bar.addEventListener('pointerleave', leave);
+    pill.addEventListener('pointerenter', enter);
+    pill.addEventListener('pointerleave', leave);
     return () => {
-      bar.removeEventListener('pointerenter', enter);
-      bar.removeEventListener('pointerleave', leave);
+      pill.removeEventListener('pointerenter', enter);
+      pill.removeEventListener('pointerleave', leave);
     };
-  }, [hasBar, cancelFold, foldIn]);
+  }, [hasPill, cancelFold, foldIn, p.pillRef]);
 
-  // The menu closes on Esc (focus back on ⋯) and on a press anywhere else.
+  // Focus follows the flow while the HUD holds it: Keep on a confirm, Open
+  // board once saved; back to ■ (or the puck) when the flow ends.
+  const prevFace = useRef(p.flow.face);
   useEffect(() => {
-    if (!menu) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      setMenu(false);
-      moreRef.current?.focus();
-    };
-    const down = (e: Event) => {
-      if (!e.composedPath().includes(barRef.current as EventTarget)) setMenu(false);
-    };
-    document.addEventListener('keydown', key, true);
-    document.addEventListener('pointerdown', down, true);
-    return () => {
-      document.removeEventListener('keydown', key, true);
-      document.removeEventListener('pointerdown', down, true);
-    };
-  }, [menu]);
+    const was = prevFace.current;
+    prevFace.current = p.flow.face;
+    if (was === p.flow.face) return;
+    const pill = p.pillRef.current;
+    const root = pill?.getRootNode();
+    const active = root instanceof ShadowRoot ? root.activeElement : null;
+    const ours = active === null || Boolean(pill?.contains(active));
+    if (!ours && p.flow.face !== 'confirm') return;
+    const target =
+      p.flow.face === 'confirm'
+        ? keepRef.current
+        : p.flow.face === 'saved'
+          ? savedRef.current
+          : p.flow.face === 'none'
+            ? (rec ? stopRef.current : puckRef.current)
+            : null;
+    // After the segment turns visible (visibility flips with the commit).
+    requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+  }, [p.flow.face, rec, p.pillRef]);
 
-  if ('tuck' in p.place) {
-    const h = p.rec ? healthLine(health(), p.stopping) : null;
+  const orient: 'h' | 'v' = face === 'rec' && 'spot' in p.place && isVertical(p.place.spot) ? 'v' : 'h';
+  useMorph(p.pillRef, orient);
+
+  if (face === 'tab') {
+    const bad = rec ? rec.sync.state === 'offline' || rec.sync.state === 'dead' : false;
     return (
       <button
         type="button"
         className="tab"
         aria-label="Show recorder"
-        data-state={h?.bad ? 'bad' : p.rec && !p.rec.paused ? 'rec' : 'idle'}
+        data-state={bad ? 'bad' : rec && !rec.paused ? 'rec' : 'idle'}
         {...p.handle}
         onClick={() => p.onMove({ spot: untuck(p.place) })}
       />
     );
   }
 
-  if (!p.rec) {
-    const unlinked = !p.linked;
-    const label = unlinked ? 'Link recorder' : 'Start recording';
-    return (
-      <button
-        type="button"
-        className="puck glass"
-        data-state={unlinked ? 'unlinked' : p.starting ? 'busy' : 'ready'}
-        aria-label={label}
-        onClick={unlinked ? p.onLink : p.onStart}
-        disabled={p.starting}
-        {...p.handle}
-      >
-        <span className="ring" />
-        <span className="lab" aria-hidden="true">
-          <span>{label}</span>
-        </span>
-      </button>
-    );
-  }
-
-  const rec = p.rec;
-  const hl = healthLine(health(), p.stopping);
-  const state = hl.bad ? 'bad' : rec.paused || rec.dead || p.stopping ? 'paused' : 'rec';
-  const current = 'spot' in p.place ? p.place.spot : null;
-  const origin = `${current?.[0] === 't' ? 'top' : 'bottom'}-${current?.[1] === 'r' ? 'right' : 'left'}`;
+  const chip = shownRec ? syncChip(shownRec.sync, p.now) : null;
+  const bad = chip?.kind === 'offline' || chip?.kind === 'error';
+  const state = bad ? 'bad' : !shownRec || shownRec.paused || shownRec.dead ? 'paused' : 'rec';
+  const unlinked = !p.snap.linked;
+  const puckLabel = unlinked ? 'Link recorder' : 'Start recording';
+  const confirming = p.flow.face === 'confirm';
+  const dataFace = face === 'flow' && confirming && rec ? 'flow-rec' : face;
+  const progress = saveProgress(p.flow, rec?.sync.queued ?? 0);
 
   const onTouch = (e: PointerEvent) => {
     if (e.pointerType !== 'mouse' && open) foldIn(FOLD_TOUCH_MS);
@@ -246,109 +325,244 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     setOpen(true);
   };
   const onBlur = (e: FocusEvent) => {
-    if (barRef.current?.contains(e.relatedTarget as Node | null)) return;
+    if (p.pillRef.current?.contains(e.relatedTarget as Node | null)) return;
     if (!hold) foldIn(FOLD_MS);
   };
   const toggle = () => {
     setOpen((o) => !o);
     foldIn(FOLD_TOUCH_MS);
   };
-  const act = (fn: () => void) => () => {
-    setMenu(false);
-    fn();
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    if (p.flow.face === 'confirm') p.onCancel();
+    else if (p.flow.face === 'saved' || p.flow.face === 'failed') p.onDismiss();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
   };
 
+  const flowShown = shownFlow.face;
+  const confirmAction = shownFlow.face === 'confirm' ? shownFlow.action : 'stop';
+  const savedUrl = shownFlow.face === 'saved' ? shownFlow.boardUrl : undefined;
+  const failure = shownFlow.face === 'failed' ? shownFlow.message : '';
+
   return (
-    <>
-      <div
-        ref={barRef}
-        className={p.composing ? 'bar glass composing' : 'bar glass'}
-        data-e2e="recorder-pill"
-        data-state={state}
-        data-open={unfolded ? '' : undefined}
-        onPointerDown={onTouch}
-        onFocus={onFocus}
-        onBlur={onBlur}
-      >
-        <button type="button" className="handle" aria-label="Recorder controls" aria-expanded={unfolded} onClick={toggle} {...p.handle}>
-          <span className="dot" />
-          <span className="time">{fmtClock(elapsedOf(rec))}</span>
+    <div
+      ref={p.pillRef}
+      className="pill glass"
+      data-e2e="recorder-pill"
+      data-face={dataFace}
+      data-orient={orient}
+      data-state={state}
+      data-open={unfolded && face !== 'flow' ? '' : undefined}
+      onPointerDown={onTouch}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={onKey}
+    >
+      <Seg on={face === 'idle'} className="s-idle">
+        <button
+          ref={puckRef}
+          type="button"
+          className="puck"
+          data-state={unlinked ? 'unlinked' : p.starting ? 'busy' : 'ready'}
+          aria-label={puckLabel}
+          onClick={unlinked ? p.onLink : p.onStart}
+          disabled={p.starting}
+          {...p.handle}
+        >
+          <span className="ring" />
+          <span className="lab" aria-hidden="true">
+            <span>{puckLabel}</span>
+          </span>
         </button>
-        <div ref={trayRef} className="tray">
-          <div className="tray-in">
-            <span className="sep" />
-            <span className={`sync${hl.cls ? ' ' + hl.cls : ''}`} title="everything captured has reached vitrinka">
-              {hl.glyph}
-            </span>
-            <button type="button" className="tb b-pause" aria-label={rec.paused ? 'Resume' : 'Pause'} onClick={p.onPause}>
-              {rec.paused ? <PlayIcon /> : <PauseIcon />}
-              <kbd>
-                {MOD}P {rec.paused ? 'resume' : 'pause'}
-              </kbd>
-            </button>
-            <button type="button" className="tb b-note" aria-label="Note" onClick={p.onNote}>
-              <PencilIcon />
-              <kbd>{MOD}N note</kbd>
-            </button>
-            <button
-              type="button"
-              className={p.annotating ? 'tb b-annotate on' : 'tb b-annotate'}
-              aria-label="Annotate"
-              aria-pressed={p.annotating}
-              onClick={p.onAnnotate}
-            >
-              <AnnotateIcon />
-              <kbd>{MOD}A annotate</kbd>
-            </button>
-            <button
-              ref={moreRef}
-              type="button"
-              className="tb b-more"
-              aria-label="More"
-              aria-haspopup="menu"
-              aria-expanded={menu}
-              onClick={() => setMenu((m) => !m)}
-            >
-              <MoreIcon />
-            </button>
-          </div>
-        </div>
-        {menuP.mounted ? (
-          <div className={`menu grow ${menuP.cls}`} data-origin={origin} role="menu" aria-label="Recorder">
-            {rec.boardUrl ? (
-              <button type="button" role="menuitem" onClick={act(() => window.open(rec.boardUrl, '_blank', 'noopener'))}>
-                <NewTabIcon /> Open board
-              </button>
-            ) : null}
-            <button type="button" role="menuitem" className="danger" onClick={act(p.onStop)}>
-              <StopIcon /> Stop recording
-            </button>
-            {p.canUnlink ? (
-              <button type="button" role="menuitem" onClick={act(p.onUnlink)}>
-                <CloseIcon /> Unlink
-              </button>
-            ) : null}
-            <div className="moveto" role="group" aria-label="Move to">
-              <span aria-hidden="true">Move to</span>
-              <span className="spots">
-                {SPOTS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={current === s}
-                    aria-label={`Move to ${SPOT_NAMES[s]}`}
-                    onClick={act(() => p.onMove({ spot: s }))}
-                  />
-                ))}
+      </Seg>
+      <Seg on={face === 'idle' && unfolded} className="s-more">
+        <button
+          type="button"
+          className="tb b-more"
+          aria-label="More"
+          aria-haspopup="menu"
+          aria-expanded={p.menuOpen}
+          data-tip="Recents · settings"
+          onClick={p.onMenu}
+        >
+          <MoreIcon />
+        </button>
+      </Seg>
+      <Seg on={face === 'rec' || (confirming && rec !== null)} className="s-handle">
+        <button
+          type="button"
+          className="handle"
+          aria-label="Recorder controls"
+          aria-expanded={unfolded && face === 'rec'}
+          onClick={toggle}
+          {...p.handle}
+        >
+          <span className="dot" />
+          <span className="clock">
+            <Seg on={!p.flash} className="c-time">
+              <span className="time">{shownRec ? fmtClock(elapsedOf(shownRec, p.now)) : '00:00'}</span>
+            </Seg>
+            <Seg on={p.flash} className="c-flash">
+              <span className="flash" data-e2e="saved-flash">
+                <CheckIcon />
+                <span>Saved</span>
               </span>
-            </div>
-          </div>
-        ) : null}
-      </div>
-      <div className={['detail', hl.line ? 'show' : '', hl.bad ? 'bad' : ''].filter(Boolean).join(' ')} aria-hidden={!hl.line}>
-        {hl.line}
-      </div>
-    </>
+            </Seg>
+          </span>
+        </button>
+      </Seg>
+      <Seg on={face === 'rec' && unfolded} className="s-tray">
+        <div className="tools seg-row">
+          <span className="sep" />
+          {chip ? (
+            <span className="sync" data-kind={chip.kind} data-tip={chip.title} role="status" aria-label={chip.title} data-e2e="sync-chip">
+              <span className="swap" key={`glyph-${chip.kind}`}>
+                <SyncGlyph chip={chip} />
+              </span>
+              <span className="word swap" key={`word-${chip.label}`}>
+                {chip.label}
+              </span>
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="tb b-pause"
+            aria-label={shownRec?.paused ? 'Resume' : 'Pause'}
+            aria-keyshortcuts="Alt+Shift+P"
+            data-tip={shownRec?.paused ? 'Resume' : 'Pause'}
+            data-keys={`${MOD}P`}
+            onClick={p.onPause}
+          >
+            {shownRec?.paused ? <PlayIcon /> : <PauseIcon />}
+          </button>
+          <button
+            type="button"
+            className="tb b-note"
+            aria-label="Note"
+            aria-keyshortcuts="Alt+Shift+N"
+            data-tip="Note"
+            data-keys={`${MOD}N`}
+            onClick={p.onNote}
+          >
+            <PencilIcon />
+          </button>
+          <button
+            type="button"
+            className={annotating ? 'tb b-annotate on' : 'tb b-annotate'}
+            aria-label="Annotate"
+            aria-pressed={annotating}
+            aria-keyshortcuts="Alt+Shift+A"
+            data-tip="Annotate"
+            data-keys={`${MOD}A`}
+            onClick={p.onAnnotate}
+          >
+            <AnnotateIcon />
+          </button>
+          <button
+            ref={stopRef}
+            type="button"
+            className="tb b-stop"
+            aria-label="Stop"
+            aria-keyshortcuts="Alt+Shift+S"
+            data-tip="Stop & save"
+            data-keys={`${MOD}S`}
+            onClick={p.onAskStop}
+          >
+            <StopIcon />
+          </button>
+          <button
+            type="button"
+            className="tb b-more"
+            aria-label="More"
+            aria-haspopup="menu"
+            aria-expanded={p.menuOpen}
+            data-tip="More"
+            onClick={p.onMenu}
+          >
+            <MoreIcon />
+          </button>
+        </div>
+      </Seg>
+      <Seg on={p.flow.face === 'confirm'} className="s-confirm">
+        <div className="flow confirm" role="group" aria-label={confirmAction === 'stop' ? 'Stop and save' : 'Unlink'}>
+          <span className="q">{confirmAction === 'stop' ? 'Stop & save?' : 'Unlink this device?'}</span>
+          <button type="button" className="fb primary" onClick={p.onConfirm}>
+            {confirmAction === 'stop' ? 'Stop' : 'Unlink'}
+          </button>
+          <button ref={keepRef} type="button" className="fb" onClick={p.onCancel}>
+            {confirmAction === 'stop' ? 'Keep recording' : 'Cancel'}
+          </button>
+        </div>
+      </Seg>
+      <Seg on={p.flow.face === 'saving'} className="s-saving">
+        <div className="flow saving" role="status" data-e2e="saving">
+          <SpinnerIcon />
+          <span>Saving…</span>
+          {progress !== null && rec ? <span className="muted">{rec.sync.queued} left</span> : null}
+          <span
+            className="bar-track"
+            data-indeterminate={progress === null ? '' : undefined}
+            role="progressbar"
+            aria-label="Saving"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress === null ? undefined : Math.round(progress * 100)}
+            style={{ '--p': String(progress ?? 0) } as Record<string, string>}
+          >
+            <i />
+          </span>
+        </div>
+      </Seg>
+      <Seg on={p.flow.face === 'saved'} className="s-saved">
+        <div className="flow saved" data-e2e="saved">
+          <span className="ok t-check" data-state={flowShown === 'saved' ? 'in' : undefined}>
+            <CheckIcon />
+          </span>
+          <span>Saved</span>
+          {savedUrl ? (
+            <a
+              ref={(el) => {
+                savedRef.current = el;
+              }}
+              className="fb"
+              href={savedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open board <NewTabIcon />
+            </a>
+          ) : (
+            <span className="muted">in Recents</span>
+          )}
+          <button
+            ref={savedUrl ? undefined : (el) => void (savedRef.current = el)}
+            type="button"
+            className="fb icon"
+            aria-label="Dismiss"
+            onClick={p.onDismiss}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      </Seg>
+      <Seg on={p.flow.face === 'failed'} className="s-failed">
+        <div className="flow failed" role="alert" data-tip={failure}>
+          <span className="warn">
+            <AlertIcon />
+          </span>
+          <span className="msg">{shortFailure(failure)}</span>
+          {rec ? (
+            <button type="button" className="fb" onClick={p.onRetry}>
+              Retry
+            </button>
+          ) : null}
+          <button type="button" className="fb icon" aria-label="Dismiss" onClick={p.onDismiss}>
+            <CloseIcon />
+          </button>
+        </div>
+      </Seg>
+    </div>
   );
 }

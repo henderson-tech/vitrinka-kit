@@ -14,7 +14,7 @@ import { ArrowUpIcon, CloseIcon } from './icons';
 export interface SheetProps {
   /** Presence classes (`grow`/`rise` + `is-open`/`is-closing`). */
   className: string;
-  /** The corner it grows from (`bottom-right`, …). */
+  /** CSS transform-origin: the point nearest the dock it grows from. */
   origin: string;
   title: string;
   ctx: string;
@@ -49,7 +49,7 @@ export function Sheet({ className, origin, title, ctx, pick, draft, onDraft, onS
     }
   };
   return (
-    <div className={`pop ${className}`} data-origin={origin} role="dialog" aria-labelledby="vt-pop-title" onKeyDown={onKey}>
+    <div className={`pop ${className}`} style={{ transformOrigin: origin }} role="dialog" aria-labelledby="vt-pop-title" onKeyDown={onKey}>
       <div className="pop-head">
         <span className="title">
           <i />

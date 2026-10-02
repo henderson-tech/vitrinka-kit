@@ -5,7 +5,9 @@
  * `credentials: omit` and the chunk route under test too.
  */
 import { configureRecorder } from '../config';
+import { __resetMeForTests } from '../me';
 import { __resetForTests } from '../queue';
+import { __resetRecentsForTests } from '../recents';
 import { __resetNavForTests } from '../capture/nav';
 import { setRedactionPolicy } from '../capture/redact';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../storage';
@@ -105,6 +107,8 @@ export function freshRecorder(): void {
   configureRecorder({ url: `${BASE}/`, key: 'vkr_test' });
   __resetForTests();
   __resetNavForTests();
+  __resetMeForTests();
+  __resetRecentsForTests();
   setRedactionPolicy(null);
 }
 
