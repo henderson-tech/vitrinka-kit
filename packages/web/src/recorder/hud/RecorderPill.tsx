@@ -128,10 +128,18 @@ function useMorph(ref: RefObject<HTMLDivElement | null>, orient: 'h' | 'v'): voi
   }, [ref]);
 }
 
-/** A collapsible segment: its width (height when vertical) tweens 0 ↔ content. */
+/**
+ * A collapsible segment: its width (height when vertical) tweens 0 ↔ content.
+ * A closing one is inert at once — its exit tween must not leave a Stop or
+ * Retry clickable. Imperative: React 18 and 19 disagree on the `inert` prop.
+ */
 function Seg({ on, className, children }: { on: boolean; className: string; children: ReactNode }): ReactElement {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.inert = !on;
+  }, [on]);
   return (
-    <div className={`seg ${className}${on ? ' on' : ''}`} aria-hidden={!on}>
+    <div ref={ref} className={`seg ${className}${on ? ' on' : ''}`} aria-hidden={!on}>
       <div className="seg-in">{children}</div>
     </div>
   );
@@ -170,7 +178,8 @@ export interface RecorderPillProps {
   onPause: () => void;
   onNote: () => void;
   onAnnotate: () => void;
-  onMenu: () => void;
+  /** Toggle the ⋯ menu; `byKeyboard` moves focus into it. */
+  onMenu: (byKeyboard: boolean) => void;
   onAskStop: () => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -332,6 +341,13 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     setOpen((o) => !o);
     foldIn(FOLD_TOUCH_MS);
   };
+  // The menu-button keys: ↓ opens the menu with focus on its first item (Enter/Space click through onMenu).
+  const onMoreKey = (e: KeyboardEvent) => {
+    if (e.key !== 'ArrowDown' || p.menuOpen) return;
+    e.preventDefault();
+    e.stopPropagation();
+    p.onMenu(true);
+  };
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     if (p.flow.face === 'confirm') p.onCancel();
@@ -385,7 +401,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
           aria-haspopup="menu"
           aria-expanded={p.menuOpen}
           data-tip="Recents · settings"
-          onClick={p.onMenu}
+          onClick={(e) => p.onMenu(e.detail === 0)}
+          onKeyDown={onMoreKey}
         >
           <MoreIcon />
         </button>
@@ -479,7 +496,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
             aria-haspopup="menu"
             aria-expanded={p.menuOpen}
             data-tip="More"
-            onClick={p.onMenu}
+            onClick={(e) => p.onMenu(e.detail === 0)}
+            onKeyDown={onMoreKey}
           >
             <MoreIcon />
           </button>
