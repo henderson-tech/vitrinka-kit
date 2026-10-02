@@ -83,7 +83,10 @@ export function createPageController(): HudController {
     },
     async stop() {
       const boardUrl = getState()?.boardUrl;
+      const live = getState() !== null;
       const done = await stopSession();
+      // null for a live session = the server refused to close it (ended locally, not saved).
+      if (live && done === null) throw new Error('the server refused to close this session — it ended locally, not saved');
       const url = done?.board?.url ?? boardUrl;
       return url ? { boardUrl: url } : {};
     },

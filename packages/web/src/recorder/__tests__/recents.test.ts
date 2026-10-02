@@ -49,6 +49,15 @@ describe('recents', () => {
     expect(readRecents()[1]).toMatchObject({ sessionId: 's-5', status: 'deleted' });
   });
 
+  it('a stop the server refuses for good ends locally as unsaved, and the controller says so', async () => {
+    const c = createPageController();
+    await c.start({ title: 'refused' });
+    stub.script.patch.push({ ok: false, status: 403 });
+    await expect(c.stop()).rejects.toThrow('ended locally, not saved');
+    expect(readRecents()[0]).toMatchObject({ sessionId: 'sess-1', status: 'unsaved' });
+    expect(c.getSnapshot().recording).toBeNull();
+  });
+
   it('the controller hands back the same snapshot until state changes', async () => {
     const c = createPageController();
     const a = c.getSnapshot();

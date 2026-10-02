@@ -323,8 +323,9 @@ export async function stopSession(): Promise<SessionDone | null> {
       throw e;
     }
   }
+  // A permanent refusal still ends the recording locally, but it was not saved.
   const boardUrl = done?.board?.url ?? rec.boardUrl;
-  updateRecent(rec.sessionId, { status: 'saved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
+  updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
   setState(null);
   setRedactionPolicy(null);
   resetQueues();
