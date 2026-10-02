@@ -1,5 +1,16 @@
 # @vitrinka/link
 
+## 0.1.3
+
+- **`pollLink` survives transient failures.** A claim whose fetch rejects
+  with a network `TypeError`, or that answers 5xx, 408 or 429, no longer
+  rejects the poll: the next claim waits a doubling backoff (capped at
+  30s, at least a readable `Retry-After`), and a 202 restores the normal
+  cadence. The poll still ends on 404/410 (`LinkExpired`), a workspace
+  mismatch, any other 4xx (`LinkError`) and abort. New `expiresIn` option
+  (pass `LinkStart.expires_in`; default 600s): once failures outlast it,
+  the poll rejects with `LinkExpired`. New `now` test seam beside `sleep`.
+
 ## 0.1.2
 
 - **`@vitrinka/link/dock`.** The recorder HUD's snap math, shared by the

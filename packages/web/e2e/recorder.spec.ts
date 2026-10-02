@@ -473,7 +473,7 @@ test('size and details: the menu scales the HUD, shows technical details, and bo
   await expect.poll(async () => (await pill.boundingBox())!.height).toBeGreaterThan(md);
   const detail = page.locator('[data-e2e="recorder-detail"]');
   await expect(detail).toContainText('sess-e2e');
-  await expect(detail).toContainText('web/0.2.0');
+  await expect(detail).toContainText('web/0.2.1');
   await expect(detail).toContainText('events');
   await page.reload();
   await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'lg');

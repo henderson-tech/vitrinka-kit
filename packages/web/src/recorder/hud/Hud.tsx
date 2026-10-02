@@ -39,6 +39,7 @@ import {
   useViewportTick,
 } from './layer';
 import { type LinkPhase, LinkSheet } from './LinkSheet';
+import { listen } from './listen';
 import { Menu } from './Menu';
 import { alignFor, towardCentre } from './place';
 import { RecorderPill } from './RecorderPill';
@@ -296,8 +297,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       else return;
       e.preventDefault();
     };
-    window.addEventListener('keydown', key, true);
-    return () => window.removeEventListener('keydown', key, true);
+    return listen(window, 'keydown', key, { capture: true });
   }, [toggleAnnotate, openNote, onPause, askStop]);
 
   // Esc anywhere and click-outside close the sheet (capture-phase, so the
@@ -314,10 +314,10 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       if (insideHud(e.target)) return;
       closeSheet();
     };
-    document.addEventListener('keydown', key, true);
+    const offKey = listen(document, 'keydown', key, { capture: true });
     document.addEventListener('pointerdown', down, true);
     return () => {
-      document.removeEventListener('keydown', key, true);
+      offKey();
       document.removeEventListener('pointerdown', down, true);
     };
   }, [sheet, closeSheet]);
@@ -336,10 +336,10 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       const path = e.composedPath();
       if (!path.includes(menuRef.current as EventTarget) && !path.includes(pillRef.current as EventTarget)) setMenu(false);
     };
-    document.addEventListener('keydown', key, true);
+    const offKey = listen(document, 'keydown', key, { capture: true });
     document.addEventListener('pointerdown', down, true);
     return () => {
-      document.removeEventListener('keydown', key, true);
+      offKey();
       document.removeEventListener('pointerdown', down, true);
     };
   }, [menu]);

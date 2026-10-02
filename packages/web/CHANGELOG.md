@@ -1,5 +1,22 @@
 # @vitrinka/web
 
+## 0.2.1
+
+- **Linking survives a flaky network.** One failed approval check (a
+  dropped connection, an edge error page, a 5xx or a 429) used to end the
+  link with "Failed to fetch · Try again", even though the code was still
+  valid. Now the pill keeps waiting: it retries with a growing pause (up to
+  30s) until the code itself expires. Only an expired code, a token for
+  another workspace or Cancel ends it. Needs `@vitrinka/link` 0.1.3.
+- **No more passive-listener errors on Angular hosts.** On a page that runs
+  zone.js (any Angular app), Esc in the menu, the note sheet or annotate
+  mode logged "Unable to preventDefault inside passive event listener
+  invocation", and the browser went ahead with the default anyway. zone.js
+  runs every listener of a kind through the first one registered, and
+  Angular CDK registers its keydown, mousedown and touchstart listeners as
+  passive. The HUD now registers every listener that cancels an event
+  directly with the browser, never passive.
+
 ## 0.2.0
 
 - **Stop is in the pill.** A ■ next to the other tools. It asks inline

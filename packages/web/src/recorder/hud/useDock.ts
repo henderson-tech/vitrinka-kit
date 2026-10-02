@@ -22,6 +22,7 @@ import {
 } from 'react';
 
 import type { RecorderStorage } from '../storage';
+import { listen } from './listen';
 import { type Arrow, colOf, neighbour, parsePlace, type Place, rowOf, settle, type Spot, untuck } from './spots';
 
 const DOCK_KEY = 'dock';
@@ -156,8 +157,7 @@ export function useDock(onMoveStart: () => void, storage: RecorderStorage): Dock
     const guard = (e: DragEvent) => {
       if (press.current) e.preventDefault();
     };
-    document.addEventListener('dragstart', guard, true);
-    return () => document.removeEventListener('dragstart', guard, true);
+    return listen(document, 'dragstart', guard, { capture: true });
   }, []);
 
   const release = useCallback(

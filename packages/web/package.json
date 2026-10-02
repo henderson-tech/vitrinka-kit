@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/web",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "vitrinka toolkit for React DOM apps — the journey recorder: capture manual-testing sessions (rrweb DOM stream, clicks, navigation, network, console, notes) straight into vitrinka boards.",
   "license": "Elastic-2.0",
   "repository": {
@@ -51,7 +51,7 @@
     "prepublishOnly": "tsc -p tsconfig.build.json && bun run build:hud"
   },
   "dependencies": {
-    "@vitrinka/link": "^0.1.2",
+    "@vitrinka/link": "^0.1.3",
     "@vitrinka/redact": "^0.1.0"
   },
   "peerDependencies": {
