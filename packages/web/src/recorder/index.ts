@@ -35,6 +35,8 @@ export interface VitrinkaRecorderRootProps {
   appVersion?: string;
   /** Explicit server lane; omitted = the key's project rule decides. */
   environment?: string;
+  /** Explicit project; omitted = the host's project rule decides. */
+  project?: string;
   /** A router's pathname, when the History wrap is not enough. */
   route?: string | null;
   children?: ReactNode;
@@ -50,7 +52,14 @@ export function VitrinkaRecorderRoot(props: VitrinkaRecorderRootProps): ReactEle
   return createElement(
     RecorderProvider,
     {
-      config: { url, key, appVersion: props.appVersion, environment: props.environment, label: props.label },
+      config: {
+        url,
+        key,
+        appVersion: props.appVersion,
+        environment: props.environment,
+        project: props.project,
+        label: props.label,
+      },
     },
     createElement(RouteFeed, { route: props.route }),
     props.children,

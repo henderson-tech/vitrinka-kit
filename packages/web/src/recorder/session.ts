@@ -37,7 +37,7 @@ export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.1.4';
+export const RECORDER_VERSION = '0.1.5';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -116,6 +116,7 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   const ses = await api<SessionOut>('POST', '/api/v1/sessions', {
     host: pageHost(),
     title: opts.title || '',
+    ...(cfg.project ? { project: cfg.project } : {}),
     ...(environment ? { environment } : {}),
     meta: {
       recorder: RECORDER_ID,

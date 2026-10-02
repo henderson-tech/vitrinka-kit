@@ -23,6 +23,12 @@ export interface RecorderConfig {
   appVersion?: string;
   /** Explicit server lane; omitted = the key's project rule decides. */
   environment?: string;
+  /**
+   * Explicit project for a device-linked session — one origin serving several
+   * apps (by path) files each into its own project. Omitted = the host's
+   * project rule decides; an admin key's pin always wins (a mismatch is 403).
+   */
+  project?: string;
   /** Device-link label; defaults to `<browser> on <os> · <host>`. */
   label?: string;
 }
@@ -34,6 +40,7 @@ export function configureRecorder(next: RecorderConfig): void {
   config.key = next.key ?? '';
   config.appVersion = next.appVersion;
   config.environment = next.environment;
+  config.project = next.project;
   config.label = next.label;
 }
 
