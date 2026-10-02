@@ -59,6 +59,18 @@ describe('placeFloating', () => {
     expect(towardCentre({ tuck: 'right', y: 0.4 })).toBe('left');
   });
 
+  it('re-placed with a grown sheet or a smaller viewport, it is clamped inside again', () => {
+    const dock = { x: 1300, y: 766, w: 124, h: 28 };
+    const sheet = placeFloating(dock, { w: 288, h: 200 }, view, 'top', { align: 'end' });
+    expect(sheet.y).toBe(766 - 8 - 200);
+    // The textarea grew past the top: the same anchor, a taller sheet, still inside.
+    const grown = placeFloating(dock, { w: 288, h: 900 }, view, 'top', { align: 'end' });
+    expect(grown.y).toBe(8);
+    // The window shrank under it: the right edge stays within the new width.
+    const narrow = placeFloating({ ...dock, x: 700 }, { w: 288, h: 200 }, { w: 820, h: 810 }, 'top', { align: 'end' });
+    expect(narrow.x + 288).toBeLessThanOrEqual(820 - 8);
+  });
+
   it('aligns flush with the dock’s outer edge on a corner', () => {
     const dock = { x: 1300, y: 766, w: 124, h: 28 };
     const p = placeFloating(dock, { w: 252, h: 300 }, view, towardCentre({ spot: 'br' }), { align: alignFor({ spot: 'br' }) });

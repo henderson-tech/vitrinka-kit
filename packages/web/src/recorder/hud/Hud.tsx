@@ -263,7 +263,20 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   useEffect(() => {
     if (snap.linked) void controller.getMe();
   }, [snap.linked, controller]);
-  const toggleMenu = useCallback(() => setMenu((m) => !m), []);
+  // A keyboard open (Enter, Space, ↓ on ⋯) moves focus to the first item, as a menu button does.
+  const focusMenu = useRef(false);
+  const toggleMenu = useCallback((byKeyboard: boolean) => {
+    focusMenu.current = byKeyboard;
+    setMenu((m) => !m);
+  }, []);
+  useEffect(() => {
+    if (!menu || !focusMenu.current) return;
+    focusMenu.current = false;
+    const raf = requestAnimationFrame(() =>
+      menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([aria-disabled="true"])')?.focus({ preventScroll: true }),
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [menu]);
   useEffect(() => {
     if (!menu) return;
     void controller.getMe();
@@ -361,6 +374,21 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   // centre and inside the viewport, or a phone bottom sheet over the visual viewport.
   const layerOpen = sheet !== null || link !== null;
   const vvTick = useViewportTick(layerOpen && phone);
+  // On desktop the placement is measured, so a viewport resize or a grown
+  // sheet (the textarea resizes) must place it again.
+  const [sizeTick, setSizeTick] = useState(0);
+  useEffect(() => {
+    if (!layerOpen || phone) return;
+    const bump = () => setSizeTick((n) => n + 1);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(bump) : null;
+    const pop = layerRef.current?.firstElementChild;
+    if (ro && pop) ro.observe(pop);
+    addEventListener('resize', bump);
+    return () => {
+      ro?.disconnect();
+      removeEventListener('resize', bump);
+    };
+  }, [layerOpen, phone, sheetP.mounted, linkP.mounted]);
   const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom right' });
   useLayoutEffect(() => {
     const el = dock.ref.current;
@@ -373,7 +401,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     const pop = layerRef.current?.firstElementChild as HTMLElement | null;
     const size = pop ? { w: pop.offsetWidth, h: pop.offsetHeight } : { w: 288, h: 200 };
     setLayer(anchoredLayer(restingBox(el), size, dock.place, o));
-  }, [layerOpen, sheet, link?.phase, portal, hostMount, dock.place, dock.ref, phone, vvTick, snap.prefs.size]);
+  }, [layerOpen, sheet, link?.phase, portal, hostMount, dock.place, dock.ref, phone, vvTick, sizeTick, snap.prefs.size]);
   const layerCls = phone ? 'phone' : 'anchor';
   const motionCls = phone ? 'rise' : 'grow';
 
