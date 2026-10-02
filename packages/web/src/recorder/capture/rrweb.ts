@@ -8,15 +8,16 @@
 import type { eventWithTime } from '@rrweb/types';
 import { record } from 'rrweb';
 
+import { RRWEB_BLOCK_ATTR } from '../block';
 import { pushRRWebBatch } from '../queue';
 import { currentRoute } from '../state';
 import { maskDirectives } from './redact';
 
+export { RRWEB_BLOCK_ATTR };
+
 const BATCH_MS = 2000;
 /** A fresh full snapshot every 5 min keeps long recordings seekable. */
 const CHECKOUT_MS = 5 * 60 * 1000;
-/** Elements carrying this attribute are never recorded (the HUD host). */
-export const RRWEB_BLOCK_ATTR = 'data-vitrinka-recorder';
 
 let stop: (() => void) | null = null;
 let buf: eventWithTime[] = [];

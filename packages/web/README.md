@@ -118,31 +118,45 @@ returned unchanged otherwise.
 
 Idle, the HUD is a 28px glass puck: a hollow ring until the device is linked
 (**Link recorder**), a muted dot once it is (**Start recording** — the session
-title is `document.title`, or the `title` prop); the label slides out on hover
-or focus. Recording, it rests as a dot + timer capsule (**Recorder controls**)
-that unfolds into the tools on hover, focus or tap and folds back 2.5s after
-you leave (keycaps show on hover):
+title is `document.title`, or the `title` prop); the label and a ⋯ slide out
+on hover or focus. Recording, it rests as a dot + timer capsule (**Recorder
+controls**) that unfolds into the tools on hover, focus or tap and folds back
+2.5s after you leave (a tooltip names each tool and its shortcut):
 
 | Control | Shortcut | What |
 |---|---|---|
+| sync chip | | `synced` · `sending N` · `offline · N` · `ended` — readable without hovering |
 | ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
-| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel) |
-| ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too — the page does not scroll or press while annotating), then describe it; `board` (an annotation on the board) or `task` (also filed as an intake draft) |
-| ⋯ | | **Open board** (the server-minted link) · **Stop recording** · **Unlink** · **Move to** |
+| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel); the pill says **Saved** |
+| ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it: `board` (an annotation on the board) or `task` (also filed as an intake draft) |
+| ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Saved · Open board** until you dismiss it |
+| ⋯ | | the linked account · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
 
-Move it anywhere: drag the puck or capsule and it lands on one of six spots
-(corners, top and bottom centre) — a flick lands where it is thrown; push it
-past a side edge and it tucks into a 6px tab (**Show recorder** brings it
-back). Arrow keys on the focused handle and **Move to** do the same without a
-drag; the spot is remembered per site. Sheets (≤ 288px) open toward the
-middle of the page from wherever it sits; on a phone they are a bottom sheet
-above the keyboard and the link sheet drops the QR.
+Move it anywhere: drag the puck or capsule and it lands on one of eight
+spots (a 3×3 grid without the centre). A flick lands where it is thrown.
+Push it past a side edge and it tucks into a 6px tab (**Show recorder**
+brings it back). At middle left and middle right the recording pill stands
+up into a vertical bar. Arrow keys on the focused handle and **Position** do
+the same without a drag; the spot is remembered per site. Tooltips, the
+menu and sheets (≤ 288px at M) open toward the middle of the page from
+wherever the HUD sits: sideways from a vertical one. They flip and shift so
+they never leave the viewport. On a phone, sheets are a bottom sheet above
+the keyboard and the link sheet drops the QR.
 
-The sync glyph is honest: ✓ means the server confirmed it holds everything
-captured; a second line unfolds only for a backlog, an outage (`offline ·
-N held · retrying` — nothing is dropped, the tail is kept in `localStorage`)
-or a session the server closed. Stop drains first and refuses while the
-server is unreachable — stop again once online.
+The sync chip is honest: `synced` means the server confirmed it holds
+everything captured. A backlog reads `sending N`. An outage reads
+`offline · N` (nothing is dropped; the tail is kept in `localStorage`). A
+session the server closed reads `ended`. A one-line detail also unfolds for
+an outage or an ended session. Stop drains first and refuses while the server
+is unreachable: the pill says so and offers **Retry**.
+
+**Size** and **Technical details** are user preferences. For a linked device
+they are stored in vitrinka (`GET`/`PATCH /api/v1/recorder/me`), so they follow
+the user, and are cached on the device for an instant first paint and for
+offline use. A key build, or a server without the route, keeps them on the
+device only. Technical details shows events captured, queue and pending
+chunks, the last sync and its state, the server's seq, the session id and
+the recorder version.
 
 The sheet renders inside the topmost open dialog when one exists, so a
 Radix focus trap or a `<dialog>.showModal()` never fights it, and nothing
@@ -160,6 +174,38 @@ const { boardUrl } = await __vitrinkaRecorder.stop();
 __vitrinkaRecorder.status(); // { recording, sessionId, elapsedMs, queued, synced, … }
 ```
 
+## The HUD on its own (`@vitrinka/web/hud`)
+
+The HUD is driven only through a `HudController`. The in-page recorder is one
+implementation; another host (the browser extension) mounts the same HUD with
+its own:
+
+```ts
+import { mountRecorderHud, type HudController } from '@vitrinka/web/hud';
+
+const unmount = mountRecorderHud(controller, { title: () => document.title });
+```
+
+`HudController` is a snapshot plus actions:
+
+- `getSnapshot()` returns the same object until something changes;
+  `subscribe(fn)` calls back after a change. The snapshot holds `linked`,
+  `canUnlink`, `annotating`, `recording` (session, clock, sync), `account`,
+  `prefs`, `recents`, `workspaceUrl` and `version`.
+- Actions: `start`, `togglePause`, `stop` (resolves `{boardUrl?}`, rejects
+  while the server is unreachable), `note`, `annotate`, `setAnnotating`,
+  `link`, `unlink`, `getMe`, `setPrefs` and `refreshRecents`.
+
+The full contract is in `src/recorder/hud/controller.ts`.
+
+Without a bundler, `@vitrinka/web/hud.iife.js` (`build/hud.iife.js`) is the
+same mount as one self-contained script with React bundled in:
+
+```html
+<script src="hud.iife.js"></script>
+<script>const unmount = VitrinkaHud.mount(controller);</script>
+```
+
 ## What is captured, exactly
 
 | Lane | Event `kind` | Payload |
@@ -173,6 +219,12 @@ __vitrinkaRecorder.status(); // { recording, sessionId, elapsedMs, queued, synce
 
 Data goes to your vitrinka server only. Details, the redaction rules and the
 policy fetch: [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md).
+
+The HUD itself never enters a recording. Every surface sits under one 0×0
+shadow host carrying rrweb's block attribute. rrweb 2 always leaves a
+placeholder for a blocked node; this one is empty, so the replay shows no
+box. The HUD's clicks, its requests to your server and its `vitrinka:` logs
+are not captured.
 
 ## Storage
 

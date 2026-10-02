@@ -271,9 +271,13 @@ export type RecorderHealthState = 'idle' | 'ok' | 'backlog' | 'offline' | 'dead'
 export interface RecorderHealth {
   state: RecorderHealthState;
   queued: number;
+  /** Of `queued`, the rrweb chunks still pending upload. */
+  chunks: number;
   failures: number;
   error: string;
   sinceSyncMs: number | null;
+  /** Epoch ms of the last confirmed delivery or reconcile (null before any). */
+  lastSyncAt: number | null;
   localSeq: number;
   serverMaxSeq: number;
   /** The reconciliation itself: the server accounts for every allocated seq. */
@@ -296,9 +300,11 @@ export function health(): RecorderHealth {
   return {
     state,
     queued,
+    chunks: getChunks().length,
     failures,
     error: lastError,
     sinceSyncMs: sinceSync,
+    lastSyncAt: lastSyncAt || null,
     localSeq: rec?.seq ?? 0,
     serverMaxSeq,
     synced: rec !== null && !rec.dead && serverMaxSeq >= rec.seq && queued === 0,

@@ -105,3 +105,63 @@ export function StopIcon(): ReactElement {
     </svg>
   );
 }
+
+export function CircleCheckIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m8 12.5 2.5 2.5L16 9.5" />
+    </svg>
+  );
+}
+
+export function CloudOffIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="m2 2 20 20" />
+      <path d="M5.8 8.1A6 6 0 0 0 8 19h9.5a4.5 4.5 0 0 0 1.9-.4" />
+      <path d="M21.5 15.6A4.5 4.5 0 0 0 17.5 10a6 6 0 0 0-7.4-3.8" />
+    </svg>
+  );
+}
+
+export function AlertIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+/** A ring with a gap; spun by `.spin`. */
+export function SpinnerIcon(): ReactElement {
+  return (
+    <svg {...base} className="spinner spin">
+      <circle cx="12" cy="12" r="10" />
+    </svg>
+  );
+}
+
+export function UnlinkIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="m18.8 12.7 1.7-1.7a5 5 0 0 0-7.1-7.1l-1.7 1.7" />
+      <path d="m5.2 11.3-1.7 1.7a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+      <path d="M8 2v3" />
+      <path d="M2 8h3" />
+      <path d="M16 22v-3" />
+      <path d="M22 16h-3" />
+    </svg>
+  );
+}
+
+export function HomeIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="M3 10.5 12 3l9 7.5" />
+      <path d="M5 9v11h14V9" />
+    </svg>
+  );
+}

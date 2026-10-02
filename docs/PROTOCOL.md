@@ -17,6 +17,8 @@ these routes:
 
 ```
 GET   /api/v1/recorder/policy      workspace redaction policy (session start)
+GET   /api/v1/recorder/me          who the token is + HUD prefs (web HUD)
+PATCH /api/v1/recorder/me          HUD prefs {size, verbose} (web HUD, linked devices)
 POST  /api/v1/sessions             create a recording session
 POST  /api/v1/sessions/:id/events  the event stream (batched)
 POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension)
@@ -120,6 +122,24 @@ default. Under a `maskAllText` policy the Expo recorder captures keyframes at
 a strongly reduced resolution (text unreadable, layout visible). The web
 recorder takes no screenshots at all. Otherwise: do not record against
 screens showing data you would not put on the session's board.
+
+## The HUD itself
+
+The web recorder's HUD is never part of a recording. Its shadow host (and a
+sheet host portaled into a page dialog, and the annotate-mode stylesheet)
+carries `data-vitrinka-recorder`, rrweb's `blockSelector`. rrweb 2 has no way
+to omit a blocked node, so the replay keeps a placeholder of the host's size.
+The host is 0×0, so that placeholder is empty. rrweb skips mouse interactions
+on blocked nodes. The click lane ignores the HUD. The network lane skips the
+recorder's own requests to the configured server (session doors,
+`/recorder/me`, the recents' session reads). The console lane skips the
+recorder's `vitrinka:`-prefixed logs.
+
+The HUD sends nothing beyond the routes above. `/recorder/me` carries the
+token's account (workspace, user email and name, or the key's label and
+project) and two display preferences (`size`, `verbose`). Those preferences
+and the device's last five recordings (id, title, start time, length,
+status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 
 ## Retention & access
 

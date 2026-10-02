@@ -1,14 +1,13 @@
 /**
  * Where the HUD rests and how it moves (recorder-hud-subtle D2). The dock
- * sits on one of six spots by CSS insets (see `.dock` in styles.ts), so a
+ * sits on one of eight spots by CSS insets (see `.dock` in styles.ts), so a
  * resize or rotation needs no JS; a drag moves it by `transform` only and a
- * release settles through `@vitrinka/link/dock` — a flick lands where it is
- * aimed, a push past a side edge tucks it into a tab. The move to the new
- * spot is a FLIP: the dock re-anchors, then springs from where it was let
- * go. Arrow keys on a focused handle are the non-drag alternative.
- * The place is remembered per origin in the recorder's storage.
+ * release settles through `./spots` — a flick lands where it is aimed, a
+ * push past a side edge tucks it into a tab. The move to the new spot is a
+ * FLIP: the dock re-anchors, then springs from where it was let go. Arrow
+ * keys on a focused handle are the non-drag alternative. The place is
+ * remembered per origin in the HUD's storage.
  */
-import { type Arrow, colOf, neighbour, parsePlace, type Place, rowOf, settle, type Spot, untuck } from '@vitrinka/link/dock';
 import {
   type KeyboardEvent,
   type MouseEvent,
@@ -22,7 +21,8 @@ import {
   useState,
 } from 'react';
 
-import { getRecorderStorage } from '../storage';
+import type { RecorderStorage } from '../storage';
+import { type Arrow, colOf, neighbour, parsePlace, type Place, rowOf, settle, type Spot, untuck } from './spots';
 
 const DOCK_KEY = 'dock';
 /** Travel before a press becomes a drag — below it a press stays a tap. */
@@ -61,16 +61,35 @@ function margin(): number {
   return globalThis.matchMedia?.('(pointer: coarse)').matches ? 12 : 16;
 }
 
-/** The point of `r` a place is anchored by: its corner, its middle on the c column, its mid-height when tucked. */
+/**
+ * The point of `r` a place is anchored by: its corner, its middle on the c
+ * column, its top edge on the middle row (the handle's middle sits at 50%),
+ * its mid-height when tucked.
+ */
 function anchorPoint(r: DOMRect, place: Place): { x: number; y: number } {
   const spot = untuck(place);
   const x = colOf(spot) === 'l' ? r.left : colOf(spot) === 'r' ? r.right : r.left + r.width / 2;
-  const y = 'tuck' in place ? r.top + r.height / 2 : rowOf(spot) === 't' ? r.top : r.bottom;
+  const row = rowOf(spot);
+  const y = 'tuck' in place ? r.top + r.height / 2 : row === 'b' ? r.bottom : r.top;
   return { x, y };
 }
 
-export function useDock(onMoveStart: () => void): Dock {
-  const [place, setPlace] = useState<Place>(() => parsePlace(getRecorderStorage().getString(DOCK_KEY)));
+/**
+ * The centre column anchors the handle's middle (`--hw` = its width); the
+ * middle row anchors the handle's middle too (`--hh` = its height when the
+ * pill stands up, the pill's height otherwise).
+ */
+function measureAnchor(el: HTMLElement): void {
+  const h = el.querySelector<HTMLElement>('.seg.on .handle, .seg.on .puck, .tab');
+  const pill = el.querySelector<HTMLElement>('.pill');
+  if (h) el.style.setProperty('--hw', `${h.offsetWidth}px`);
+  const v = pill?.dataset.orient === 'v';
+  const hh = v ? h?.offsetHeight : (pill ?? h)?.offsetHeight;
+  if (hh) el.style.setProperty('--hh', `${hh}px`);
+}
+
+export function useDock(onMoveStart: () => void, storage: RecorderStorage): Dock {
+  const [place, setPlace] = useState<Place>(() => parsePlace(storage.getString(DOCK_KEY)));
   const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const from = useRef<DOMRect | null>(null);
@@ -84,11 +103,17 @@ export function useDock(onMoveStart: () => void): Dock {
     if (el) from.current = el.getBoundingClientRect();
     setPlace(next);
     try {
-      getRecorderStorage().set(DOCK_KEY, JSON.stringify(next));
+      storage.set(DOCK_KEY, JSON.stringify(next));
     } catch (e) {
       console.warn('vitrinka: could not remember the HUD position', e);
     }
-  }, []);
+  }, [storage]);
+
+  // Every commit can swap the face or the orientation: re-measure the anchor
+  // before the FLIP below reads where the dock now rests.
+  useLayoutEffect(() => {
+    if (ref.current) measureAnchor(ref.current);
+  });
 
   // FLIP: the dock has re-anchored; spring it from where it was let go.
   useLayoutEffect(() => {
@@ -113,14 +138,11 @@ export function useDock(onMoveStart: () => void): Dock {
     el.addEventListener('transitionend', done, { once: true });
   }, [place]);
 
-  // The centre column anchors the handle's middle: keep --hw = its width.
+  // …and between commits, while a label or the tray tweens.
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver !== 'function') return;
-    const ro = new ResizeObserver(() => {
-      const h = el.querySelector<HTMLElement>('.handle, .puck, .tab');
-      if (h) el.style.setProperty('--hw', `${h.offsetWidth}px`);
-    });
+    const ro = new ResizeObserver(() => measureAnchor(el));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);

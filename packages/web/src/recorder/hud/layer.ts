@@ -1,14 +1,26 @@
 /**
  * Where a sheet opens and how it enters and leaves (recorder-hud-subtle D5).
  * On desktop and tablet a sheet is a popover anchored to the dock, opening
- * toward the viewport centre from whichever spot the dock rests on; on a
+ * toward the viewport centre from whichever spot the dock rests on (place.ts:
+ * sideways from a vertical dock, never past a viewport edge); on a
  * phone (narrow + coarse pointer) it is a bottom sheet over the visual
  * viewport, so it rides above the on-screen keyboard. Coordinates are
  * relative to the sheet host's own origin box, which may sit inside a
  * transformed dialog.
  */
-import { colOf, type Place, rowOf, untuck } from '@vitrinka/link/dock';
-import { type CSSProperties, useEffect, useState, useSyncExternalStore } from 'react';
+import {
+  type CSSProperties,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+
+import { alignFor, type FloatAlign, type FloatSide, placeFloating, towardCentre } from './place';
+import type { Place } from './spots';
 
 export const PHONE_QUERY = '(max-width: 640px) and (pointer: coarse)';
 export const FINE_QUERY = '(pointer: fine)';
@@ -82,11 +94,21 @@ export interface Box {
   bottom: number;
 }
 
-/** The dock's resting box — layout only, so a spring in flight does not skew the anchor. */
+/**
+ * The dock's resting box in viewport px — its rect minus the translate it is
+ * springing through (the FLIP), so an anchor never chases a settle in flight.
+ */
 export function restingBox(el: HTMLElement): Box {
-  const left = el.offsetLeft;
-  const top = el.offsetTop;
-  return { left, top, right: left + el.offsetWidth, bottom: top + el.offsetHeight };
+  const r = el.getBoundingClientRect();
+  const t = getComputedStyle(el).transform;
+  let dx = 0;
+  let dy = 0;
+  if (t && t !== 'none' && typeof DOMMatrixReadOnly === 'function') {
+    const m = new DOMMatrixReadOnly(t);
+    dx = m.m41;
+    dy = m.m42;
+  }
+  return { left: r.left - dx, top: r.top - dy, right: r.right - dx, bottom: r.bottom - dy };
 }
 
 /** The viewport position of the host a sheet renders in (its 0×0 origin box). */
@@ -98,32 +120,26 @@ export function hostOrigin(mount: HTMLElement): { x: number; y: number } {
   return { x: r.left, y: r.top };
 }
 
-const GAP = 8;
-
-/** A popover anchored to the dock, growing from the corner nearest it. */
-export function anchoredLayer(dock: Box, place: Place, origin: { x: number; y: number }): { style: CSSProperties; origin: string } {
-  const spot = untuck(place);
-  const row = rowOf(spot);
-  const col = colOf(spot);
-  let ax: number;
-  let tx: string;
-  let ay: number;
-  let ty: string;
-  if ('tuck' in place) {
-    ax = place.tuck === 'left' ? dock.right + GAP : dock.left - GAP;
-    tx = place.tuck === 'left' ? '0' : '-100%';
-    ay = row === 't' ? dock.top : dock.bottom;
-    ty = row === 't' ? '0' : '-100%';
-  } else {
-    ax = col === 'l' ? dock.left : col === 'r' ? dock.right : innerWidth / 2;
-    tx = col === 'l' ? '0' : col === 'r' ? '-100%' : '-50%';
-    ay = row === 't' ? dock.bottom + GAP : dock.top - GAP;
-    ty = row === 't' ? '0' : '-100%';
-  }
-  return {
-    style: { left: ax - origin.x, top: ay - origin.y, translate: `${tx} ${ty}` },
-    origin: `${row === 't' ? 'top' : 'bottom'}-${col === 'l' ? 'left' : col === 'c' ? 'center' : 'right'}`,
-  };
+/**
+ * A popover anchored to the dock: toward the page centre (sideways from a
+ * vertical or tucked dock), flush with the dock's outer edge, flipped and
+ * shifted so the measured `size` never leaves the viewport; it grows from
+ * the point nearest the dock.
+ */
+export function anchoredLayer(
+  dock: Box,
+  size: { w: number; h: number },
+  place: Place,
+  origin: { x: number; y: number },
+): { style: CSSProperties; origin: string } {
+  const p = placeFloating(
+    { x: dock.left, y: dock.top, w: dock.right - dock.left, h: dock.bottom - dock.top },
+    size,
+    { w: innerWidth, h: innerHeight },
+    towardCentre(place),
+    { align: alignFor(place), gap: 8, margin: 8 },
+  );
+  return { style: { left: p.x - origin.x, top: p.y - origin.y }, origin: p.origin };
 }
 
 /** A phone bottom sheet: the full visual viewport, content pinned to its bottom edge. */
@@ -135,4 +151,52 @@ export function phoneLayer(origin: { x: number; y: number }): CSSProperties {
     width: vv?.width ?? innerWidth,
     height: vv?.height ?? innerHeight,
   };
+}
+
+/**
+ * Keep a fixed float beside its anchor: placed on every commit, on a size
+ * change of either (the tray unfolding, a recents list loading) and on a
+ * viewport resize. Writes the style directly — no state, no re-render.
+ * `anchor` returns the box to sit beside (viewport px) or null to skip.
+ */
+export function useFloat(
+  float: RefObject<HTMLElement | null>,
+  anchor: () => { el: HTMLElement; box: Box } | null,
+  side: FloatSide,
+  align: FloatAlign,
+  active: boolean,
+): void {
+  const anchorRef = useRef(anchor);
+  anchorRef.current = anchor;
+  const place = useCallback(() => {
+    const f = float.current;
+    const a = anchorRef.current();
+    if (!f || !a) return;
+    const p = placeFloating(
+      { x: a.box.left, y: a.box.top, w: a.box.right - a.box.left, h: a.box.bottom - a.box.top },
+      { w: f.offsetWidth, h: f.offsetHeight },
+      { w: innerWidth, h: innerHeight },
+      side,
+      { align, gap: 8, margin: 8 },
+    );
+    f.style.translate = `${Math.round(p.x)}px ${Math.round(p.y)}px`;
+    f.style.transformOrigin = p.origin;
+    f.dataset.side = p.side;
+  }, [float, side, align]);
+  useLayoutEffect(() => {
+    if (active) place();
+  });
+  useEffect(() => {
+    if (!active || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(place);
+    const f = float.current;
+    const a = anchorRef.current();
+    if (f) ro.observe(f);
+    if (a) ro.observe(a.el);
+    addEventListener('resize', place);
+    return () => {
+      ro.disconnect();
+      removeEventListener('resize', place);
+    };
+  }, [active, place, float]);
 }

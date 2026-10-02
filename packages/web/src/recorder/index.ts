@@ -9,12 +9,12 @@
  * outside an allowed lane.
  */
 import { createElement, Fragment, type ReactElement, type ReactNode, useEffect, useRef } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 
 import { envConfig, vitrinkaConfigured } from './config';
-import { createHudHost } from './hud/host';
-import { Hud } from './hud/Hud';
+import { mountRecorderHud } from './hud/mount';
+import { createPageController } from './page-controller';
 import { RecorderProvider, useRecorderRoute } from './RecorderProvider';
+import { getRecorderStorage } from './storage';
 
 export { useRecorderRoute };
 export type { RecorderControl, RecorderStatus } from './control';
@@ -78,29 +78,18 @@ export interface VitrinkaRecorderPillProps {
 
 /**
  * The HUD — mount it anywhere under the root (it renders into its own shadow
- * host on `<html>`, never into the app's DOM). Renders null when the root is
- * inert.
+ * host on `<html>`, never into the app's DOM), driven by the in-page
+ * recorder's controller. Renders null when the root is inert.
  */
 export function VitrinkaRecorderPill(props: VitrinkaRecorderPillProps): null {
-  const rootRef = useRef<Root | null>(null);
   const titleRef = useRef(props.title);
   titleRef.current = props.title;
   useEffect(() => {
     if (!vitrinkaConfigured()) return;
-    const host = createHudHost();
-    const root = createRoot(host.mount);
-    rootRef.current = root;
-    root.render(
-      createElement(Hud, {
-        hostMount: host.mount,
-        defaultTitle: () => titleRef.current ?? document.title,
-      }),
-    );
-    return () => {
-      root.unmount();
-      host.destroy();
-      rootRef.current = null;
-    };
+    return mountRecorderHud(createPageController(), {
+      title: () => titleRef.current ?? document.title,
+      storage: getRecorderStorage(),
+    });
   }, []);
   return null;
 }

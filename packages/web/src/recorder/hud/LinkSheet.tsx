@@ -5,8 +5,8 @@
  * Polling runs in the parent; this only paints the state.
  */
 import type { ReactElement } from 'react';
-import type { LinkStart } from '@vitrinka/link';
 
+import type { HudLinkCode } from './controller';
 import { CloseIcon, NewTabIcon } from './icons';
 import { FINE_QUERY, useMedia } from './layer';
 
@@ -15,10 +15,10 @@ export type LinkPhase = 'starting' | 'waiting' | 'expired' | 'error';
 export interface LinkSheetProps {
   /** Presence classes (`grow`/`rise` + `is-open`/`is-closing`). */
   className: string;
-  /** The corner it grows from (`bottom-right`, …). */
+  /** CSS transform-origin: the point nearest the dock it grows from. */
   origin: string;
   phase: LinkPhase;
-  start: LinkStart | null;
+  start: HudLinkCode | null;
   error?: string;
   onRetry: () => void;
   onClose: () => void;
@@ -40,7 +40,7 @@ export function LinkSheet({ className, origin, phase, start, error, onRetry, onC
   // The QR serves the desktop→phone path; a touch device cannot scan itself (D5).
   const qr = useMedia(FINE_QUERY);
   return (
-    <div className={`pop link ${className}`} data-origin={origin} role="dialog" aria-labelledby="vt-link-title" data-e2e="link-sheet">
+    <div className={`pop link ${className}`} style={{ transformOrigin: origin }} role="dialog" aria-labelledby="vt-link-title" data-e2e="link-sheet">
       <div className="pop-head">
         <span className="title">
           <i />

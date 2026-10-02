@@ -11,7 +11,7 @@
  * would close the very dialog being reported. Bubble-phase stops on the host
  * — no preventDefault, so buttons and the textarea still focus.
  */
-import { RRWEB_BLOCK_ATTR } from '../capture/rrweb';
+import { RRWEB_BLOCK_ATTR } from '../block';
 import { HOST_STYLE, SHEET_HOST_STYLE } from './styles';
 
 const SHIELDED = [

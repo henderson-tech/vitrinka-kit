@@ -1,5 +1,51 @@
 # @vitrinka/web
 
+## 0.2.0
+
+- **Stop is in the pill.** A ■ next to the other tools. It asks inline
+  ("Stop & save? Stop · Keep recording"; Esc or Keep cancels). Then the pill
+  says **Saving…**, with a spinner and a progress bar while the tail drains.
+  Then it says **Saved · Open board**, with the server's board link. That
+  stays until you dismiss it. If the server cannot be reached, the pill says
+  so and offers **Retry**. Nothing is lost. Unlink asks the same way.
+- **Recents and the account.** The ⋯ menu (now on the idle puck too) names
+  who the recorder is linked as: `you@… · Workspace`, or `Recorder key ·
+  <name> · project <p>` for a key build. It lists the device's last five
+  recordings, with age, length, status and a link to each board. It has
+  **Go to vitrinka**. A recent without a board link is refreshed from the
+  session's own read.
+- **Eight spots, and a vertical pill.** Move to is a miniature screen with
+  eight spots: a 3×3 grid without the centre. At middle left and middle
+  right, the recording pill stands up and becomes vertical. Its menu,
+  tooltips and sheets open sideways. A pushed-away tab comes back to the
+  nearest third of its edge.
+- **Tooltips never clip.** There is one tooltip, and it shows the shortcut.
+  It is placed inside the viewport, flipping and shifting as needed from
+  every spot. Menus, sheets and the details card follow the same placement.
+- **A sync chip you can read.** `synced`, `sending N`, `offline · N` or
+  `ended`, with an icon and a colour for each, and no hover needed. A routine
+  2s flush does not flicker it.
+- **Size and technical details.** S · M · L scales the whole HUD. Technical
+  details shows events, queue and chunks, last sync, server seq, session id
+  and recorder version. Both are user prefs (`GET`/`PATCH
+  /api/v1/recorder/me`) and are cached on the device. They stay on the
+  device for key builds, servers without the route, and offline.
+- **"Saved" on the pill** for a moment after a note or annotation.
+- **Annotate does not touch the page.** A drag over text no longer selects
+  it. Presses, moves and hovers no longer reach the app. The crosshair is
+  set by a blocked stylesheet, so the page's `<html>` is never restyled.
+- The record dot's ripple is drawn outside layout, so the dot and the clock
+  are spaced evenly.
+- **The HUD is a seam.** `@vitrinka/web/hud` exports
+  `mountRecorderHud(controller, opts)` and the `HudController` contract. The
+  in-page recorder is one implementation of it. `build/hud.iife.js`
+  (`@vitrinka/web/hud.iife.js`) is the same mount as one self-contained
+  script with React bundled in. It defines `globalThis.VitrinkaHud.mount`.
+- The HUD's surfaces stay out of the recording. The rrweb-blocked host is
+  0×0. rrweb 2 cannot drop a blocked node entirely, so it leaves an empty,
+  zero-size placeholder. Clicks, the recorder's own requests and `vitrinka:`
+  logs are not captured.
+
 ## 0.1.5
 
 - **A `project` prop.** `VitrinkaRecorderRoot` takes `project`. A

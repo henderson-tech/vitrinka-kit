@@ -31,13 +31,14 @@ import {
   type SessionState,
   setState,
 } from './queue';
+import { noteRecent, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
 
 export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.1.5';
+export const RECORDER_VERSION = '0.2.0';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -146,6 +147,13 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   resetQueues();
   resetHealth();
   resetIdle();
+  noteRecent({
+    sessionId: ses.id,
+    title: ses.title,
+    startedAt: Date.now(),
+    status: 'recording',
+    ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
+  });
   await attachTags(ses.id, opts.tags);
   armReconcile();
   pushEvent(
@@ -264,6 +272,8 @@ export function onBeforeStop(fn: () => void): () => void {
 export async function stopSession(): Promise<SessionDone | null> {
   const rec = getState();
   if (!rec) return null;
+  // The recording's length is what the tester saw at Stop, not Stop + drain.
+  const durationMs = elapsedOf(rec);
   disarmReconcile();
   for (const fn of beforeStopHooks) {
     try {
@@ -274,6 +284,7 @@ export async function stopSession(): Promise<SessionDone | null> {
   }
   const completeDeadStop = (reason: string | undefined): never => {
     const kept = queuedCount();
+    updateRecent(rec.sessionId, { status: 'unsaved', durationMs });
     setState(null);
     setRedactionPolicy(null);
     resetQueues();
@@ -312,6 +323,9 @@ export async function stopSession(): Promise<SessionDone | null> {
       throw e;
     }
   }
+  // A permanent refusal still ends the recording locally, but it was not saved.
+  const boardUrl = done?.board?.url ?? rec.boardUrl;
+  updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
   setState(null);
   setRedactionPolicy(null);
   resetQueues();
