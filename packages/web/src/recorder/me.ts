@@ -105,7 +105,15 @@ function isMe(o: unknown): o is RecorderMe {
   return (m.kind === 'linked' || m.kind === 'key') && typeof ws?.slug === 'string' && typeof ws.name === 'string';
 }
 
-function adopt(me: unknown): HudAccount | null {
+/**
+ * Local edits so far. A response carries the count from when its request
+ * left, and its prefs count only if no edit happened since: a menu GET that
+ * overlaps a size change, or two PATCHes answering out of order, never
+ * revert the newest choice. The account is always taken.
+ */
+let edits = 0;
+
+function adopt(me: unknown, gen: number): HudAccount | null {
   if (!isMe(me)) {
     console.warn('vitrinka: /recorder/me answered an unexpected shape — ignored');
     return cachedAccount();
@@ -120,7 +128,7 @@ function adopt(me: unknown): HudAccount | null {
   meCache = account;
   write(ME_KEY, account);
   const server = parsePrefs(me.prefs);
-  if (server) storePrefs(server);
+  if (server && gen === edits) storePrefs(server);
   notify();
   return account;
 }
@@ -128,8 +136,9 @@ function adopt(me: unknown): HudAccount | null {
 /** Ask the server who this token is; null when unlinked, unavailable or refused. Never rejects. */
 export async function fetchMe(): Promise<HudAccount | null> {
   if (!vitrinkaLinked() || unavailable) return cachedAccount();
+  const gen = edits;
   try {
-    return adopt(await api<unknown>('GET', '/api/v1/recorder/me'));
+    return adopt(await api<unknown>('GET', '/api/v1/recorder/me'), gen);
   } catch (e) {
     if (soft(e)) noteUnavailable(e);
     else console.warn('vitrinka: /recorder/me failed', e);
@@ -145,10 +154,11 @@ export async function fetchMe(): Promise<HudAccount | null> {
 export async function savePrefs(patch: Partial<HudPrefs>): Promise<HudPrefs> {
   const next = { ...cachedPrefs(), ...patch };
   storePrefs(next);
+  const gen = ++edits;
   notify();
   if (!vitrinkaLinked() || unavailable || cachedAccount()?.kind === 'key') return next;
   try {
-    adopt(await api<unknown>('PATCH', '/api/v1/recorder/me', { prefs: patch }));
+    adopt(await api<unknown>('PATCH', '/api/v1/recorder/me', { prefs: patch }), gen);
   } catch (e) {
     if (e instanceof VitrinkaApiError && e.status === 409) return next;
     if (soft(e)) noteUnavailable(e);
@@ -163,4 +173,5 @@ export function __resetMeForTests(): void {
   meCache = undefined;
   unavailable = false;
   warned = false;
+  edits = 0;
 }

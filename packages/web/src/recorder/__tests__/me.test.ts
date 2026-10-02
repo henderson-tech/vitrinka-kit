@@ -10,7 +10,7 @@ import { cachedPrefs, fetchMe, savePrefs } from '../me';
 import { getRecorderStorage } from '../storage';
 import { BASE, freshRecorder } from './stub';
 
-type Answer = { status: number; body?: unknown } | 'network';
+type Answer = { status: number; body?: unknown; gate?: Promise<void> } | 'network';
 
 let answers: Answer[];
 let calls: { method: string; path: string; body: unknown; auth: string }[];
@@ -30,6 +30,7 @@ beforeEach(() => {
     });
     const a = answers.shift() ?? { status: 404 };
     if (a === 'network') throw new TypeError('Failed to fetch');
+    if (a.gate) await a.gate;
     return new Response(a.body === undefined ? '' : JSON.stringify(a.body), { status: a.status });
   }) as typeof fetch;
 });
@@ -88,6 +89,29 @@ describe('recorder/me', () => {
     expect(await fetchMe()).toBeNull();
     expect(warn).toHaveBeenCalledTimes(2); // once per document (two fresh recorders)
     warn.mockRestore();
+  });
+
+  it('a slow GET or PATCHes answering out of order never revert the newest edit', async () => {
+    const held = () => {
+      let release = () => undefined as void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      return { gate, release };
+    };
+    const slowGet = held();
+    answers.push({ ...me({ size: 'sm', verbose: false }), gate: slowGet.gate });
+    const get = fetchMe(); // the menu opened…
+    const slowPatch = held();
+    answers.push({ ...me({ size: 'lg', verbose: false }), gate: slowPatch.gate });
+    const first = savePrefs({ size: 'lg' }); // …the tester picks L, then M
+    answers.push(me({ size: 'md', verbose: false }));
+    await savePrefs({ size: 'md' });
+    slowPatch.release();
+    await first;
+    slowGet.release();
+    expect((await get)?.user?.email).toBe('lukas@example.test'); // the account still lands
+    expect(cachedPrefs().size).toBe('md');
   });
 
   it('asks nothing when the device is not linked', async () => {
