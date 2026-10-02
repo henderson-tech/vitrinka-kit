@@ -82,6 +82,11 @@ Vite and plain React work the same way — pass `url` / `recorderKey` from
 `import.meta.env` (the `NEXT_PUBLIC_*` fallback only applies where a
 bundler inlines `process.env`).
 
+One origin serving several apps by path (`/portal/`, `/designer/`, …)
+can file each app's sessions into its own project: pass `project` per app.
+Without it, the host's project rule decides; a recorder key's project pin
+always wins, and a different `project` is refused.
+
 ### Env vars
 
 | Var | What |

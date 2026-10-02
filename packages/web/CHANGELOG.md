@@ -1,5 +1,12 @@
 # @vitrinka/web
 
+## 0.1.5
+
+- **A `project` prop.** `VitrinkaRecorderRoot` takes `project`. A
+  device-linked session then files into that project instead of the one the
+  host's rule picks. One origin that serves several apps by path can now send
+  each app's sessions to its own project. A recorder key's pin still wins.
+
 ## 0.1.4
 
 - **Annotate works by finger.** On a phone or tablet, a drag in annotate

@@ -5,10 +5,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import { configureRecorder } from '../config';
 import { getState } from '../queue';
 import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
-import { fakeLocation, freshRecorder, installStub, type Stub } from './stub';
+import { BASE, fakeLocation, freshRecorder, installStub, type Stub } from './stub';
 
 let stub: Stub;
 
@@ -48,6 +49,18 @@ describe('session', () => {
     expect(patch.body).toEqual({ status: 'done' });
     expect(done?.board?.url).toBe('https://vitrinka.test/acme/b/example-session-1?x=1');
     expect(getState()).toBeNull();
+  });
+
+  it('names the configured project on create, and omits it when unset', async () => {
+    await startSession();
+    const bare = stub.calls.find((c) => c.path === '/api/v1/sessions' && c.method === 'POST')!;
+    expect(bare.body).not.toHaveProperty('project');
+    await stopSession();
+
+    configureRecorder({ url: BASE, project: 'powerflow' });
+    await startSession();
+    const named = stub.calls.filter((c) => c.path === '/api/v1/sessions' && c.method === 'POST').at(-1)!;
+    expect(named.body).toMatchObject({ host: 'app.example.test', project: 'powerflow' });
   });
 
   it('pause PATCHes the status and freezes capture', async () => {
