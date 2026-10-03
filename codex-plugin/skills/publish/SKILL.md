@@ -104,8 +104,8 @@ Per-kind payload contracts: the `docs` MCP tool; kind index + doctrine:
   pixel-space crops and face versioning only exist on shot/media cards.
   pin: e2e/board-v5.spec.ts#lightbox from the deck: full image, version filmstrip after swap, ⌖ target
 - **"Review these screens and annotate what's off"** is the `annotate` tool
-  (native staged annotations with regions — `get_card_image` per screen
-  first), never a `finding`/document card and never `highlight`; docs topic
+  (native staged annotations with regions — survey with `get_card_image
+  {cardIds}`, measure on a single-card read), never a `finding`/document card and never `highlight`; docs topic
   `annotation`.
 - **Every board ends with ONE summary `callout`** — verdict, counts, links,
   what was NOT covered; later passes UPDATE it, never stack a second.

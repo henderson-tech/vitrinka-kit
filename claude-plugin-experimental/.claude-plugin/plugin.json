@@ -1,6 +1,6 @@
 {
   "name": "vitrinka-experimental",
-  "version": "5.16.0",
+  "version": "5.16.1",
   "displayName": "Vitrinka Experimental",
   "description": "Exp — the split build-idea that hands a feature to the human after one quick \"does it work\" check, and the ask-first device test skill that runs only the lanes, breakpoints and iOS checks you pick, then files results into device tabs and the task engine. Claude Code only; the core vitrinka plugin stays required.",
   "author": {

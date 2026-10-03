@@ -316,7 +316,8 @@ function repoProblem(want, got) {
 
 // Every list of a pass (screens, review batches, raw reviews, backlog items,
 // fix lanes) lives in the pass directory and is planned by `vybava ui-loop`
-// (state, batches, merge-review, lanes, checkpoints; see UILOOP_MIN_VYBAVA). An agent relays a verb's
+// (state, doctor, batches, merge-review, lanes, checkpoints; see
+// UILOOP_STATE_CONTRACT). An agent relays a verb's
 // envelope and reads item bodies from disk by key; it never enumerates a list
 // itself — agents dropped or summarized them (pwf-ui pass 1: a backlog from 7
 // of 31 batches, a refused 340-item backlog, a fix stage with 0 lanes). The
@@ -343,42 +344,83 @@ function lanesProblem(state, lanes) {
   return ''
 }
 
-// The verify pass's `--only`, computed on disk: every screen an open backlog
-// item names plus every screen a done checkpoint says its fix changed. The
-// checkpoints come from `vybava ui-loop checkpoints`, never a `fix/*.json`
-// glob: a backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and
-// the verb also drops stale checkpoints and the fix/r<N>/ archives.
-function verifyOnlyCommand(passDir, pass) {
-  return `{ jq -r '.findings[] | select(.status != "met") | .screen' ${passDir}/review/backlog.json; ` +
-    `${checkpointsCommand(pass)} | jq -r '.data.checkpoints[] | select(.status == "done") | .screens[]?'; } | sort -u | paste -sd, -`
-}
-
 // The admitted fix checkpoints of a pass, as one envelope: {data: {pass,
 // passDir, checkpoints: [{key, status, lane, basis, commit, fileDigests,
-// apiChanges, screens, i18n, note}]}}. The only way a stage reads them.
+// apiChanges, screens, i18n, note}]}}. The only way a stage reads them: a
+// backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and the verb
+// also drops stale checkpoints and the fix/r<N>/ archives.
 function checkpointsCommand(pass) {
   return `vybava ui-loop checkpoints --pass ${pass} --json`
 }
 
-// The oldest Výbava the ui-loop stages run on: v0.27.2 reads checkpoints
-// recursively and ships `ui-loop checkpoints`. An older binary does not fail
-// loudly — a missing verb pipes nothing into jq and the verify pass silently
-// loses the fixed screens; the 5.14.1 skew showed a stale vybava mis-drives
-// the loop without an error. So Prepare relays `vybava --version` and the run
-// stops here instead. A source build prints a bare `dev` and passes.
-const UILOOP_MIN_VYBAVA = '0.27.2'
+// The `vybava ui-loop state` contract the stages read: Výbava's
+// `StateContract`, bumped whenever a field a workflow reads is added or
+// changes format, digests included. An older binary does not fail loudly — a
+// missing verb pipes nothing into jq, an omitted field once pushed relaying
+// agents to invent a placeholder, and the 5.14.1 skew showed a stale vybava
+// mis-drives the loop without an error. A semver floor let every source build
+// (`dev`) through and named a release rather than the fields the workflow
+// reads, so the gate is the integer the state itself reports. Contract 2
+// moved staleness into the state: `drift` and the verify selection
+// `next.only`, which the workflow once computed in prose and shell.
+const UILOOP_STATE_CONTRACT = 2
 
-function vybavaProblem(reported) {
-  const text = String(reported || '').trim()
-  const upgrade = `ui-loop needs vybava v${UILOOP_MIN_VYBAVA} or later: run \`brew upgrade --cask vybava\`, then rerun the stage`
-  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
-  if (!m) return /\bdev$/.test(text) ? '' : `prepare relayed no vybava version (\`vybava --version\` printed ${JSON.stringify(text)}) — ${upgrade}`
-  const want = UILOOP_MIN_VYBAVA.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const have = Number(m[i + 1])
-    if (have !== want[i]) return have > want[i] ? '' : `vybava ${m[0]} is installed — ${upgrade}`
-  }
+// Stops a vybava below the contract with the upgrade. `reported` is the
+// `vybava --version` line Prepare relays, only diagnostic text for the message.
+function contractProblem(state, reported) {
+  const have = state ? state.contract : undefined
+  const installed = String((state && state.vybava) || reported || '').trim()
+  const upgrade = `install the newer vybava with \`brew upgrade --cask vybava\`, then rerun the stage`
+  if (have === undefined || have === null) return `vybava ui-loop state reports no contract, so the installed vybava${installed ? ` (${installed})` : ''} predates ui-loop state contract ${UILOOP_STATE_CONTRACT} — ${upgrade}`
+  if (!Number.isInteger(have)) return `prepare relayed state.contract ${JSON.stringify(have)}, not the integer vybava prints — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if (have < UILOOP_STATE_CONTRACT) return `vybava${installed ? ` ${installed}` : ''} reports ui-loop state contract ${have}; the stages need ${UILOOP_STATE_CONTRACT} — ${upgrade}`
   return ''
+}
+
+// The state fields the CLI owns and the stages decide on. The schema leaves
+// them optional so a relay omits what the CLI did not print instead of
+// inventing it; this check stops the run on the omission or a value in
+// another format. A pass-0 state prints an empty basis and an empty
+// capturedHeadSha means a pass without capture provenance.
+const UILOOP_STATE_FIELDS = ['reviewBasis', 'capturedHeadSha', 'sourceUnchanged', 'scoreboardCurrent', 'config.lint.grid', 'config.lint.touchTarget']
+
+function stateProblem(state) {
+  const at = path => path.split('.').reduce((v, k) => (v == null ? undefined : v[k]), state)
+  const missing = UILOOP_STATE_FIELDS.find(f => at(f) == null)
+  if (missing) return `vybava did not report ${missing}: upgrade vybava (\`brew upgrade --cask vybava\`), then rerun the stage`
+  const bad = (field, value, want) => `state.${field} is ${JSON.stringify(value)}, not ${want} — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if ((state.pass || state.reviewBasis) && !/^[0-9a-f]{64}$/.test(state.reviewBasis)) return bad('reviewBasis', state.reviewBasis, 'a 64-hex digest')
+  if (state.capturedHeadSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(state.capturedHeadSha)) return bad('capturedHeadSha', state.capturedHeadSha, 'one full commit SHA')
+  for (const f of ['grid', 'touchTarget']) if (!(Number.isInteger(state.config.lint[f]) && state.config.lint[f] > 0)) return bad(`config.lint.${f}`, state.config.lint[f], 'a positive integer')
+  // A reported drift is whole; a verify always names its selection ([] is a
+  // full reshoot). The router runs both verbatim. A null drift is no relay
+  // fault: contract 2 prints it for a pass whose provenance it cannot read
+  // (no capture.json, or a revision this clone lacks), and the router hands
+  // such a pass back for a capture. An omitted drift is: contract 2 always
+  // prints the field, so only the relay can have dropped it.
+  const ids = v => Array.isArray(v) && v.every(s => typeof s === 'string')
+  const drift = state.drift
+  if (drift === undefined) return `prepare relayed no state.drift, which contract ${UILOOP_STATE_CONTRACT} always prints (null for a pass without provenance) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if (drift && !(ids(drift.app) && ids(drift.rig) && ids(drift.spec) && Number.isInteger(drift.appTotal) && drift.appTotal >= drift.app.length)) return bad('drift', drift, '{app, rig, spec: path or rule id arrays, appTotal ≥ app.length}')
+  const only = state.next && state.next.only
+  if (only != null && !ids(only)) return bad('next.only', only, 'an array of screen ids')
+  if (state.next && state.next.stage === 'verify' && only == null) return bad('next.only', only, 'the verify selection (screen ids, [] for a full reshoot)')
+  return ''
+}
+
+// `vybava ui-loop doctor --for <stage>` stops the stage on a failing check,
+// naming each one's detail and fix. A check the stage does not need reports
+// warn, never fail, so a warning never stops it. A doctor that errs before
+// its checks prints no data: Prepare relays its diagnostics as problems.
+function doctorProblem(doctor, problems = []) {
+  if (!doctor || typeof doctor.ok !== 'boolean' || !Array.isArray(doctor.checks)) {
+    return problems.length
+      ? `prepare relayed no \`vybava ui-loop doctor --json\` data; its problems: ${problems.join('; ')} — fix what they name (or relay the doctor's data verbatim), then rerun the stage`
+      : 'prepare relayed no `vybava ui-loop doctor --json` envelope — relay its data verbatim as doctor; rerun the stage'
+  }
+  if (doctor.ok) return ''
+  const failing = doctor.checks.filter(c => c && c.status === 'fail')
+  return `vybava ui-loop doctor failed ${failing.length ? failing.map(c => `${c.id}: ${c.detail}${c.fix ? ` (fix: ${c.fix})` : ''}`).join('; ') : 'without naming a failing check'} — fix it, then rerun the stage`
 }
 
 // A lane's keys the lane reports as finished (done, skipped, blocked).
@@ -415,15 +457,26 @@ const UILOOP_DETECT_SCHEMA = {
 }
 
 // `vybava ui-loop state --json` data, relayed verbatim (Výbava docs/uiloop.md
-// "Stage verbs"): counts, never item bodies.
+// "Stage verbs"): counts, never item bodies. The fields the CLI owns are
+// optional here and checked in code (stateProblem, contractProblem): a
+// required one pushed relaying agents to invent a placeholder when an older
+// vybava omitted it.
+const UILOOP_CLI_OWNED = 'copy it verbatim from the CLI\'s output; OMIT it when the CLI did not print it — never invent a value or placeholder'
 const UILOOP_STATE = {
   type: 'object',
-  description: 'the `data` of `vybava ui-loop state --json`, verbatim',
+  description: 'the `data` of `vybava ui-loop state --json`, verbatim: copy every field the CLI printed and omit every field it did not, never inventing one',
   properties: {
+    contract: { type: 'integer', description: `the ui-loop state contract; ${UILOOP_CLI_OWNED}` },
+    vybava: { type: 'string', description: `the binary's version; ${UILOOP_CLI_OWNED}` },
     recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
-    headSha: { type: 'string' }, reviewBasis: { type: 'string' }, capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, scoreboardBasis: { type: 'string' }, scoreboardCurrent: { type: 'boolean' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
+    headSha: { type: 'string' }, scoreboardBasis: { type: 'string' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
+    reviewBasis: { type: 'string', description: `a 64-hex digest (empty before the first pass); ${UILOOP_CLI_OWNED}` },
+    capturedHeadSha: { type: 'string', description: `a full commit SHA, or empty; ${UILOOP_CLI_OWNED}` },
+    sourceUnchanged: { type: 'boolean', description: `true when drift.app is empty; ${UILOOP_CLI_OWNED}` },
+    drift: { type: ['object', 'null'], description: `what changed since the captured revision — app: source paths (at most 20; appTotal counts them all), rig: paths under uiLoop.dir, spec: the rule ids whose text changed in uiLoop.spec; null for a pass without provenance or one whose revision this clone lacks; ${UILOOP_CLI_OWNED}`, properties: { app: { type: 'array', items: { type: 'string' } }, rig: { type: 'array', items: { type: 'string' } }, spec: { type: 'array', items: { type: 'string' } }, appTotal: { type: 'integer' } }, required: ['app', 'rig', 'spec', 'appTotal'] },
+    scoreboardCurrent: { type: 'boolean', description: UILOOP_CLI_OWNED },
     pass: { type: 'integer' }, passDir: { type: 'string' },
-    config: UILOOP_CONFIG,
+    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } } } },
     shots: { type: 'integer' }, screens: { type: 'integer' },
     areas: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, screens: { type: 'integer' } }, required: ['area', 'screens'] } },
     published: { type: 'boolean' }, unpublished: { type: 'array', items: { type: 'string' } },
@@ -433,9 +486,23 @@ const UILOOP_STATE = {
     previous: { type: ['object', 'null'], properties: { pass: { type: 'integer' }, file: { type: 'string' }, open: { type: 'integer' } } },
     checkpoints: { type: 'object', properties: { total: { type: 'integer' }, byStatus: { type: 'object' } } },
     boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
-    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' } }, required: ['stage', 'resume', 'reason'] },
+    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' }, only: { type: ['array', 'null'], items: { type: 'string' }, description: `the screen ids a verify or a reshooting capture shoots, every one ([] is a full reshoot), null on other stages; ${UILOOP_CLI_OWNED}` } }, required: ['stage', 'resume', 'reason'] },
   },
-  required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next', 'reviewBasis', 'capturedHeadSha', 'sourceUnchanged', 'scoreboardCurrent'],
+  required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next'],
+}
+
+// `vybava ui-loop doctor --for <stage> --json` data, relayed verbatim: `ok` is
+// false iff a check failed; a check the stage does not need reports warn.
+const UILOOP_DOCTOR = {
+  type: 'object',
+  description: 'the `data` of `vybava ui-loop doctor --json`, verbatim, also when it exits non-zero; omit it entirely when it printed no data (an unknown verb, or an error before its checks) and put its diagnostics in problems',
+  properties: {
+    ok: { type: 'boolean' },
+    vybava: { type: 'string' },
+    contract: { type: 'integer' },
+    checks: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warn', 'fail', 'skip'] }, detail: { type: 'string' }, fix: { type: 'string' } }, required: ['id', 'status', 'detail'] } },
+  },
+  required: ['ok', 'checks'],
 }
 
 const UILOOP_BATCH = { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' }, screens: { type: 'array', items: { type: 'string' } } }, required: ['id', 'area', 'screens'] }
@@ -449,19 +516,19 @@ const UILOOP_PREP_SCHEMA = {
     branch: { type: 'string' },
     repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
-    vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim; empty when there is no vybava binary' },
+    vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim (diagnostic text only); empty when there is no vybava binary' },
     state: UILOOP_STATE,
+    doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } } }, required: ['screens', 'batches', 'done', 'left'] },
     lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'repo', 'vybava'],
+  required: ['configured', 'branch', 'repo'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
   type: 'object',
   properties: {
-    capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' },
     pass: { type: 'integer' },
     passDir: { type: 'string' },
     shots: { type: 'integer' },
@@ -470,7 +537,7 @@ const UILOOP_CAPTURE_SCHEMA = {
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'shots', 'published', 'capturedHeadSha', 'sourceUnchanged'],
+  required: ['pass', 'shots', 'published'],
 }
 
 const UILOOP_BOARDS_SCHEMA = {
