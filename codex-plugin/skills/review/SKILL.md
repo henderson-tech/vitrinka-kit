@@ -63,10 +63,14 @@ command's arguments.
 
 ## Phase 1 (local) — review the screens yourself
 
-1. `get_card_image {board, cardId}` per shot card in scope — measure on the
-   pixels, not on the thumbnail or the card's text. Read every screen
-   before filing anything: cross-cutting problems (one contrast token, one
-   spacing scale) show up only across the set.
+1. Survey the set with `get_card_image {board, cardIds:[…]}` — one
+   labelled sheet per call (≤12 cards): cross-cutting problems (one
+   contrast token, one spacing scale) show up only across the set. Then
+   `get_card_image {board, cardId}` for every screen you will file on and
+   measure on those pixels, never on a sheet, a thumbnail or the card's
+   text. Image bytes never leave a tool result: no base64 in a shell
+   command, no image files written to build your own montage — that is
+   what the sheet is for.
 2. Judge each screen against the brief from Phase 0. Every finding names
    the rule it breaks, the region on the image, and what correct looks
    like. Sort into `finding` (a defect) and `suggestion` (taste).

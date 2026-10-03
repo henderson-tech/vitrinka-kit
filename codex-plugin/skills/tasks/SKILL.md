@@ -59,7 +59,9 @@ carries only the laws the verbs do not print.
 ## The doors
 
 - **Intake is the ONLY way a draft becomes a task**: `propose_tasks`
-  (deduped, `list {kind:"intake"}` shows the verdict) → a human's `intake_verdict`.
+  (deduped, `list {kind:"intake"}` shows the verdict) → a human's `intake_verdict`,
+  or the work itself: a session run on a draft, or a PR claiming it, accepts
+  it — so never start a run on a draft you only meant to read.
   The pending queue reads uncapped across every project or one, by `group`
   (`stale` · `plan` · a source kind), with `view: "summary"` for the counts
   alone; a batch verdict is ONE `intake_verdict {ids}` call.
@@ -108,6 +110,7 @@ carries only the laws the verbs do not print.
 - **Scope**: categories are permanent vocabulary; epics are finite outcomes. `origin` records who requested work, independently of the filing actor; never guess historical Unknown. Admission uses existing Intake. Children/follow-ups inherit approved scope; verified bugs use coverage, ambiguous matches ask, unverified bugs and enhancements enter Intake.
 - **Sprints** allow optional dates and concurrent active scopes. Bind the session explicitly to a sprint or none before feature creation. Read bounded members → preview selected carry → apply that exact preview with a stable request ID; a stale version means reread and review. No implicit carry or deletion.
 - **Readiness**: required Before/Ship obligations block shipment; After obligations block closure. Deferral needs an owner and typed trigger. Candidates bind exact repository revisions/builds; a cut release is not deployment. Agents may cite evidence, never verify it or declare shipment. Now and history work without Eve.
+- **History** answers "what happened": `get {kind:"history_chapter"}` is one chapter's spread (cover, narrative, numbers, boards, documents); `update` rewrites its narrative or pins its cover; `create {kind:"history_edition"}` exports chapters as a doc artifact. Merged work reaches `shipped` only through production deploy marks.
 - **Rules** are typed documents (`GET /api/v1/rules/schema`): ALWAYS
   `dry_run_rule` and show what would have fired before enabling; admin-only
   to create or enable.

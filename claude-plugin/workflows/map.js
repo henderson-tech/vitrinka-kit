@@ -269,13 +269,22 @@ const UILOOP_RULES = [
   'Owner decisions written in the spec are final — never re-litigate them.',
 ]
 
+// A checkpoint's `commit`, as every writer (lane, Settle, Recover) records it.
+// The CLI admits a checkpoint in a pass with capture.json only when `commit`
+// is ONE full SHA (40 or 64 hex) that is an ancestor of HEAD; a skip or block
+// is further admitted only while the source is unchanged since that commit.
+// pwf-ui pass 1 recorded `"commit"` loosely — 332 of 340 were short SHAs,
+// empty, comma lists or a repo/branch string — and a strict pass silently
+// counts every such item open again: its strings, its verify screens lost.
+const UILOOP_CHECKPOINT_COMMIT = 'the full 40-hex SHA `git rev-parse HEAD` prints right after the item\'s own commit (a skip or block commits nothing: the HEAD at checkpoint time) — one SHA, never abbreviated, never a list, never a repo or branch name'
+
 const UILOOP_FIX_RULES = [
   'One item at a time: understand the defect in code first, then make minimal, surgical edits in the repo\'s idiom — the provider before the consumer, the class half before the template half.',
   'OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane. Edit ONLY files directly inside your lane\'s dirs — not their subdirectories unless listed. A fix that needs a file outside them is not made: checkpoint the item blocked with the exact change (file, what to change) as its note.',
   'i18n catalogs (a .json under an `i18n` directory) are owned by nobody: never edit one. A fix that needs a new or changed string uses the key in code and lists it in its checkpoint and your return as i18n [{key, <locale>: text}] (every locale the catalogs carry); the settle step adds them.',
   'After every edit the shared dev server must stay green: wait ~20 s, read its log (`devbox logs <app>` in the workspace); an error your edit caused is fixed at once or reverted within 5 minutes. Another lane\'s red is not yours: note it and keep going.',
   'Commit each item path-limited: `git add <your files>` then `git commit -m "fix(<scope>): <what> (<key>)" -- <your files>` — never `git add -A`, never a bare `git commit`, never stash, reset, rebase or push. An index.lock collision means another lane is committing: wait 3 s and retry.',
-  'After the commit write the item\'s checkpoint <passDir>/fix/<key>.json = {"v":1,"basis":the review basis,"key","lane","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"fileDigests":{repo-relative source path: SHA256 of its bytes},"apiChanges":[…],"note","i18n":[…]} and NEVER commit it (the pass directory is gitignored environment output). Only a checkpoint admitted by the CLI (matching basis, ancestor commit and current source file digests) is finished. Stale checkpoints must be reevaluated. A skip needs a concrete reason (a design decision the spec does not settle, a false finding with evidence); never guess a redesign.',
+  'After the commit write the item\'s checkpoint <passDir>/fix/<key>.json = {"v":1,"basis":the review basis,"key","lane","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"fileDigests":{repo-relative source path: SHA256 of its bytes},"apiChanges":[…],"note","i18n":[…]} and NEVER commit it (the pass directory is gitignored environment output). Its "commit" is ' + UILOOP_CHECKPOINT_COMMIT + '. Only a checkpoint admitted by the CLI (matching basis, ancestor commit and current source file digests) is finished. Stale checkpoints must be reevaluated. A skip needs a concrete reason (a design decision the spec does not settle, a false finding with evidence); never guess a redesign.',
   'Never run a capture (`vybava ui-loop run`), open a browser, restart or re-provision the devbox, or edit <dir>/vendor: judge from the pass\'s shots (Read the PNG) and the code. If you run low on context, stop cleanly after a finished item and return the keys you did not reach in remaining.',
   'After a usage-limit cutoff the successor maps the dirty files to lanes (git status against the checkpoints), commits an in-flight map, and resumes from the first item without a checkpoint.',
   '`cn`/`cx` (tailwind-merge) drop a position or display class beside a recipe that sets one: put layout on a wrapper or extend the recipe. A focus ring follows its control\'s radius; grouped rows take an inset ring.',
@@ -307,7 +316,7 @@ function repoProblem(want, got) {
 
 // Every list of a pass (screens, review batches, raw reviews, backlog items,
 // fix lanes) lives in the pass directory and is planned by `vybava ui-loop`
-// (v0.25.0+: state, batches, merge-review, lanes). An agent relays a verb's
+// (state, batches, merge-review, lanes, checkpoints; see UILOOP_MIN_VYBAVA). An agent relays a verb's
 // envelope and reads item bodies from disk by key; it never enumerates a list
 // itself — agents dropped or summarized them (pwf-ui pass 1: a backlog from 7
 // of 31 batches, a refused 340-item backlog, a fix stage with 0 lanes). The
@@ -335,10 +344,41 @@ function lanesProblem(state, lanes) {
 }
 
 // The verify pass's `--only`, computed on disk: every screen an open backlog
-// item names plus every screen a done checkpoint says its fix changed.
-function verifyOnlyCommand(passDir) {
+// item names plus every screen a done checkpoint says its fix changed. The
+// checkpoints come from `vybava ui-loop checkpoints`, never a `fix/*.json`
+// glob: a backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and
+// the verb also drops stale checkpoints and the fix/r<N>/ archives.
+function verifyOnlyCommand(passDir, pass) {
   return `{ jq -r '.findings[] | select(.status != "met") | .screen' ${passDir}/review/backlog.json; ` +
-    `for f in ${passDir}/fix/*.json; do jq -r 'select(.status == "done") | .screens[]?' "$f"; done; } | sort -u | paste -sd, -`
+    `${checkpointsCommand(pass)} | jq -r '.data.checkpoints[] | select(.status == "done") | .screens[]?'; } | sort -u | paste -sd, -`
+}
+
+// The admitted fix checkpoints of a pass, as one envelope: {data: {pass,
+// passDir, checkpoints: [{key, status, lane, basis, commit, fileDigests,
+// apiChanges, screens, i18n, note}]}}. The only way a stage reads them.
+function checkpointsCommand(pass) {
+  return `vybava ui-loop checkpoints --pass ${pass} --json`
+}
+
+// The oldest Výbava the ui-loop stages run on: v0.27.2 reads checkpoints
+// recursively and ships `ui-loop checkpoints`. An older binary does not fail
+// loudly — a missing verb pipes nothing into jq and the verify pass silently
+// loses the fixed screens; the 5.14.1 skew showed a stale vybava mis-drives
+// the loop without an error. So Prepare relays `vybava --version` and the run
+// stops here instead. A source build prints a bare `dev` and passes.
+const UILOOP_MIN_VYBAVA = '0.27.2'
+
+function vybavaProblem(reported) {
+  const text = String(reported || '').trim()
+  const upgrade = `ui-loop needs vybava v${UILOOP_MIN_VYBAVA} or later: run \`brew upgrade --cask vybava\`, then rerun the stage`
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
+  if (!m) return /\bdev$/.test(text) ? '' : `prepare relayed no vybava version (\`vybava --version\` printed ${JSON.stringify(text)}) — ${upgrade}`
+  const want = UILOOP_MIN_VYBAVA.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const have = Number(m[i + 1])
+    if (have !== want[i]) return have > want[i] ? '' : `vybava ${m[0]} is installed — ${upgrade}`
+  }
+  return ''
 }
 
 // A lane's keys the lane reports as finished (done, skipped, blocked).
@@ -409,12 +449,13 @@ const UILOOP_PREP_SCHEMA = {
     branch: { type: 'string' },
     repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
+    vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim; empty when there is no vybava binary' },
     state: UILOOP_STATE,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } } }, required: ['screens', 'batches', 'done', 'left'] },
     lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'repo'],
+  required: ['configured', 'branch', 'repo', 'vybava'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
