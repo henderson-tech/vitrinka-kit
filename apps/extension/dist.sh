@@ -13,7 +13,7 @@ STAGE="$OUT_DIR/vitrinka-recorder"
 STORE_DIR="$OUT_DIR/webstore"
 rm -rf "$STAGE" "$STORE_DIR" "$OUT_DIR"/vitrinka-recorder-*.zip
 mkdir -p "$STAGE" "$STORE_DIR"
-cp -R manifest.json background.js db.js version.js wire.js content.js hud.html hud.js popup.html popup.js \
+cp -R manifest.json background.js db.js version.js wire.js content.js popup.html popup.js \
       options.html options.js icons vendor INSTALL.md README.md "$STAGE/"
 (cd "$OUT_DIR" && zip -qr "vitrinka-recorder-$VERSION.zip" vitrinka-recorder)
 node -e 'const fs=require("fs"),p=process.argv[1],m=JSON.parse(fs.readFileSync(p,"utf8"));delete m.key;fs.writeFileSync(p,JSON.stringify(m,null,2)+"\n")' \

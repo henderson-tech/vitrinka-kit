@@ -67,16 +67,39 @@ Two things to know before touching any of it:
   pinned at start from the host lookup or the options page) over the options
   page's global default — `activeWorkspace()` in `background.js` is the one
   reading; never read `workspace` straight from config on a session path.
-- **The composer sheet is an extension-origin iframe (`hud.html` + `hud.js`),
-  never markup in the page's shadow root.** A page's focus trap (Radix
-  FocusScope, Headless UI) pulls focus back the moment it leaves the dialog
-  for another element of the same document; it stands down only when focus
-  moves to another document (`relatedTarget === null`). Typing into a
-  shadow-root textarea under a modal went to the modal (2026-09-21). The
-  content script owns placement and open/close over `postMessage`; the frame
-  owns the words, the draft and the board|task pick. The HUD host is a
-  `popover="manual"` element (top layer, above every page `z-index` and a
-  native modal `<dialog>`), re-raised whenever a `dialog[open]` appears.
+- **The HUD is `@vitrinka/web`'s, never drawn here.** `vendor/vitrinka-hud.iife.js`
+  is the package's `build/hud.iife.js` (`globalThis.VitrinkaHud.mount`),
+  pinned in `vendor/vitrinka-hud.pin.json` and written only by
+  `go run ./tools/vendor-hud` (bump: edit the pin's `version`, run it, commit
+  both; `-check` in CI, `TestVendoredHudMatchesPin` offline). `content.js`
+  supplies its `HudController` — a thin adapter over the worker's messages
+  (`vt-status`/`vt-paused`/`vt-health` paint the recording; `vt-hud*` carry
+  the account, prefs and recents `background.js` keeps in
+  `chrome.storage.local`). The HUD's sheet portals into the topmost open
+  dialog itself, so a page's focus trap or a native modal never steals the
+  textarea. A pill or sheet change ships from the kit, then a pin bump here.
+  The pair panel is the one surface the HUD has no seat for: it keeps its own
+  small shadow host in `content.js`, just inside the HUD's spot.
+- **A session id is a number per base AND workspace.** The options page can
+  switch either, and `#12` exists on two servers and in two workspaces of
+  one, so whatever outlives the live recording names its scope beside the id:
+  a recent is `(base, workspace, sessionId)` and the HUD lists only the
+  current scope's; the board wait (`awaiting.scope`) and a queued tail
+  (`queueScope:<id>`) are asked only of their own base, in their own
+  workspace (`api(…, { base })` refuses a read whose base moved). Never match
+  a stored session by id alone, and never send the token to an entry's base
+  unless it is the configured one. Recents from before 0.9.1 named no base
+  and are dropped. The IndexedDB queue itself is still keyed
+  `[sessionId, seq]`, so Start/Continue refuse an id whose other-scope tail
+  is still queued (`refuseForeignTail`) rather than mix the two.
+- **Stored read-modify-writes run on a `serialized()` chain** (`withLock` for
+  `rec`, `withRecents`, `withPrefs`): every `chrome.storage.local`
+  get→await→set that two messages can reach at once needs one, or the
+  slower writer restores what the other just changed. A decision two state
+  reads feed belongs under the lock their writers share: a `queueScope`
+  marker is written with its `rec` and pruned under `withLock`. A request
+  checked against a credential is sent with that same settings read
+  (`api(…, { cred })`), since Settings relinks by writing storage directly.
 
 Without the host (no CLI on the machine) every path above degrades to the old
 manual banner — download, unzip over the folder, ↻.
@@ -86,12 +109,21 @@ manual banner — download, unzip over the folder, ↻.
 - **Start** from the popup on any tab whose host matches a project rule. Other
   tabs on the same project's domains join the session automatically (multi-tab
   journeys: admin + web side by side).
-- The **corner HUD** shows rec · timer · a sync icon · pause · a pencil (note) · a crosshair
-  annotate; hover the pill for the keycaps. Shortcuts: `Alt+Shift+A` annotate (click an element OR drag any
-  region, note, Enter sends, ⇧Enter newline, Esc / ✕ / click outside cancels), `Alt+Shift+N` note, `Alt+Shift+P` pause.
-- **The sync icon is the health answer** (recorder-live D4/D5): a check once the server
-  confirms it holds everything captured, a loader while a backlog drains, a warning when
-  vitrinka is unreachable, a circle-x when the session was closed or deleted
+- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.2.1):
+  rec dot · timer · sync chip · pause · note · annotate · ■ stop · ⋯, at one of
+  eight spots or tucked into an edge. Shortcuts: `Alt+Shift+A` annotate (click
+  an element OR drag any region, note, Enter sends, ⇧Enter newline, Esc / ✕ /
+  click outside cancels), `Alt+Shift+N` note, `Alt+Shift+P` pause,
+  `Alt+Shift+S` stop. The ⋯ menu names the account (`GET /api/v1/recorder/me`,
+  `vkr_` tokens only, 8 s cap; a `vkp_`/`vks_` token reads `API token ·
+  <workspace>`, a failed read the cached account or `Linked device`), lists this
+  browser's last five recordings on the current server and workspace with
+  their boards, and sets the size and the technical details (user prefs; on the
+  device for a key build, a non-recorder token or a server without the route;
+  edits apply in order, one PATCH at a time).
+- **The sync chip is the health answer** (recorder-live D4/D5): `synced` once the server
+  confirms it holds everything captured, `sending N` while a backlog drains,
+  `offline · N` when vitrinka is unreachable, `ended` when the session was closed or deleted
   server-side. Only trouble unfolds a second line; the popup carries the full
   picture (queued items, bytes on disk, last sync, server-confirmed seq).
 - **Crosshair annotations become real board annotations** on the exact frame you
@@ -114,7 +146,10 @@ manual banner — download, unzip over the folder, ↻.
   frozen button; closing the popup is safe, the worker finishes either way.
   Reaching the board is a **separate act** (D3): the popup grows an
   `⧉ Open board` row and a notification fires when the server has finished
-  building it. Stopping never hijacks a tab.
+  building it. Stopping never hijacks a tab. Stopped from the pill, the HUD
+  asks first (Stop & save?), then says **Saving…** and **Saved · Open board**
+  with the server's link; offline, it keeps the session and offers Retry.
+  Dismissed, it rests as a Start button on that tab until the page goes.
 
 ## What gets captured
 
@@ -124,7 +159,7 @@ manual banner — download, unzip over the folder, ↻.
 | clicks | content script (capture phase) | selector, text, element rect in image px |
 | navigation | `webNavigation` (full + SPA history) | no page-world patching needed |
 | network | `chrome.debugger` CDP, XHR/fetch/document + worker/SW targets | req+resp bodies capped 64 KiB, headers capped 8 KiB/side; WS connections logged (frames NOT captured yet); degrades gracefully when DevTools holds the tab |
-| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off) | uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
+| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off, the recorder's own `[data-vitrinka-recorder]` surfaces blocked) | uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
 | console errors | CDP `Runtime` (page world, incl. uncaught exceptions) | |
 | notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation, and an intake draft too when the tester picks `task` |
 
