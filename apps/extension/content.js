@@ -1,19 +1,40 @@
 // Vitrinka Journey Recorder — content script (isolated world).
 // Captures clicks (selector + text + rect in image px), records the DOM via
-// rrweb (vendor/rrweb-record.min.js injected before this file), and renders
-// the corner HUD (D10 take A): rec dot · timer · pause · note · snap, plus
-// the element-pick/region-drag snap flow. All UI lives in an OPEN shadow root
-// (e2e asserts into it) — style isolation only; the page can reach in, which
-// is acceptable for a dev tool. Idempotent: re-injection (SPA navs,
-// SW restarts) is a no-op while the previous instance is alive.
+// rrweb (vendor/rrweb-record.min.js injected before this file), and mounts
+// the shared recorder HUD — @vitrinka/web's, vendor/vitrinka-hud.iife.js,
+// the same pill, sheets, annotate mode and ⋯ menu the in-app recorder shows —
+// through a HudController backed by the service worker (the adapter below).
+// The pair panel keeps its own small shadow host: the HUD has no seat for it.
+// Every recorder surface carries data-vitrinka-recorder, which keeps it out
+// of rrweb and out of the click lane.
+//
+// Idempotent: re-injection (SPA navs, SW restarts) is a no-op while the
+// previous instance records. A NEW session in the same document (Start on
+// the HUD a stop left behind, or the popup) retires the previous instance —
+// its listeners, its HUD — before this one takes over.
 
 (() => {
-  if (window.__vitrinkaRecorder) return;
-  window.__vitrinkaRecorder = true;
+  const prev = window.__vitrinkaRecorder;
+  if (prev && prev.live !== false) return;
+  if (prev && prev.retire) prev.retire();
+  const self = { live: true, retire: () => undefined };
+  window.__vitrinkaRecorder = self;
+  // Undone by endCapture (the session stopped) and retire (a new instance).
+  const captureOff = [];
+  const off = (fn) => captureOff.push(fn);
 
   const send = (msg) => new Promise((res) => {
     try { chrome.runtime.sendMessage(msg, res); } catch { res(null); }
   });
+  // Every recorder surface: the HUD host, a sheet it portals into a dialog,
+  // the annotate stylesheet, the pair host. rrweb blocks them; clicks on them
+  // are the tester's, not the journey's.
+  const RECORDER_SEL = "[data-vitrinka-recorder]";
+  // The HUD's annotate mode (HudSnapshot.annotating) owns the page pointer.
+  let annotating = false;
+  // Settles once the HUD is mounted (or will not be); rrweb starts after it.
+  let hudMountedDone = () => undefined;
+  const hudMounted = new Promise((res) => { hudMountedDone = res; });
 
   // -------------------------------------------------------------------------
   // click capture (capture phase — sees clicks the app swallows)
@@ -41,10 +62,10 @@
     return { x: Math.round(r.x * s), y: Math.round(r.y * s), w: Math.round(r.width * s), h: Math.round(r.height * s) };
   };
 
-  document.addEventListener("click", (e) => {
-    if (picking) return; // pick mode owns the click
+  const onClick = (e) => {
+    if (annotating) return; // annotate mode owns the click
     const el = e.target instanceof Element ? (e.target.closest("a,button,[role=button],input,select,textarea,label") || e.target) : null;
-    if (!el || hud.contains(el)) return;
+    if (!el || el.closest(RECORDER_SEL)) return;
     send({
       type: "vt-click", route: location.pathname,
       payload: {
@@ -53,7 +74,9 @@
         rect: imageRect(el),
       },
     });
-  }, true);
+  };
+  document.addEventListener("click", onClick, true);
+  off(() => document.removeEventListener("click", onClick, true));
 
   // -------------------------------------------------------------------------
   // rrweb (D3): batch events to the SW every 2s; SW uploads them as chunks
@@ -82,10 +105,15 @@
       // (an unreachable SW still records with every input masked), the
       // policy can only add maskAllText or, self-host only, fullFidelity.
       // The one-message wait costs milliseconds before the full snapshot.
-      send({ type: "vt-policy" }).then((r) => {
+      // The snapshot also waits for the HUD to mount, so its blocked host is
+      // IN the snapshot: added later, it is an <html>-level mutation, and
+      // rrweb's replay loses every mutation after it on a seek.
+      Promise.all([send({ type: "vt-policy" }), hudMounted]).then(([r]) => {
         try {
           const pol = (r && r.policy) || null;
-          const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: false, collectFonts: true };
+          // blockSelector: the recorder's own surfaces never enter the
+          // replay — rrweb leaves an empty placeholder for the 0×0 hosts.
+          const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: false, collectFonts: true, blockSelector: RECORDER_SEL };
           if (!(pol && pol.fullFidelity)) {
             opts.maskAllInputs = true;
             if (pol && pol.maskAllText) {
@@ -93,7 +121,9 @@
               opts.maskTextSelector = "*";  // alpha-era spelling
             }
           }
-          rrRec(opts);
+          if (!self.live) return; // stopped before the policy answered
+          const stopRr = rrRec(opts);
+          if (typeof stopRr === "function") off(stopRr);
         } catch (e) { console.warn("vitrinka: rrweb failed to start", e); }
       });
     }
@@ -111,6 +141,7 @@
       rrBuf = events.concat(rrBuf);
     }
   }, 2000);
+  off(() => clearInterval(rrTimer));
 
   // Console errors are captured via CDP Runtime in the background SW — an
   // isolated-world console.error wrap only ever saw the extension's own calls.
@@ -147,86 +178,36 @@
     } });
   };
   const vitalsTimer = setTimeout(sendVitals, 10000);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") sendVitals();
-  });
+  const onHidden = () => { if (document.visibilityState === "hidden") sendVitals(); };
+  document.addEventListener("visibilitychange", onHidden);
   addEventListener("pagehide", sendVitals);
+  off(() => {
+    clearTimeout(vitalsTimer);
+    document.removeEventListener("visibilitychange", onHidden);
+    removeEventListener("pagehide", sendVitals);
+  });
 
   // -------------------------------------------------------------------------
-  // corner HUD (closed shadow root)
+  // pair host: the pair line + panel in their own small shadow host (the
+  // shared HUD has no seat for them), resting just inside the HUD's spot
+  // (placePair). Open: e2e asserts into it.
 
-  const hud = document.createElement("div");
-  hud.style.cssText = "all:initial;position:fixed;z-index:2147483647;right:20px;bottom:20px;";
-  const root = hud.attachShadow({ mode: "open" }); // open: e2e asserts into it
+  const pairHost = document.createElement("div");
+  pairHost.setAttribute("data-vitrinka-recorder", "");
+  const root = pairHost.attachShadow({ mode: "open" });
   // Manifest icons: vendor/vitrinka-icons.js is injected ahead of this script
-  // (background.js executeScript files list). Icon markup only — user/server
-  // strings NEVER ride innerHTML, they are appended as text nodes.
+  // (background.js CONTENT_FILES). Icon markup only — user/server strings
+  // NEVER ride innerHTML, they are appended as text nodes.
   const I = (name, cls) => (globalThis.VT_ICONS ? VT_ICONS.html(name, cls) : "");
-  // Keycap prefix for the manifest commands (Alt+Shift+…): the platform's glyphs.
-  const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌥⇧" : "Alt⇧";
   root.innerHTML = `
     <style>
       * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
       /* manifest icons (vendor/vitrinka-icons.js): 1em, currentColor, sized by the host's font */
       svg { width:1em; height:1em; vertical-align:-.125em; }
-      /* recorder-hud-subtle: the kit HUD's tokens — smoked glass, one red. */
-      :host { --ink:rgba(26,22,23,.72); --ink-2:rgba(255,255,255,.08); --edge:rgba(255,255,255,.11);
-        --rim:rgba(0,0,0,.30); --fg:#f4efea; --fg-2:rgba(244,239,234,.66); --rec:#ff3b57;
-        --ease:cubic-bezier(.22,1,.36,1);
+      :host { --ink:rgba(26,22,23,.72); --edge:rgba(255,255,255,.11); --rim:rgba(0,0,0,.30);
         --glass-shadow:inset 0 0 0 1px var(--edge), 0 0 0 .5px var(--rim), 0 10px 28px -10px rgba(0,0,0,.5), 0 2px 6px -2px rgba(0,0,0,.28); }
       .stack { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
-      :host([data-col="l"]) .stack, :host([data-col="c"]) .stack { align-items:flex-start; }
-      /* At rest the pill is a capsule — rec dot + clock (the drag handle);
-         hover, focus or an open sheet unfolds the tray, which folds back
-         2.5s after the pointer leaves. */
-      .pill { position:relative; display:flex; align-items:center; height:28px; border-radius:999px; color:var(--fg);
-        background:var(--ink); -webkit-backdrop-filter:blur(16px) saturate(1.5); backdrop-filter:blur(16px) saturate(1.5);
-        box-shadow:var(--glass-shadow); }
-      :host([data-col="r"]) .pill, :host([data-col="r"]) .tray-in { flex-direction:row-reverse; }
-      .grip { display:inline-flex; align-items:center; gap:7px; height:28px; padding:0 11px 0 10px; border-radius:999px;
-        cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
-      :host(.dragging) .grip { cursor:grabbing; }
-      .grip:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
-      .tray { display:grid; grid-template-columns:0fr; transition:grid-template-columns .3s var(--ease) 2.5s; }
-      .tray-in { min-width:0; overflow:hidden; display:flex; align-items:center; gap:1px; padding:34px 3px; margin:-34px 0;
-        pointer-events:none; opacity:0; transition:opacity .15s ease-in-out 2.5s; }
-      .tray-in > * { pointer-events:auto; }
-      .pill:hover .tray, .pill:focus-within .tray, .pill.composing .tray { grid-template-columns:1fr; transition-delay:0s; }
-      .pill:hover .tray-in, .pill:focus-within .tray-in, .pill.composing .tray-in { opacity:1; transition-duration:.25s; transition-delay:60ms; }
-      /* Grabbing folds the tray at once: the pill you drag is the capsule,
-         and the release settles on the capsule's rect, never a half-fold. */
-      :host(.dragging) .tray { grid-template-columns:0fr; }
-      :host(.dragging) .tray, :host(.dragging) .tray-in { transition:none; }
-      .sep { width:1px; height:14px; margin:0 5px; background:var(--edge); }
-      .dot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--rec); }
-      .dot::after { content:""; position:absolute; inset:0; border-radius:50%; animation:ripple 2s ease-out infinite; }
-      @keyframes ripple { 0% { box-shadow:0 0 0 0 rgba(255,59,87,.45); } 70%, 100% { box-shadow:0 0 0 7px rgba(255,59,87,0); } }
-      .paused .dot { background:rgba(244,239,234,.44); }
-      .paused .dot::after { animation:none; }
-      /* the edge tab a tucked HUD becomes */
-      .tab { display:none; position:relative; width:22px; height:56px; padding:0; border:0; border-radius:0; background:none; cursor:pointer; touch-action:none; }
-      :host([data-tuck]) .tab { display:block; }
-      :host([data-tuck]) .pill, :host([data-tuck]) .detail, :host([data-tuck]) .pairline, :host([data-tuck]) .pairpanel { display:none; }
-      .tab::before { content:""; position:absolute; top:0; bottom:0; width:6px; background:var(--ink); box-shadow:var(--glass-shadow); transition:width .15s ease-out; }
-      .tab::after { content:""; position:absolute; top:16px; bottom:16px; width:2px; border-radius:1px; background:var(--rec); }
-      :host([data-tuck="left"]) .tab::before { left:0; border-radius:0 7px 7px 0; }
-      :host([data-tuck="right"]) .tab::before { right:0; border-radius:7px 0 0 7px; }
-      :host([data-tuck="left"]) .tab::after { left:2px; }
-      :host([data-tuck="right"]) .tab::after { right:2px; }
-      .tab:hover::before, .tab:focus-visible::before { width:9px; }
-      /* Health (recorder-live D4): one glyph at rest, a second line only when
-         something is actually wrong — or while Stop drains. */
-      .sync { font:600 11px/1 ui-monospace, Menlo, monospace; color:#5f7a5f; }
-      .sync.warn { color:#e8a33d; }
-      .sync.bad { color:#ff3b57; }
-      .sync.busy { color:#a8a099; }
-      .detail { max-width:320px; padding:6px 12px; border-radius:999px;
-        background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow); color:#a8a099;
-        font:500 10px/1.4 ui-monospace, Menlo, monospace;
-        opacity:0; transform:translateY(-3px); transition:opacity .24s ease, transform .24s ease;
-        pointer-events:none; }
-      .detail.show { opacity:1; transform:none; }
-      .detail.bad { box-shadow:inset 0 0 0 1px rgba(240,166,58,.55), 0 10px 28px -10px rgba(0,0,0,.5); color:#f0eae4; }
+      :host([data-col="l"]) .stack { align-items:flex-start; }
       /* pair-mode narration: the listening/fixing micro-label (mono, quiet) */
       .pairline { max-width:320px; padding:6px 12px; border-radius:999px;
         background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow); color:#756e68;
@@ -240,7 +221,7 @@
          column — mono micro-labels, progressive disclosure, collapsed by
          default. Opens by clicking the pairline. */
       .pairpanel { display:none; width:320px; max-height:46vh; overflow:auto;
-        padding:10px 12px; background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0; box-shadow:var(--glass-shadow);
+        padding:10px 12px; background:var(--ink); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); border:0;
         border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,.35);
         font:500 10px/1.5 ui-monospace, Menlo, monospace; color:#a8a099;
         text-align:left; pointer-events:auto; }
@@ -270,77 +251,16 @@
       .pp-b { all:unset; cursor:pointer; flex:none; padding:4px 8px; border-radius:6px;
         color:#a8a099; border:1px solid #363132; font:inherit; }
       .pp-b:hover { color:#f0eae4; border-color:#756e68; }
+      .pp-b:focus-visible { outline:2px solid #ff3b57; outline-offset:-2px; }
       .pp-b.ok:hover { color:#5f7a5f; } .pp-b.no:hover { color:#e8a33d; }
       .pp-relay { margin-top:8px; padding-top:6px; border-top:1px solid #292526;
         color:#756e68; font-size:9.5px; white-space:pre-wrap; word-break:break-word; }
       .pp-err { color:#ff3b57; margin-top:4px; }
-      .time { font:600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; font-variant-numeric:tabular-nums; min-width:34px; }
-      /* pointer-events:auto — all:unset would inherit the tray's none */
-      button { all:unset; pointer-events:auto; cursor:pointer; position:relative; width:24px; height:24px; border-radius:50%;
-        color:var(--fg-2); font-size:13px; text-align:center; line-height:24px;
-        transition:background-color .15s ease-out, color .15s ease-out; }
-      button:hover { color:var(--fg); background:var(--ink-2); }
-      button:focus-visible, .sendb:focus-visible, .closeb:focus-visible { outline:2px solid #ff3b57; outline-offset:-2px; }
-      button.snap { color:var(--rec); }
-      button.snap:hover { color:var(--rec); }
-      /* Keycaps (recorder-hud-polish D1): the shortcut above the hovered or
-         focused button — quiet at rest, discoverable on intent. One at a
-         time: three caps over three 28px buttons would overlap. Right-
-         anchored on the last button so it never leaves the viewport; hidden
-         while the sheet is open so it never sits on its bottom edge. */
-      kbd { position:absolute; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%);
-        padding:4px 6px; border-radius:5px; background:#252122; border:1px solid #363132;
-        color:#a8a099; font:600 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing:.06em;
-        white-space:nowrap; opacity:0; transition:opacity .16s ease; pointer-events:none; }
-      .b-snap kbd { left:auto; right:0; transform:none; }
-      :host([data-row="t"]) kbd { bottom:auto; top:calc(100% + 8px); }
-      button:hover kbd, button:focus-visible kbd { opacity:1; }
-      .pill.composing kbd { opacity:0; }
-      /* The pick chrome (dim, outline, hint) lives in this shadow root too;
-         the stack and the sheet sit above it. */
-      .stack { position:relative; z-index:4; }
-      /* The sheet (recorder-hud-polish D2 · recorder-iframe vt-2985) is an
-         extension-origin IFRAME (hud.html): a page's focus trap cannot pull
-         focus back from another document, and its keystrokes never reach
-         the page. The frame is sized by the sheet inside it; only placement
-         and open/close live here. */
-      .pop { position:absolute; right:0; bottom:52px; z-index:4; width:288px; height:0;
-        border:0; background:transparent; display:none; color-scheme:normal; }
-      :host([data-col="l"]) .pop, :host([data-col="c"]) .pop { right:auto; left:0; }
-      .pop.open { display:block; }
-      /* Reduced motion: no ripple, no slides, no spring — durations only; the
-         tray's 2.5s fold delay stays (it is a grace period, not motion). */
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { transition-duration:0ms !important; animation:none !important; }
       }
-      /* Move to (WCAG 2.5.7): the no-drag way to pick a spot */
-      .spots { position:absolute; z-index:5; display:none; grid-template-columns:repeat(3, 24px); grid-template-rows:repeat(2, 24px);
-        gap:0 2px; padding:6px; border-radius:10px; background:rgba(26,22,23,.88); box-shadow:var(--glass-shadow); }
-      .spots.open { display:grid; }
-      :host([data-row="b"]) .spots { bottom:calc(100% + 8px); }
-      :host([data-row="t"]) .spots { top:calc(100% + 8px); }
-      :host([data-col="r"]) .spots { right:0; }
-      :host([data-col="l"]) .spots, :host([data-col="c"]) .spots { left:0; }
-      .spots button { border-radius:5px; }
-      .spots button::before { content:""; position:absolute; inset:7px 5px; border-radius:3px; background:var(--ink-2); box-shadow:inset 0 0 0 1px var(--edge); }
-      .spots button[aria-checked="true"]::before { background:var(--rec); box-shadow:none; }
     </style>
     <div class="stack">
-      <div class="pill" part="pill">
-        <span class="grip" role="button" tabindex="0" aria-label="Move recorder (drag, or arrow keys)"><span class="dot"></span><span class="time">00:00</span></span>
-        <span class="tray"><span class="tray-in">
-          <span class="sep"></span>
-          <span class="sync" data-icon="check" title="everything captured has reached vitrinka">${I("check")}</span>
-          <button class="b-pause" aria-label="Pause">${I("pause")}<kbd>${MOD}P pause</kbd></button>
-          <button class="b-note" aria-label="Note">${I("pencil")}<kbd>${MOD}N note</kbd></button>
-          <button class="snap b-snap" aria-label="Snap to vitrinka">${I("annotate")}<kbd>${MOD}A annotate</kbd></button>
-          <button class="b-move" aria-label="Move to" aria-haspopup="true" aria-expanded="false">${I("more")}</button>
-        </span></span>
-        <div class="spots" role="radiogroup" aria-label="Move to">${["tl", "tc", "tr", "bl", "bc", "br"].map((s) =>
-          `<button role="radio" data-spot="${s}" aria-checked="false" aria-label="Move to ${{ tl: "top left", tc: "top centre", tr: "top right", bl: "bottom left", bc: "bottom centre", br: "bottom right" }[s]}"></button>`).join("")}</div>
-      </div>
-      <button class="tab" aria-label="Show recorder"></button>
-      <div class="detail"></div>
       <div class="pairline"></div>
       <div class="pairpanel">
         <div class="pp-head"><span>pair</span><span class="pp-state"></span></div>
@@ -351,24 +271,35 @@
         <div class="pp-relay" style="display:none"></div>
         <div class="pp-err" style="display:none"></div>
       </div>
-    </div>
-    <iframe class="pop" title="vitrinka composer"></iframe>`;
-  // Shield (recorder-hud-polish): nothing the tester does on the HUD reaches
-  // the host page. Shadow retargeting makes every event look like it happened
-  // on the host div, and a page's "close on outside pointerdown / focus" logic
-  // would close the very dialog being reported. Bubble-phase stops on the
-  // host — no preventDefault, so buttons and the textarea still focus. Pick
-  // mode keeps its own document-level capture handlers.
+    </div>`;
+  // Shield (recorder-hud-polish): nothing the tester does on the panel
+  // reaches the host page — the same bubble-phase stops the HUD host makes.
   for (const t of ["pointerdown", "pointerup", "pointermove", "pointerover", "pointerout", "pointercancel",
     "mousedown", "mouseup", "mousemove", "mouseover", "mouseout", "click", "dblclick", "auxclick", "contextmenu",
     "touchstart", "touchend", "touchmove", "touchcancel", "wheel",
     "focusin", "focusout", "keydown", "keyup", "keypress"]) {
-    hud.addEventListener(t, (e) => e.stopPropagation());
+    pairHost.addEventListener(t, (e) => e.stopPropagation());
   }
+  // The HUD's spot (its `dock` key in hudStore below): the pair line sits
+  // just inside it, toward the page — above a bottom pill, below a top one;
+  // beside the side edge's foot for a middle or tucked pill.
+  const placePair = (dockRaw) => {
+    let spot = "br";
+    try {
+      const p = JSON.parse(dockRaw || "null");
+      if (p && typeof p.spot === "string") spot = p.spot;
+      else if (p && (p.tuck === "left" || p.tuck === "right")) spot = `m${p.tuck[0]}`;
+    } catch { /* no spot remembered: bottom right */ }
+    const [row, col] = spot;
+    pairHost.dataset.col = col === "l" ? "l" : "r";
+    const x = col === "l" ? "left:16px;" : col === "r" ? "right:16px;" : "left:50%;transform:translateX(-50%);";
+    const y = row === "t" ? "top:60px;" : row === "b" ? "bottom:60px;" : "bottom:16px;";
+    pairHost.style.cssText = `all:initial;position:fixed;z-index:2147483647;${x}${y}`;
+  };
+  placePair(null);
 
   const $ = (sel) => root.querySelector(sel);
-  const pill = $(".pill"), pop = $(".pop");
-  const syncEl = $(".sync"), detailEl = $(".detail"), pairEl = $(".pairline");
+  const pairEl = $(".pairline");
 
   // Pair surface (pair 2026-08-28 #2 + pair-panel 2026-08-29): the pairline
   // is the collapsed pill — narration/listening plus an item count — and
@@ -643,434 +574,212 @@
     renderPairLine();
   };
 
-  // Health (recorder-live D4/D5). The pill stays ONE line while everything is
-  // fine — a recorder sitting on top of the app under test earns its footprint
-  // — and a second line unfolds only for a backlog, an outage, a server-side
-  // close, or the wrapping-up drain after Stop. The glyph itself is the
-  // at-a-glance answer; the full detail lives in the extension popup.
-  const fmtAge = (ms) =>
-    ms < 1000 ? "just now" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`;
-  const renderHealth = (h) => {
-    if (!h) return;
-    // glyph = manifest icon name; mirrored on data-icon so tests read the
-    // state, never the svg.
-    let glyph = "check", cls = "", line = "", bad = false;
-    switch (h.state) {
-      case "wrapping": {
-        const w = h.wrapping || {};
-        const total = w.total || 0;
-        const sent = Math.max(0, total - (w.left || 0));
-        glyph = "loader"; cls = "busy";
-        line = `wrapping up · ${sent}/${total} sent`;
-        if (w.blobs) line += ` · ${w.blobs} shot(s) left`;
-        break;
-      }
-      case "offline":
-        glyph = "warning"; cls = "bad"; bad = true;
-        line = `offline${h.sinceSyncMs ? " " + fmtAge(h.sinceSyncMs) : ""} · ${h.queued} held · retrying`;
-        break;
-      case "dead":
-        glyph = "circle-x"; cls = "bad"; bad = true;
-        line = h.deadReason || "this session ended on the server";
-        break;
-      case "backlog":
-        glyph = "loader"; cls = "busy";
-        line = `syncing · ${h.queued} queued`;
-        break;
-      default:
-        // Healthy: check once the server is confirmed to hold everything
-        // sent, a quiet dashed circle while that reconciliation catches up.
-        glyph = h.synced ? "check" : "circle-dashed";
-    }
-    syncEl.innerHTML = I(glyph);
-    syncEl.dataset.icon = glyph;
-    syncEl.className = "sync" + (cls ? " " + cls : "");
-    detailEl.textContent = line;
-    detailEl.classList.toggle("show", !!line);
-    detailEl.classList.toggle("bad", bad);
-    if (h.state === "wrapping" || h.state === "dead") pill.classList.add("paused");
-  };
-  // Active-time clock: base comes from the SW (activeMs), freezes on pause.
-  let elapsedBase = 0, elapsedAt = Date.now(), paused = false;
-  const setPaused = (p, elapsedMs) => {
-    paused = p;
-    if (elapsedMs !== undefined) { elapsedBase = elapsedMs; elapsedAt = Date.now(); }
-    pill.classList.toggle("paused", paused);
-  };
-  // The SW can be asleep when a fresh page injects us — one lost status call
-  // left the pill at 00:00 with no name. Retry until the state arrives.
-  (async () => {
-    for (let i = 0; i < 6; i++) {
-      const r = await send({ type: "vt-status" });
-      if (r && r.rec) {
-        setPaused(!!r.rec.paused, r.elapsedMs || 0);
-        pill.title = r.rec.title || `${r.rec.project} · ${r.rec.environment}`;
-        renderHealth(r.health);
-        renderPair(r.pair);
-        seedPanel(r.pairPanel);
-        return;
-      }
-      await new Promise((res) => setTimeout(res, 600));
-    }
-  })();
-  const clock = setInterval(() => {
-    const ms = elapsedBase + (paused ? 0 : Date.now() - elapsedAt);
-    const s = Math.max(0, Math.floor(ms / 1000));
-    $(".time").textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-  }, 1000);
-
-  // note popover (plain note, no element)
-  let pendingPick = null;
-  // Where the next ⌖ snap lands. A snap is ALWAYS an annotation on the frame;
-  // "task" additionally files it as an intake draft on the project, which the
-  // server does as it projects the annotation. Resets to board every time the
-  // popover opens — a destination is a per-observation choice, not a mode you
-  // can forget you left on. A plain note has no frame to annotate, so the
-  // choice is hidden for it.
-  // Backing out (recorder-hud-polish D3): ✕, Esc from anywhere and a click
-  // outside the HUD all leave through closePop — the pick is dropped, the
-  // words are kept until the next send so a slip costs nothing.
-  // The sheet itself (textarea, draft, board|task, Send) lives in hud.html;
-  // this side places it, opens/closes it and turns its answer into the wire
-  // message. The draft survives a cancel inside the frame (D3).
-  const hudPost = (msg) => { if (pop.contentWindow) pop.contentWindow.postMessage({ vtHud: true, ...msg }, "*"); };
-  // Reparenting the host (the modal ride-along below) reloads the frame; an
-  // "open" posted before its script is back is lost, so opens wait for the
-  // frame's "ready" and the last one is replayed when it arrives.
-  let hudReady = false, pendingOpen = null;
-  const closePop = () => {
-    pendingOpen = null;
-    if (!pop.classList.contains("open")) return;
-    pop.classList.remove("open");
-    pill.classList.remove("composing");
-    pendingPick = null;
-  };
-  const openPop = (title, ctx) => {
-    if (dockPlace.tuck) moveTo({ spot: untuck(dockPlace) });
-    // Beyond the whole stack (pill + detail + pairline), never over the pill:
-    // above it from a bottom spot, below it from a top one.
-    const off = `${$(".stack").offsetHeight + 8}px`;
-    const top = hud.dataset.row === "t";
-    pop.style.top = top ? off : "auto";
-    pop.style.bottom = top ? "auto" : off;
-    pop.classList.add("open");
-    pill.classList.add("composing");
-    const msg = { type: "open", title, ctx: ctx || `step · ${location.pathname}`, pick: !!pendingPick };
-    if (hudReady) hudPost(msg); else pendingOpen = msg;
-  };
-  $(".b-note").onclick = () => { pendingPick = null; openPop("Note", null); };
-  window.addEventListener("message", (e) => {
-    // Only our own composer frame speaks on this channel.
-    if (e.source !== pop.contentWindow || !e.data || !e.data.vtHud) return;
-    const m = e.data;
-    if (m.type === "ready" || m.type === "size" || m.type === "opened") {
-      if (m.height) pop.style.height = `${Math.ceil(m.height)}px`;
-      if (m.type === "ready") {
-        hudReady = true;
-        if (pendingOpen) { hudPost(pendingOpen); pendingOpen = null; }
-      }
-    } else if (m.type === "close") {
-      closePop();
-    } else if (m.type === "send") {
-      const pick = pendingPick;
-      closePop();
-      if (pick) {
-        send({ type: "vt-snap", route: location.pathname, payload: { ...pick, note: m.text, task: !!m.task } });
-      } else if (m.text) {
-        send({ type: "vt-note", payload: { text: m.text, route: location.pathname } });
-      }
-    }
-  });
-  // Esc from a pill control — the shield stops keydown at the host, so this
-  // is the HUD-side half of "Esc anywhere"; the frame handles its own Esc,
-  // the document capture listener below is the page side.
-  root.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !pop.classList.contains("open")) return;
-    e.preventDefault();
-    closePop();
-  });
-  // Esc anywhere and click-outside: capture-phase document listeners, so they
-  // run before the page — and the Esc that closes the sheet never reaches the
-  // page's own dialog. Pick mode owns its pointer events while it is on.
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !pop.classList.contains("open") || hud.contains(e.target)) return;
-    e.preventDefault(); e.stopPropagation();
-    closePop();
-  }, true);
-  document.addEventListener("pointerdown", (e) => {
-    if (picking || !pop.classList.contains("open") || hud.contains(e.target)) return;
-    closePop();
-  }, true);
-  $(".b-pause").onclick = () => send({ type: "vt-pause" }); // state echoes back via vt-paused
-
   // -------------------------------------------------------------------------
-  // dock (recorder-hud-subtle D2): where the HUD rests and how it moves.
-  // A PORT of @vitrinka/link/dock (vitrinka-kit packages/link/src/dock.ts) —
-  // this script has no bundler; keep the two in step. Six spots (corners +
-  // top/bottom centre); a release is projected 0.3s along its velocity and
-  // settles on the nearest spot; a third of the pill pushed past a side edge
-  // tucks it into a tab at that height. The host re-anchors by insets, then
-  // springs from where it was let go (FLIP on `translate`). Remembered per
-  // origin in extension storage — never the page's own localStorage.
+  // the HUD adapter: a HudController (@vitrinka/web/hud's contract,
+  // packages/web/src/recorder/hud/controller.ts in vitrinka-kit) over the
+  // worker's messages. Capture, redaction and the session lifecycle stay the
+  // worker's; this only translates.
+  //
+  //   snapshot.recording  ← vt-status (on load), vt-paused, vt-health
+  //   account/prefs/recents/workspaceUrl ← vt-hud (hudState in background.js)
+  //   start · togglePause · stop → vt-start · vt-pause · vt-stop
+  //   note · annotate → vt-note · vt-snap (rect in image px, as clicks)
+  //   getMe · setPrefs · refreshRecents → vt-hud-me · vt-hud-prefs · vt-hud-recents
+  //   link → the options page (its device-code dance); unlink is the options page's too
 
-  const SPOTS = ["tl", "tc", "tr", "bl", "bc", "br"];
-  const M = 16;
-  const SPRING = "linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856, 0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015, 1.011, 1.007, 1.004, 1)";
-  const dockKey = `vtDock:${location.origin}`;
-  let dockPlace = { spot: "br" };
-  const spotRect = (spot, w, h) => ({
-    x: spot[1] === "l" ? M : spot[1] === "r" ? innerWidth - M - w : (innerWidth - w) / 2,
-    y: spot[0] === "t" ? M : innerHeight - M - h, w, h,
-  });
-  const settle = (r, v) => {
-    const past = Math.max(-r.x, r.x + r.w - innerWidth);
-    if (past > r.w / 3) {
-      return { tuck: -r.x > r.x + r.w - innerWidth ? "left" : "right", y: Math.min(1, Math.max(0, (r.y + r.h / 2) / innerHeight)) };
-    }
-    const px = r.x + r.w / 2 + v.x * 0.3, py = r.y + r.h / 2 + v.y * 0.3;
-    let best = "br", bestD = Infinity;
-    for (const s of SPOTS) {
-      const t = spotRect(s, r.w, r.h);
-      const d = Math.hypot(t.x + t.w / 2 - px, t.y + t.h / 2 - py);
-      if (d < bestD) { bestD = d; best = s; }
-    }
-    return { spot: best };
+  const VERSION = `extension/${chrome.runtime.getManifest().version}`;
+  // The live recording as the HUD paints it; null once it ended.
+  let live = null; // {sessionId, title, paused, activeMs, resumedAt, boardUrl}
+  let health = null; // the worker's last health()
+  let hud = { base: "", workspace: "", live: null, recents: [], prefs: { size: "md", verbose: false }, account: null };
+  // True while THIS tab's HUD stops the session: the vt-stop the worker sends
+  // every recorded tab then ends capture here but keeps the HUD for "Saved".
+  let stoppingHere = false;
+
+  const adoptRec = (rec, elapsedMs) => {
+    live = rec ? {
+      sessionId: String(rec.sessionId),
+      title: rec.title || `${rec.project} · ${rec.environment}`,
+      paused: !!rec.paused,
+      activeMs: elapsedMs || 0,
+      resumedAt: rec.paused || rec.stopping || rec.dead ? null : Date.now(),
+      boardUrl: "",
+    } : null;
   };
-  const untuck = (p) => p.spot || `${p.y < 0.5 ? "t" : "b"}${p.tuck === "left" ? "l" : "r"}`;
-  const neighbour = (p, key) => {
-    const s = untuck(p);
-    if (!p.spot) return { spot: s };
-    const cols = ["l", "c", "r"];
-    let row = s[0], ci = cols.indexOf(s[1]);
-    if (key === "ArrowLeft") ci = Math.max(0, ci - 1);
-    else if (key === "ArrowRight") ci = Math.min(2, ci + 1);
-    else row = key === "ArrowUp" ? "t" : "b";
-    return { spot: row + cols[ci] };
-  };
-  const grip = $(".grip"), tab = $(".tab"), spotsEl = $(".spots"), moveBtn = $(".b-move");
-  const placeHost = () => {
-    let css = "all:initial;position:fixed;z-index:2147483647;";
-    delete hud.dataset.row; delete hud.dataset.col; delete hud.dataset.tuck;
-    if (dockPlace.tuck) {
-      hud.dataset.tuck = dockPlace.tuck;
-      css += `${dockPlace.tuck}:0;top:clamp(8px, calc(${dockPlace.y * 100}% - 28px), calc(100% - 64px));`;
-    } else {
-      const [row, col] = dockPlace.spot;
-      hud.dataset.row = row; hud.dataset.col = col;
-      css += row === "t" ? `top:${M}px;` : `bottom:${M}px;`;
-      css += col === "l" ? `left:${M}px;` : col === "r" ? `right:${M}px;` : `left:calc(50% - ${grip.offsetWidth / 2}px);`;
-    }
-    hud.style.cssText = css;
-    spotsEl.querySelectorAll("button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.spot === dockPlace.spot)));
-  };
-  // The point of a rect the place anchors by: its corner (middle on the c
-  // column, mid-height when tucked) — so a grown or shrunk pill flies true.
-  const anchorOf = (r) => {
-    const s = untuck(dockPlace);
+  const syncOf = (h) => {
+    const queued = (h && h.queued) || 0;
+    // The worker's "wrapping" (Stop drains) is the HUD's saving face; its
+    // sync reads as the backlog it is.
+    const state = !h ? "ok" : ["offline", "dead", "backlog"].includes(h.state) ? h.state
+      : h.state === "wrapping" && queued > 0 ? "backlog" : "ok";
     return {
-      x: s[1] === "l" ? r.left : s[1] === "r" ? r.right : r.left + r.width / 2,
-      y: dockPlace.tuck ? r.top + r.height / 2 : s[0] === "t" ? r.top : r.bottom,
+      state, synced: !!(h && h.synced), queued, chunks: (h && h.chunks) || 0,
+      failures: (h && h.failures) || 0, error: (h && h.error) || "",
+      lastSyncAt: (h && h.lastSyncAt) || null, events: (h && h.localSeq) || 0,
+      serverMaxSeq: h ? h.serverMaxSeq : -1, deadReason: (h && h.deadReason) || "",
     };
   };
-  const moveTo = (next, from) => {
-    const prev = from || hud.getBoundingClientRect();
-    dockPlace = next;
-    placeHost();
-    try { chrome.storage.local.set({ [dockKey]: next }); } catch { /* storage unavailable: the spot lasts this page */ }
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const a = anchorOf(prev), b = anchorOf(hud.getBoundingClientRect());
-    if (Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1) return;
-    hud.style.translate = `${a.x - b.x}px ${a.y - b.y}px`;
-    void hud.offsetWidth;
-    hud.style.transition = `translate .5s ${SPRING}`;
-    hud.style.translate = "";
-    hud.addEventListener("transitionend", () => { hud.style.transition = ""; }, { once: true });
-  };
-  try {
-    chrome.storage.local.get(dockKey).then((r) => {
-      const p = r && r[dockKey];
-      if (p && (SPOTS.includes(p.spot) || ((p.tuck === "left" || p.tuck === "right") && Number.isFinite(p.y)))) {
-        dockPlace = p.spot ? { spot: p.spot } : { tuck: p.tuck, y: Math.min(1, Math.max(0, p.y)) };
-        placeHost();
-      }
-    }, () => undefined);
-  } catch { /* no storage: bottom-right */ }
-
-  // Drag: captured at pointerdown (a fast first move would otherwise leave
-  // the grip), a drag past 4px, velocity over the last 100ms.
-  let press = null, swallowClick = false;
-  const onDown = (e) => {
-    if (e.button !== 0 || !e.isPrimary) return;
-    press = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, samples: [] };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  // A grip press is the HUD's alone. On the first move the browser hit-tests
-  // the press point again for a native drag source, and by then the pill has
-  // already moved off it. A link or image of the page under that point then
-  // starts a native drag, which cancels the pointer and drops the throw
-  // (seen on CI: dragstart on the app's header link under the top-left spot).
-  addEventListener("dragstart", (e) => { if (press) e.preventDefault(); }, true);
-  const onMove = (e) => {
-    if (!press || press.id !== e.pointerId) return;
-    const dx = e.clientX - press.x, dy = e.clientY - press.y;
-    if (!press.moved) {
-      if (Math.hypot(dx, dy) < 4) return;
-      press.moved = true;
-      hud.style.transition = "";
-      hud.classList.add("dragging");
-      spotsEl.classList.remove("open");
-      closePop();
+  const build = () => {
+    let recording = null;
+    if (live) {
+      const dead = !!health && health.state === "dead";
+      const boardUrl = (health && health.boardUrl) || live.boardUrl;
+      recording = {
+        sessionId: live.sessionId, title: live.title, ...(boardUrl ? { boardUrl } : {}),
+        paused: live.paused, dead, activeMs: live.activeMs, resumedAt: dead ? null : live.resumedAt,
+        sync: syncOf(health),
+      };
     }
-    hud.style.translate = `${dx}px ${dy}px`;
-    press.samples.push({ x: e.clientX, y: e.clientY, t: e.timeStamp });
-    while (press.samples.length > 2 && e.timeStamp - press.samples[0].t > 100) press.samples.shift();
-  };
-  const onUp = (e) => {
-    const p = press;
-    press = null;
-    if (!p || p.id !== e.pointerId || !p.moved) return;
-    hud.classList.remove("dragging");
-    swallowClick = true;
-    setTimeout(() => { swallowClick = false; }, 0);
-    const r = hud.getBoundingClientRect();
-    const f = p.samples[0], l = p.samples[p.samples.length - 1];
-    const dt = f && l ? (l.t - f.t) / 1000 : 0;
-    const v = dt > 0 ? { x: (l.x - f.x) / dt, y: (l.y - f.y) / dt } : { x: 0, y: 0 };
-    moveTo(e.type === "pointercancel" ? dockPlace : settle({ x: r.left, y: r.top, w: r.width, h: r.height }, v), r);
-  };
-  for (const el of [grip, tab]) {
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
-    el.addEventListener("keydown", (e) => {
-      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) || e.altKey || e.metaKey || e.ctrlKey) return;
-      e.preventDefault();
-      moveTo(neighbour(dockPlace, e.key));
-    });
-  }
-  root.addEventListener("click", (e) => {
-    if (!swallowClick) return;
-    swallowClick = false;
-    e.preventDefault(); e.stopPropagation();
-  }, true);
-  tab.onclick = () => moveTo({ spot: untuck(dockPlace) });
-  moveBtn.onclick = () => {
-    const open = spotsEl.classList.toggle("open");
-    moveBtn.setAttribute("aria-expanded", String(open));
-  };
-  spotsEl.addEventListener("click", (e) => {
-    const b = e.target instanceof Element && e.target.closest("button[data-spot]");
-    if (!b) return;
-    spotsEl.classList.remove("open");
-    moveBtn.setAttribute("aria-expanded", "false");
-    moveTo({ spot: b.dataset.spot });
-  });
-  placeHost();
-
-  // -------------------------------------------------------------------------
-  // element-pick snap (⌖): crosshair, outline hovered element, click → note
-
-  let picking = false;
-  const outline = document.createElement("div");
-  outline.style.cssText = "all:initial;position:fixed;z-index:2;pointer-events:none;" +
-    "border:2px solid #ff3b57;border-radius:6px;box-shadow:0 0 0 4px rgba(255,59,87,.15);display:none;";
-  // Annotate-mode chrome (shadow-root children): page dim + hint bar — the ⌖ press must be
-  // unmistakable (first test: "I click it and get no feedback").
-  const dim = document.createElement("div");
-  dim.style.cssText = "all:initial;position:fixed;inset:0;z-index:1;pointer-events:none;" +
-    "background:rgba(0,0,0,.22);";
-  const hint = document.createElement("div");
-  hint.style.cssText = "all:initial;position:fixed;top:16px;left:50%;transform:translateX(-50%);" +
-    "z-index:3;padding:8px 16px;border-radius:999px;background:#1d1a1b;" +
-    "border:1px solid #ff3b57;box-shadow:0 8px 30px rgba(0,0,0,.4);" +
-    "font:600 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;color:#f0eae4;";
-  hint.innerHTML = I("annotate") + " annotate — click an element or drag an area · enter sends · esc cancels";
-  const startPick = () => {
-    if (picking) return;
-    picking = true;
-    root.append(dim, outline, hint); // in the shadow root: the page cannot restyle the chrome
-    document.documentElement.style.cursor = "crosshair";
-    // V1 (recorder-v2): click an element OR drag a free region — a drag past
-    // 6px switches from element-outline to marquee.
-    let downAt = null, dragging = false;
-    const showRect = (x, y, w, h) => {
-      outline.style.display = "block";
-      outline.style.left = x + "px"; outline.style.top = y + "px";
-      outline.style.width = w + "px"; outline.style.height = h + "px";
+    const ws = hud.workspace;
+    return {
+      linked: !!hud.base,
+      canUnlink: false,
+      annotating,
+      recording,
+      account: hud.account,
+      prefs: hud.prefs,
+      // A "recording" that is not the live session was never stopped.
+      recents: hud.recents.slice(0, 5).map(({ workspace: _ws, ...r }) =>
+        r.status === "recording" && r.sessionId !== hud.live ? { ...r, status: "unsaved" } : r),
+      workspaceUrl: hud.base ? (ws ? `${hud.base}/w/${encodeURIComponent(ws)}` : hud.base) : "",
+      version: VERSION,
     };
-    const move = (e) => {
-      if (downAt && (dragging || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6)) {
-        dragging = true;
-        showRect(Math.min(downAt.x, e.clientX), Math.min(downAt.y, e.clientY),
-          Math.abs(e.clientX - downAt.x), Math.abs(e.clientY - downAt.y));
-        return;
+  };
+  const listeners = new Set();
+  let snap = build(), snapKey = JSON.stringify(snap);
+  // getSnapshot hands back the SAME object until something in it changed.
+  const changed = () => {
+    const next = build(), key = JSON.stringify(next);
+    if (key === snapKey) return;
+    snap = next; snapKey = key;
+    listeners.forEach((l) => l());
+  };
+  const adoptHealth = (h) => {
+    if (!h) return;
+    health = h;
+    // Stop draining or a server-side close freezes the clock where it stood.
+    if (live && live.resumedAt !== null && (h.state === "wrapping" || h.state === "dead")) {
+      live = { ...live, activeMs: h.elapsedMs || live.activeMs, resumedAt: null };
+    }
+    changed();
+  };
+  const adoptHud = (h) => {
+    if (!h || !Array.isArray(h.recents)) return;
+    hud = h;
+    changed();
+  };
+  const fail = (r, fallback) => new Error((r && r.error) || fallback);
+
+  const controller = {
+    getSnapshot: () => snap,
+    subscribe(l) { listeners.add(l); return () => listeners.delete(l); },
+    // The worker records the ACTIVE tab — this one — and injects a fresh
+    // instance into it, which retires this one (and its HUD).
+    async start({ title }) {
+      const r = await send({ type: "vt-start", title });
+      if (!r || !r.ok) throw fail(r, "the recorder did not answer — try again");
+    },
+    async togglePause() { await send({ type: "vt-pause" }); }, // echoes back as vt-paused
+    async stop() {
+      stoppingHere = true;
+      const boardBefore = snap.recording && snap.recording.boardUrl;
+      const sessionId = snap.recording && snap.recording.sessionId;
+      let r;
+      try { r = await send({ type: "vt-stop" }); } finally { stoppingHere = false; }
+      if (!r || !r.ok) throw fail(r, "the recorder did not answer — try again"); // the session is kept
+      live = null; health = null;
+      self.live = false;
+      changed();
+      adoptHud(await send({ type: "vt-hud" }));
+      const done = r.done;
+      if (!done) throw new Error("the server refused to close this session — it ended locally, not saved");
+      let boardUrl = done.boardUrl || (done.board && done.board.url) || boardBefore;
+      // A session closed before its first live tick has no board yet: the
+      // worker learns the link once it is built (announceBoard → recents).
+      // Saving… waits a few seconds for it, so Saved can open the board.
+      for (let i = 0; !boardUrl && i < 8; i++) {
+        await new Promise((res) => setTimeout(res, 500));
+        const h = await send({ type: "vt-hud" });
+        adoptHud(h);
+        const mine = h && Array.isArray(h.recents) && h.recents.find((x) => x.sessionId === sessionId);
+        boardUrl = (mine && mine.boardUrl) || "";
       }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      if (!el || hud.contains(el)) { outline.style.display = "none"; return; }
-      const r = el.getBoundingClientRect();
-      showRect(r.x - 3, r.y - 3, r.width + 2, r.height + 2);
-    };
-    const down = (e) => {
-      if (hud.contains(e.target)) return;
-      e.preventDefault(); e.stopPropagation();
-      downAt = { x: e.clientX, y: e.clientY };
-    };
-    const up = (e) => {
-      if (!downAt) return;
-      e.preventDefault(); e.stopPropagation();
-      const start = downAt;
-      const wasDrag = dragging;
-      downAt = null; dragging = false;
+      return boardUrl ? { boardUrl } : {};
+    },
+    note(text) { send({ type: "vt-note", payload: { text, route: location.pathname } }); },
+    annotate({ text, rect, selector, task }) {
       const s = window.devicePixelRatio || 1;
-      if (wasDrag) {
-        const x = Math.min(start.x, e.clientX), y = Math.min(start.y, e.clientY);
-        const w = Math.abs(e.clientX - start.x), h = Math.abs(e.clientY - start.y);
-        cleanup();
-        if (w < 4 || h < 4) return;
-        pendingPick = { rect: { x: Math.round(x * s), y: Math.round(y * s), w: Math.round(w * s), h: Math.round(h * s) }, selector: "", text: "" };
-        openPop("Annotate region", `${Math.round(w)}×${Math.round(h)} · ${location.pathname}`);
-        return;
-      }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      cleanup();
-      if (!el || hud.contains(el)) return;
-      pendingPick = { rect: imageRect(el), selector: shortSelector(el), text: (el.innerText || "").trim().slice(0, 80) };
-      openPop("Annotate element", `${pendingPick.selector} · ${location.pathname}`);
-    };
-    const swallowClick = (e) => { e.preventDefault(); e.stopPropagation(); };
-    const key = (e) => { if (e.key === "Escape") cleanup(); };
-    const cleanup = () => {
-      picking = false; downAt = null; dragging = false;
-      outline.remove(); dim.remove(); hint.remove();
-      document.documentElement.style.cursor = "";
-      document.removeEventListener("pointermove", move, true);
-      document.removeEventListener("pointerdown", down, true);
-      document.removeEventListener("pointerup", up, true);
-      document.removeEventListener("click", swallowClick, true);
-      document.removeEventListener("keydown", key, true);
-    };
-    document.addEventListener("pointermove", move, true);
-    document.addEventListener("pointerdown", down, true);
-    document.addEventListener("pointerup", up, true);
-    document.addEventListener("click", swallowClick, true);
-    document.addEventListener("keydown", key, true);
+      send({ type: "vt-snap", route: location.pathname, payload: {
+        rect: { x: Math.round(rect.x * s), y: Math.round(rect.y * s), w: Math.round(rect.w * s), h: Math.round(rect.h * s) },
+        selector, note: text, task: !!task,
+      } });
+    },
+    setAnnotating(on) { annotating = !!on; changed(); },
+    async link() {
+      await send({ type: "vt-open-options" });
+      throw new Error("Link this browser in the recorder's Settings — they opened in a new tab.");
+    },
+    unlink() { /* canUnlink is false: the Settings page owns the link */ },
+    async getMe() { adoptHud(await send({ type: "vt-hud-me" })); return snap.account; },
+    async setPrefs(patch) {
+      hud = { ...hud, prefs: { ...hud.prefs, ...patch } }; // at once; the worker persists
+      changed();
+      adoptHud(await send({ type: "vt-hud-prefs", patch }));
+    },
+    async refreshRecents() { adoptHud(await send({ type: "vt-hud-recents" })); },
   };
-  $(".b-snap").onclick = startPick;
 
-  // commands + stop from the SW
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === "vt-pick") startPick();
-    else if (msg.type === "vt-note-ui") { pendingPick = null; openPop("Note", null); }
-    else if (msg.type === "vt-paused") setPaused(msg.paused, msg.elapsedMs);
-    else if (msg.type === "vt-health") renderHealth(msg.health);
+  // The HUD's own UI state (its dock spot) per origin in extension storage,
+  // never the page's localStorage; RecorderStorage is synchronous, so it is
+  // read once before mounting and written through.
+  const hudKey = `vtHud:${location.origin}`;
+  const hudStore = {};
+  const persistHud = () => {
+    try { chrome.storage.local.set({ [hudKey]: { ...hudStore } }); } catch { /* the spot lasts this page */ }
+  };
+  const storage = {
+    getString: (k) => (k in hudStore ? hudStore[k] : null),
+    set: (k, v) => { hudStore[k] = v; persistHud(); if (k === "dock") placePair(v); },
+    remove: (k) => { delete hudStore[k]; persistHud(); },
+  };
+
+  // The manifest commands (Alt+Shift+A / N) reach the worker, not the page;
+  // it relays them here and the HUD hears the chord it binds itself.
+  const chord = (code) => window.dispatchEvent(new KeyboardEvent("keydown",
+    { code, key: code.slice(3), altKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+
+  let unmountHud = null;
+  // endCapture: the session stopped — capture ends in this document, once.
+  const endCapture = () => {
+    self.live = false;
+    while (captureOff.length) {
+      try { captureOff.pop()(); } catch (e) { console.warn("vitrinka: capture teardown", e); }
+    }
+  };
+  const removeUi = () => {
+    if (unmountHud) { unmountHud(); unmountHud = null; }
+    pairHost.remove();
+    placeObserver.disconnect();
+  };
+
+  const onMessage = (msg, _sender, sendResponse) => {
+    if (msg.type === "vt-pick") chord("KeyA");
+    else if (msg.type === "vt-note-ui") chord("KeyN");
+    else if (msg.type === "vt-paused") {
+      if (live) live = { ...live, paused: !!msg.paused, activeMs: msg.elapsedMs || 0, resumedAt: msg.paused ? null : Date.now() };
+      changed();
+    }
+    else if (msg.type === "vt-health") adoptHealth(msg.health);
+    else if (msg.type === "vt-hud") adoptHud(msg.hud);
     else if (msg.type === "vt-pair") renderPair(msg.pair);
     else if (msg.type === "vt-pair-frame") applyPairFrame(msg.frame);
     else if (msg.type === "vt-stop") {
-      clearInterval(clock); clearInterval(rrTimer); clearTimeout(vitalsTimer);
       sendVitals(); // the final page's vitals ride out before the SW drains
-      hud.remove(); outline.remove(); dim.remove(); hint.remove();
-      window.__vitrinkaRecorder = false;
+      endCapture();
+      // The pair panel lives exactly as long as the recording; the HUD stays
+      // only when it is the one stopping (its Saving → Saved faces).
+      pairHost.remove();
+      if (!stoppingHere) removeUi();
       // Ship the final sub-2s rrweb batch before the SW drains its buffer —
       // detachAll awaits this response, so the last DOM events aren't lost.
       const events = rrBuf;
@@ -1080,26 +789,21 @@
       else finish();
       return true;
     }
-  });
-
-  document.documentElement.append(hud);
-  pop.src = chrome.runtime.getURL("hud.html");
-  // Top layer (recorder-iframe vt-2985): a manual popover paints above every
-  // page z-index. A native <dialog>.showModal() is stronger than paint order:
-  // Chrome makes every node outside the modal's subtree INERT — hit-testing
-  // skips it even when it paints on top (probed 2026-09-21: the pill's
-  // point resolved to the <dialog>). The one non-inert place is the modal's
-  // own subtree, so the HUD rides INSIDE the topmost open modal while one is
-  // up and comes home to <html> when it closes or is unmounted. Moving the
-  // host reloads the composer iframe, so the sheet closes first. Older
-  // engines (no Popover API) keep the z-index:2147483647 host as before.
-  const canPop = typeof hud.showPopover === "function";
-  const raise = () => {
-    if (!canPop) return;
-    try { hud.hidePopover(); } catch { /* not shown */ }
-    try { hud.showPopover(); } catch { /* detached */ }
   };
-  if (canPop) hud.popover = "manual";
+  chrome.runtime.onMessage.addListener(onMessage);
+
+  self.retire = () => {
+    endCapture();
+    chrome.runtime.onMessage.removeListener(onMessage);
+    removeUi();
+  };
+
+  // Top layer: the pair host is a manual popover, above every page z-index.
+  // A native <dialog>.showModal() makes everything outside its subtree INERT
+  // (hit-testing included), so the host rides inside the topmost open modal
+  // while one is up and comes home to <html> after.
+  const canPop = typeof pairHost.showPopover === "function";
+  if (canPop) pairHost.popover = "manual";
   const topModal = () => {
     const open = [...document.querySelectorAll("dialog[open]")];
     for (let i = open.length - 1; i >= 0; i--) {
@@ -1108,14 +812,12 @@
     return null;
   };
   const place = () => {
-    if (!window.__vitrinkaRecorder) return; // stopped
+    if (!self.live) return;
     const want = topModal() || document.documentElement;
-    if (hud.parentNode !== want) {
-      closePop();
-      hudReady = false; // the frame reloads on reparent; "ready" re-arms opens
-      want.append(hud);
-    }
-    raise();
+    if (pairHost.parentNode !== want) want.append(pairHost);
+    if (!canPop) return;
+    try { pairHost.hidePopover(); } catch { /* not shown */ }
+    try { pairHost.showPopover(); } catch { /* detached */ }
   };
   let placing = false;
   const schedule = () => {
@@ -1127,13 +829,46 @@
     if (m.type === "attributes") return m.target instanceof HTMLDialogElement;
     for (const list of [m.addedNodes, m.removedNodes]) {
       for (const n of list) {
-        if (n === hud || (n instanceof Element && (n.matches("dialog") || n.querySelector("dialog")))) return true;
+        if (n === pairHost || (n instanceof Element && (n.matches("dialog") || n.querySelector("dialog")))) return true;
       }
     }
     return false;
   };
-  new MutationObserver((muts) => {
-    if (!hud.isConnected || muts.some(touchesDialog)) schedule();
-  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
+  const placeObserver = new MutationObserver((muts) => {
+    if (!pairHost.isConnected || muts.some(touchesDialog)) schedule();
+  });
+  placeObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
   place();
+
+  // Mount: the HUD's stored spot first (synchronous storage), the state next
+  // — the worker can be asleep when a fresh page injects us, so the status
+  // call retries — then the HUD, painting the recording from its first frame.
+  (async () => {
+    try {
+      const saved = (await chrome.storage.local.get(hudKey))[hudKey];
+      if (saved && typeof saved === "object") Object.assign(hudStore, saved);
+    } catch { /* no storage: the default spot */ }
+    placePair(hudStore.dock);
+    for (let i = 0; i < 6; i++) {
+      const r = await send({ type: "vt-status" });
+      if (r && r.rec) {
+        adoptRec(r.rec, r.elapsedMs);
+        adoptHealth(r.health);
+        renderPair(r.pair);
+        seedPanel(r.pairPanel);
+        break;
+      }
+      await new Promise((res) => setTimeout(res, 600));
+    }
+    adoptHud(await send({ type: "vt-hud" }));
+    // Retired, or stopped while we waited: a pill mounted now would paint a
+    // recording that has ended. (A HUD stop keeps a HUD only once mounted.)
+    if (window.__vitrinkaRecorder !== self || !self.live) return;
+    if (!globalThis.VitrinkaHud) {
+      console.warn("vitrinka: the HUD bundle did not load — recording without the pill");
+      return;
+    }
+    unmountHud = globalThis.VitrinkaHud.mount(controller, { title: () => document.title, storage });
+  })().catch((e) => console.warn("vitrinka: the HUD failed to mount", e)).finally(() => hudMountedDone());
 })();
+
