@@ -16,7 +16,8 @@ ticks the step by itself), `task: true` files a child, `omitted` with
 unattended run only) and other omissions children, `summary` becomes the
 next version of the task's `handoff` attachment, `surfaces` · `buildOn` · `branch` · `worktree` ·
 `prerequisites` · `readFirst` become the next pickup's ON · BRANCH · BEFORE ·
-READ rows, `refs` (pr, board) attach, `sessionId` ends the live run — and
+READ rows, `refs` attach (a pr by its URL, a board by its slug: a pasted board
+URL renders double-prefixed), `sessionId` ends the live run — and
 returns `rendered`, the chat block. The schema carries each field's shape;
 the full contract is `docs {topic: "tasks"}`.
 
