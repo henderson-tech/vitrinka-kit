@@ -95,7 +95,11 @@ Two things to know before touching any of it:
 - **Stored read-modify-writes run on a `serialized()` chain** (`withLock` for
   `rec`, `withRecents`, `withPrefs`): every `chrome.storage.local`
   get→await→set that two messages can reach at once needs one, or the
-  slower writer restores what the other just changed.
+  slower writer restores what the other just changed. A decision two state
+  reads feed belongs under the lock their writers share: a `queueScope`
+  marker is written with its `rec` and pruned under `withLock`. A request
+  checked against a credential is sent with that same settings read
+  (`api(…, { cred })`), since Settings relinks by writing storage directly.
 
 Without the host (no CLI on the machine) every path above degrades to the old
 manual banner — download, unzip over the folder, ↻.

@@ -128,7 +128,9 @@ async function activeWorkspace(configWorkspace) {
 }
 
 async function api(method, path, body, contentType, opts = {}) {
-  const { base, workspace, token } = await getConfig();
+  // opts.cred sends with exactly the settings read a caller already checked
+  // (sendPrefs), never a fresh one a relink may have changed meanwhile.
+  const { base, workspace, token } = opts.cred || await getConfig();
   if (!base) throw new Error("vitrinka base URL not configured (options page)");
   // opts.base pins a scoped read to the server its session lives on, checked
   // against the same settings read the request is built from: a switch since
@@ -847,15 +849,36 @@ async function refuseForeignTail(sessionId, scope) {
     + `${prior.workspace ? ` in ${prior.workspace}` : ""} — switch Settings back to finish it there, or use Recorder data → Clear all`);
 }
 
+// A marker is gone once neither the queue nor the rec holds its session.
+// Candidates come from the reaper's queue snapshot, read without the lock (a
+// full scan, the queue is unbounded, must never stall capture); each is then
+// rechecked under the lock Start/Continue adopt a marker + rec with, by the
+// live rec and a one-record queue read. A marker written after the snapshot
+// is never a candidate.
+async function pruneQueueScopes(st) {
+  const stored = await chrome.storage.local.get(null);
+  const candidates = Object.keys(stored).filter((k) => k.startsWith(QUEUE_SCOPE) && !st.bySession[k.slice(QUEUE_SCOPE.length)]);
+  if (!candidates.length) return;
+  await withLock(async () => {
+    const rec = await getState();
+    const gone = [];
+    for (const k of candidates) {
+      const id = k.slice(QUEUE_SCOPE.length);
+      if (rec && String(rec.sessionId) === id) continue;
+      if ((await vtdb.head(Number(id), 1)).length) continue; // queued since the snapshot
+      gone.push(k);
+    }
+    if (gone.length) await chrome.storage.local.remove(gone);
+  });
+}
+
 async function reapDeadSessions() {
   // A failed read proves nothing about what is queued: decide (and prune) nothing.
   const st = await vtdb.stats().catch(() => null);
   if (!st) return;
+  await pruneQueueScopes(st);
   const rec = await getState();
   const stored = await chrome.storage.local.get(null);
-  const gone = Object.keys(stored).filter((k) => k.startsWith(QUEUE_SCOPE) && !st.bySession[k.slice(QUEUE_SCOPE.length)]
-    && !(rec && String(rec.sessionId) === k.slice(QUEUE_SCOPE.length)));
-  if (gone.length) await chrome.storage.local.remove(gone);
   if (!st.count) return;
   const { base } = await getConfig();
   for (const key of Object.keys(st.bySession)) {
@@ -1346,15 +1369,19 @@ async function startSession(title) {
     await api("PATCH", `/api/v1/sessions/${ses.id}`, { status: "done" }, undefined, { workspace }).catch(() => {});
     throw e;
   }
-  await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
-  await withLock(() => setState({
-    generation: crypto.randomUUID(),
-    sessionId: ses.id, project: ses.project, environment: ses.environment, workspace, policy,
-    title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
-    // Active-time bookkeeping: elapsed = activeMs + (now - resumeAt while
-    // running). The HUD clock freezes on pause because of this, not luck.
-    activeMs: 0, resumeAt: new Date().toISOString(),
-  }));
+  // The marker and the rec it belongs to are adopted under one lock, the one
+  // the reaper prunes markers under, so it never sees one without the other.
+  await withLock(async () => {
+    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
+    await setState({
+      generation: crypto.randomUUID(),
+      sessionId: ses.id, project: ses.project, environment: ses.environment, workspace, policy,
+      title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
+      // Active-time bookkeeping: elapsed = activeMs + (now - resumeAt while
+      // running). The HUD clock freezes on pause because of this, not luck.
+      activeMs: 0, resumeAt: new Date().toISOString(),
+    });
+  });
   serverMaxSeq = 0;
   lastSyncAt = Date.now();
   failures = 0;
@@ -1384,8 +1411,8 @@ async function continueSession(sessionId) {
   await refuseForeignTail(ses.id, scope);
   await api("PATCH", `/api/v1/sessions/${sessionId}`, { status: "recording" });
   const policy = await fetchPolicy(ses.workspace || "");
-  await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
   await withLock(async () => {
+    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope }); // with its rec, as in Start
     const current = await getState();
     const pending = await vtdb.sessionStats(ses.id);
     // The server can lag the durable tail, and a capture may have reserved
@@ -1883,8 +1910,8 @@ function hudPrefsOf(raw) {
 // The account answers for ONE credential: hudMe is stored with the digest of
 // the base + token it was read with (hudMeFor), and a link, a new token or a
 // new base (options page) makes it nobody's — even across a worker restart.
-async function credKey() {
-  const { base, token } = await getConfig();
+async function credKey(cfg) {
+  const { base, token } = cfg || await getConfig();
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${base}\n${token}`));
   return [...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -1911,11 +1938,11 @@ const meSettled = new Set();
 // The account the HUD shows: the cached one when it belongs to the
 // configured credential, else a static line. null only while a recorder token's first /me
 // read is in flight — bounded by ME_TIMEOUT_MS.
-async function currentMe() {
+async function currentMe(cfg) {
   const { hudMe = null, hudMeFor = "" } = await chrome.storage.local.get(["hudMe", "hudMeFor"]);
-  const key = await credKey();
+  const key = await credKey(cfg);
   if (hudMe && hudMeFor === key) return hudMe;
-  const { token, workspace } = await getConfig();
+  const { token, workspace } = cfg || await getConfig();
   const rec = await getState();
   const ws = (rec && rec.workspace) || workspace;
   if (!isRecorderToken(token)) return staticAccount(token ? "API token" : "No token", ws);
@@ -2133,15 +2160,23 @@ async function sendPrefs() {
   // only if no edit outside this delta happened since.
   const { pending, gen } = await withPrefs(async () => ({ pending: await pendingPrefs(), gen: prefEdits }));
   if (!pending) return; // an earlier PATCH already carried this edit
-  const key = await credKey();
+  // ONE settings read decides and sends: the key the edit is checked against,
+  // the eligibility, and the base/workspace/token the PATCH carries. Settings
+  // relink by writing storage directly (options.js), so any later reread
+  // could put this account's edit under the next account's token.
+  const cred = await getConfig();
+  const key = await credKey(cred);
   if (pending.for !== key) return void (await settlePrefs(pending.for, null)); // another credential's: dropped, never sent
   // Prefs stay on the device for every credential the server cannot store
   // them against: a non-recorder token, a server without the route, a key.
-  const hudMe = await currentMe();
-  const { base, token } = await getConfig();
-  if (!base || !isRecorderToken(token) || meUnavailable.has(key) || (hudMe && hudMe.kind === "key")) return void (await settlePrefs(key, null));
+  const hudMe = await currentMe(cred);
+  if (!cred.base || !isRecorderToken(cred.token) || meUnavailable.has(key) || (hudMe && hudMe.kind === "key")) return void (await settlePrefs(key, null));
+  const workspace = await activeWorkspace(cred.workspace);
+  // Relinked while deciding: the edit belongs to the account left behind and
+  // is dropped (the new account's server copy wins, as on any relink).
+  if ((await credKey()) !== key) return void (await settlePrefs(key, null));
   try {
-    const me = await api("PATCH", "/api/v1/recorder/me", { prefs: pending.prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS });
+    const me = await api("PATCH", "/api/v1/recorder/me", { prefs: pending.prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS, cred, workspace });
     await settlePrefs(key, pending.prefs);
     await adoptMe(me, gen, key);
   } catch (e) {
@@ -2373,7 +2408,7 @@ globalThis.__vt = { startSession, stopSession, togglePause, continueSession, get
 // browser profile (extension-update.spec.ts).
 globalThis.__vtUpdate = { extUpdateStatus, applyUpdate, seedConfig, hostCall, maybeSelfReload, boot: () => boot() };
 // e2e-only handles for the durable-queue paths (harmless in production).
-globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, noteRecent, updateRecent, refreshRecents };
+globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents };
 
 // Keyboard commands relay to the active tab's HUD.
 chrome.commands.onCommand.addListener(async (command) => {
