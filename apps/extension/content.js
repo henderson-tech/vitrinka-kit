@@ -639,7 +639,7 @@
       account: hud.account,
       prefs: hud.prefs,
       // A "recording" that is not the live session was never stopped.
-      recents: hud.recents.slice(0, 5).map(({ workspace: _ws, ...r }) =>
+      recents: hud.recents.slice(0, 5).map(({ base: _base, workspace: _ws, ...r }) =>
         r.status === "recording" && r.sessionId !== hud.live ? { ...r, status: "unsaved" } : r),
       workspaceUrl: hud.base ? (ws ? `${hud.base}/w/${encodeURIComponent(ws)}` : hud.base) : "",
       version: VERSION,

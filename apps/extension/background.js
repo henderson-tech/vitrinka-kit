@@ -83,13 +83,27 @@ function capturing(rec) {
 
 // One async mutex serializes every read-modify-write of rec. The SW is
 // single-threaded, but interleaved awaits let two producers read the same seq
-// or clobber each other's writes (review #3644465006/#3644464994).
-let _chain = Promise.resolve();
-function withLock(fn) {
-  const run = _chain.then(fn, fn);
-  _chain = run.catch(() => {});
-  return run;
+// or clobber each other's writes (review #3644465006/#3644464994). Every
+// other stored read-modify-write (the HUD's recents and prefs) gets a chain
+// of its own from serialized(), so it never queues behind the capture path.
+function serialized() {
+  let chain = Promise.resolve();
+  return (fn) => {
+    const run = chain.then(fn, fn);
+    chain = run.catch(() => {});
+    return run;
+  };
 }
+const withLock = serialized();
+
+// A session id is a number per deployment AND per workspace: #12 exists on
+// two servers, and in two workspaces of one. Anything kept beyond the live
+// recording (recents, the board wait, a queued tail) names its scope beside
+// the id, and is only ever asked about on that base with that workspace.
+async function scopeOf(workspace) {
+  return { base: (await getConfig()).base, workspace: workspace || "" };
+}
+const scopeKey = (scope, sessionId) => `${scope.base}\n${scope.workspace || ""}\n${sessionId}`;
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -116,6 +130,11 @@ async function activeWorkspace(configWorkspace) {
 async function api(method, path, body, contentType, opts = {}) {
   const { base, workspace, token } = await getConfig();
   if (!base) throw new Error("vitrinka base URL not configured (options page)");
+  // opts.base pins a scoped read to the server its session lives on, checked
+  // against the same settings read the request is built from: a switch since
+  // the caller looked refuses it (no status, so callers treat it as
+  // transient) instead of asking another deployment about the same #N.
+  if ("base" in opts && opts.base !== base) throw new Error(`${method} ${path} not sent: the session lives on ${opts.base}, the recorder now points at ${base}`);
   const headers = vtHeaders(token, "workspace" in opts ? opts.workspace : await activeWorkspace(workspace));
   if (body !== undefined) headers["content-type"] = contentType || "application/json";
   const res = await fetch(base + path, {
@@ -811,18 +830,45 @@ async function reconcile() {
 
 // reapDeadSessions clears queue data for sessions the server considers gone.
 // LIVE data is never touched (D8/D9): the only thing that authorizes a delete
-// is the server saying done / deleted / 404 for that exact session id.
+// is the server saying done / deleted / 404 for that exact session id — asked
+// of the base and workspace it was recorded into (queueScope), since another
+// server's or workspace's #N answering 404 says nothing about this one.
+const QUEUE_SCOPE = "queueScope:";
+
+// The queue itself is keyed by session id alone (db.js [sessionId, seq]), so
+// recording #N while another scope's #N still has an undelivered tail would
+// mix the two and upload that tail into this session — another server's or
+// workspace's data. Refused before adopting the id; the tail keeps its scope.
+async function refuseForeignTail(sessionId, scope) {
+  const prior = (await chrome.storage.local.get(QUEUE_SCOPE + sessionId))[QUEUE_SCOPE + sessionId];
+  if (!prior || scopeKey(prior, sessionId) === scopeKey(scope, sessionId)) return;
+  if (!(await vtdb.sessionStats(sessionId)).count) return;
+  throw new Error(`session #${sessionId} collides with an undelivered tail of #${sessionId} recorded on ${prior.base}`
+    + `${prior.workspace ? ` in ${prior.workspace}` : ""} — switch Settings back to finish it there, or use Recorder data → Clear all`);
+}
+
 async function reapDeadSessions() {
+  // A failed read proves nothing about what is queued: decide (and prune) nothing.
   const st = await vtdb.stats().catch(() => null);
-  if (!st || !st.count) return;
+  if (!st) return;
   const rec = await getState();
+  const stored = await chrome.storage.local.get(null);
+  const gone = Object.keys(stored).filter((k) => k.startsWith(QUEUE_SCOPE) && !st.bySession[k.slice(QUEUE_SCOPE.length)]
+    && !(rec && String(rec.sessionId) === k.slice(QUEUE_SCOPE.length)));
+  if (gone.length) await chrome.storage.local.remove(gone);
+  if (!st.count) return;
+  const { base } = await getConfig();
   for (const key of Object.keys(st.bySession)) {
     const sessionId = Number(key);
     if (!sessionId) continue;
     if (rec && rec.sessionId === sessionId && !rec.dead) continue; // the live one
+    // A tail queued before 0.9.1 names no scope: asked as before, of the
+    // configured server in the active workspace.
+    const scope = stored[QUEUE_SCOPE + key] || null;
+    if (scope && scope.base !== base) continue; // another server's — this token cannot ask
     let dead = false;
     try {
-      const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
+      const ses = await api("GET", `/api/v1/sessions/${sessionId}`, undefined, undefined, scope ? { base: scope.base, workspace: scope.workspace } : {});
       dead = ses.status === "done" || !!ses.deletedAt;
     } catch (e) {
       if (statusOf(e) === 404) dead = true;
@@ -1292,6 +1338,15 @@ async function startSession(title) {
   // The workspace redaction policy rides in rec so every SW wake has it
   // without a network round trip; a failed fetch means the safe defaults.
   const policy = await fetchPolicy(workspace);
+  const scope = await scopeOf(workspace);
+  try {
+    await refuseForeignTail(ses.id, scope);
+  } catch (e) {
+    // Nothing was recorded into it: close the empty session rather than leave it open.
+    await api("PATCH", `/api/v1/sessions/${ses.id}`, { status: "done" }, undefined, { workspace }).catch(() => {});
+    throw e;
+  }
+  await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
   await withLock(() => setState({
     generation: crypto.randomUUID(),
     sessionId: ses.id, project: ses.project, environment: ses.environment, workspace, policy,
@@ -1307,7 +1362,7 @@ async function startSession(title) {
   wrapping = null;
   liveBoard = { sessionId: ses.id, url: ses.boardUrl || "" };
   resetPairPanel(ses.id); // a new recording starts on an empty panel, not the last one's
-  await noteRecent({ sessionId: String(ses.id), title: ses.title || title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording", workspace });
+  await noteRecent({ ...scope, sessionId: String(ses.id), title: ses.title || title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording" });
 
   // Anything still queued belongs to an earlier session; the reaper clears it
   // once the server confirms, and flush drops it on sight either way.
@@ -1325,8 +1380,11 @@ async function startSession(title) {
 // set + board (import-set dedups what's already placed).
 async function continueSession(sessionId) {
   const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
+  const scope = await scopeOf(ses.workspace);
+  await refuseForeignTail(ses.id, scope);
   await api("PATCH", `/api/v1/sessions/${sessionId}`, { status: "recording" });
   const policy = await fetchPolicy(ses.workspace || "");
+  await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
   await withLock(async () => {
     const current = await getState();
     const pending = await vtdb.sessionStats(ses.id);
@@ -1349,8 +1407,8 @@ async function continueSession(sessionId) {
   liveBoard = { sessionId: ses.id, url: ses.boardUrl || "" };
   resetPairPanel(ses.id); // adopted session, same rule — the WS refills it
   await noteRecent({
-    sessionId: String(ses.id), title: ses.title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording",
-    workspace: ses.workspace || "", ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
+    ...scope, sessionId: String(ses.id), title: ses.title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording",
+    ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
   });
   await reapDeadSessions().catch(() => {});
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1434,12 +1492,13 @@ async function stopSession() {
   // The device's recents (the HUD's ⋯ menu): saved with its length and the
   // server's board link, or unsaved when the server refused the close.
   const boardUrl = (done && (done.boardUrl || (done.board && done.board.url))) || "";
-  await updateRecent(String(sessionId), {
+  const scope = await scopeOf(rec.workspace);
+  await updateRecent(scope, String(sessionId), {
     status: done ? "saved" : "unsaved", durationMs: rec.activeMs || 0, ...(boardUrl ? { boardUrl } : {}),
   });
   // D3: the board is a separate, deliberate act. Watch for it to be ready and
   // tell the tester when it is — never steal focus with a tab.
-  if (done) await watchForBoard(sessionId, title, done);
+  if (done) await watchForBoard(sessionId, title, done, scope);
   return done;
 }
 
@@ -1489,8 +1548,10 @@ async function togglePause() {
 // window, with a chrome.alarm as the resurrection backstop if the worker is
 // killed mid-wait. The web surfaces get the real SSE stream instead.
 
-async function watchForBoard(sessionId, title, initial) {
-  const state = { sessionId, title, since: Date.now() };
+// The wait carries the session's scope: the rec is gone by now, and the
+// configured base/workspace may change before the board is built.
+async function watchForBoard(sessionId, title, initial, scope) {
+  const state = { sessionId, title, since: Date.now(), scope };
   await chrome.storage.local.set({ awaiting: state });
   chrome.alarms.create("vt-board-ready", { periodInMinutes: 0.5 });
   if (initial && initial.projection && initial.projection.state === "ready") {
@@ -1511,9 +1572,14 @@ function pollForBoard() {
       chrome.alarms.clear("vt-board-ready");
       return;
     }
+    // Asked only of the server the session lives on, in its own workspace;
+    // after a base switch the wait just runs out (the recents refresh, or
+    // switching back, still finds the board).
+    const scope = awaiting.scope;
+    if (scope && scope.base !== (await getConfig()).base) return void pollForBoard();
     let ses;
     try {
-      ses = await api("GET", `/api/v1/sessions/${awaiting.sessionId}`);
+      ses = await api("GET", `/api/v1/sessions/${awaiting.sessionId}`, undefined, undefined, scope ? { base: scope.base, workspace: scope.workspace } : {});
     } catch {
       pollForBoard(); // transient — keep waiting
       return;
@@ -1545,7 +1611,7 @@ async function announceBoard(ses) {
   await chrome.storage.local.set({ lastBoard: {
     sessionId: ses.id, title: (awaiting && awaiting.title) || ses.title, url, at: Date.now(),
   } });
-  if (url) await updateRecent(String(ses.id), { boardUrl: url, status: "saved" });
+  if (url && awaiting && awaiting.scope) await updateRecent(awaiting.scope, String(ses.id), { boardUrl: url, status: "saved" });
   notify("Board ready", `${(awaiting && awaiting.title) || ses.title} — click to open`, url);
 }
 
@@ -1790,8 +1856,10 @@ async function maybeSelfReload(force = false) {
 // The in-page HUD is @vitrinka/web's (content.js adapts it). What it shows
 // beyond the recording lives here, in chrome.storage.local, so every tab
 // paints the same answer:
-//   hudRecents  the device's last five recordings, newest first —
-//               {sessionId, title, startedAt, durationMs?, status, boardUrl?, workspace}
+//   hudRecents  the device's recordings, newest first —
+//               {base, workspace, sessionId, title, startedAt, durationMs?, status, boardUrl?};
+//               one is (base, workspace, sessionId), and the HUD lists the
+//               last five of the current base + workspace only
 //   hudPrefs    {size, verbose}; a linked user's server copy wins
 //   hudMe       who the token records as (GET /api/v1/recorder/me)
 // The same rules as the kit's recorder (packages/web/src/recorder/me.ts,
@@ -1801,6 +1869,8 @@ async function maybeSelfReload(force = false) {
 const HUD_SIZES = ["sm", "md", "lg"];
 const HUD_DEFAULT_PREFS = { size: "md", verbose: false };
 const MAX_RECENTS = 5;
+// Kept across every base + workspace, so switching back still finds them.
+const MAX_STORED_RECENTS = 20;
 
 function hudPrefsOf(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -1852,16 +1922,40 @@ async function currentMe() {
   return meSettled.has(key) ? staticAccount("", ws) : null;
 }
 
-async function hudState() {
-  const { hudRecents = [], hudPrefs = null } = await chrome.storage.local.get(["hudRecents", "hudPrefs"]);
-  const hudMe = await currentMe();
+// The stored recents that name their base: an entry written before 0.9.1
+// carries none, so nothing says which server or workspace its id belongs to.
+// Such entries are dropped rather than attributed to the current settings —
+// after a switch that would pin another deployment's #N to this one's board.
+async function storedRecents() {
+  const { hudRecents = [] } = await chrome.storage.local.get("hudRecents");
+  return hudRecents.filter((r) => r && typeof r.base === "string" && r.base && typeof r.sessionId === "string");
+}
+
+// The base + workspace the HUD answers for: the live recording's, else the
+// configured one, else the recorder token's own; a personal token with no
+// workspace set records wherever the tab's host resolves, so its newest
+// recording on this base names it.
+async function hudScope(recents, hudMe) {
   const { base, workspace } = await getConfig();
   const rec = await getState();
+  const newest = recents.find((r) => r.base === base);
   return {
     base,
-    workspace: (rec && rec.workspace) || workspace || (hudMe && hudMe.workspace && hudMe.workspace.slug) || "",
+    workspace: (rec && rec.workspace) || workspace || (hudMe && hudMe.workspace && hudMe.workspace.slug) || (newest && newest.workspace) || "",
+  };
+}
+
+async function hudState() {
+  const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
+  const recents = await storedRecents();
+  const hudMe = await currentMe();
+  const scope = await hudScope(recents, hudMe);
+  const rec = await getState();
+  return {
+    base: scope.base,
+    workspace: scope.workspace,
     live: rec ? String(rec.sessionId) : null,
-    recents: hudRecents,
+    recents: recents.filter((r) => r.base === scope.base && r.workspace === scope.workspace).slice(0, MAX_RECENTS),
     prefs: hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS,
     account: hudMe,
   };
@@ -1878,41 +1972,55 @@ async function broadcastHud() {
   }
 }
 
+// Start, stop, the board wait and the menu's refresh all rewrite the list;
+// one chain keeps a slow writer from restoring what another just changed.
+const withRecents = serialized();
+
 async function writeRecents(list) {
-  await chrome.storage.local.set({ hudRecents: list.slice(0, MAX_RECENTS) });
+  await chrome.storage.local.set({ hudRecents: list.slice(0, MAX_STORED_RECENTS) });
   await broadcastHud();
 }
 
-async function noteRecent(entry) {
-  const { hudRecents = [] } = await chrome.storage.local.get("hudRecents");
-  await writeRecents([entry, ...hudRecents.filter((r) => r.sessionId !== entry.sessionId)]);
+// entry carries its scope: {base, workspace, sessionId, …}.
+function noteRecent(entry) {
+  return withRecents(async () => {
+    const key = scopeKey(entry, entry.sessionId);
+    await writeRecents([entry, ...(await storedRecents()).filter((r) => scopeKey(r, r.sessionId) !== key)]);
+  });
 }
 
-async function updateRecent(sessionId, patch) {
-  const { hudRecents = [] } = await chrome.storage.local.get("hudRecents");
-  if (!hudRecents.some((r) => r.sessionId === sessionId)) return;
-  await writeRecents(hudRecents.map((r) => (r.sessionId === sessionId ? { ...r, ...patch } : r)));
+function updateRecent(scope, sessionId, patch) {
+  return withRecents(async () => {
+    const key = scopeKey(scope, sessionId);
+    const recents = await storedRecents();
+    if (!recents.some((r) => scopeKey(r, r.sessionId) === key)) return;
+    await writeRecents(recents.map((r) => (scopeKey(r, r.sessionId) === key ? { ...r, ...patch } : r)));
+  });
 }
 
-// Fill the board links the list lacks through the session's own read; the
-// live recording is skipped (its link arrives with its stop). Each id is
-// asked once per worker life, so a refused read is not retried on every menu.
+// Fill the board links the HUD's list lacks through the session's own read,
+// on the entry's own base (the configured one — this token is never sent to
+// another server) in the entry's own workspace; the live recording is skipped
+// (its link arrives with its stop). Each entry is asked once per worker life,
+// so a refused read is not retried on every menu.
 const recentsAsked = new Set();
 async function refreshRecents() {
+  const { recents } = await hudState();
   const rec = await getState();
-  const { hudRecents = [] } = await chrome.storage.local.get("hudRecents");
-  const live = rec ? String(rec.sessionId) : null;
-  for (const r of hudRecents) {
-    if (r.boardUrl || r.status === "deleted" || r.sessionId === live || recentsAsked.has(r.sessionId)) continue;
-    recentsAsked.add(r.sessionId);
+  const live = rec ? scopeKey(await scopeOf(rec.workspace), rec.sessionId) : null;
+  for (const r of recents) {
+    const key = scopeKey(r, r.sessionId);
+    if (r.boardUrl || r.status === "deleted" || key === live || recentsAsked.has(key)) continue;
+    if (r.base !== (await getConfig()).base) continue; // the base changed since the list was read
+    recentsAsked.add(key);
     try {
-      const ses = await api("GET", `/api/v1/sessions/${r.sessionId}`, undefined, undefined, r.workspace ? { workspace: r.workspace } : {});
+      const ses = await api("GET", `/api/v1/sessions/${r.sessionId}`, undefined, undefined, { base: r.base, workspace: r.workspace });
       const boardUrl = ses.boardUrl || (ses.board && ses.board.url) || "";
-      if (ses.deletedAt) await updateRecent(r.sessionId, { status: "deleted" });
-      else if (boardUrl) await updateRecent(r.sessionId, { boardUrl, ...(ses.status === "done" ? { status: "saved" } : {}) });
+      if (ses.deletedAt) await updateRecent(r, r.sessionId, { status: "deleted" });
+      else if (boardUrl) await updateRecent(r, r.sessionId, { boardUrl, ...(ses.status === "done" ? { status: "saved" } : {}) });
     } catch (e) {
-      if (statusOf(e) === 404) await updateRecent(r.sessionId, { status: "deleted" });
-      else console.warn(`vitrinka: could not refresh recent session ${r.sessionId}`, e);
+      if (statusOf(e) === 404) await updateRecent(r, r.sessionId, { status: "deleted" });
+      else console.warn(`vitrinka: could not refresh recent session ${r.sessionId} (${r.workspace || "default workspace"} on ${r.base})`, e);
     }
   }
 }
@@ -1947,9 +2055,13 @@ async function adoptMe(me, gen, key) {
   if (key !== (await credKey())) return;
   const account = { kind: me.kind, workspace: me.workspace, user: me.user || null, project: me.project || null, label: me.label || null };
   const server = hudPrefsOf(me.prefs);
-  const write = { hudMe: account, hudMeFor: key };
-  if (server && gen === prefEdits) write.hudPrefs = server;
-  await chrome.storage.local.set(write);
+  await chrome.storage.local.set({ hudMe: account, hudMeFor: key });
+  // On the prefs chain, so the check and the write see the same edit count;
+  // never over an edit this credential's server has not acknowledged yet.
+  if (server) await withPrefs(async () => {
+    const pending = await pendingPrefs();
+    if (gen === prefEdits && !(pending && pending.for === key)) await chrome.storage.local.set({ hudPrefs: server });
+  });
 }
 
 // Soft failures (offline, an old server) keep the cached account; a 401/403
@@ -1958,6 +2070,9 @@ async function hudGetMe() {
   const key = await credKey();
   const { base, token } = await getConfig();
   if (!base || !isRecorderToken(token) || meUnavailable.has(key)) return;
+  // An edit a failed PATCH left unacknowledged goes first: the read then
+  // answers with it, rather than reverting it — after a worker restart too.
+  if (await pendingPrefs()) await withPrefsSync(sendPrefs);
   const gen = prefEdits;
   try {
     await adoptMe(await api("GET", "/api/v1/recorder/me", undefined, undefined, { timeoutMs: ME_TIMEOUT_MS }), gen, key);
@@ -1967,21 +2082,72 @@ async function hudGetMe() {
   await broadcastHud();
 }
 
+// Prefs are a read-modify-write of hudPrefs that two quick edits (size, then
+// details) or two recorded tabs race: every write of hudPrefs — an edit, or a
+// /me answer adopting the server's copy — runs on withPrefs and merges into
+// what is stored at that moment. The server sees the edits on withPrefsSync,
+// one PATCH at a time in edit order, each carrying every change it has not
+// acknowledged yet.
+const withPrefs = serialized();
+const withPrefsSync = serialized();
+
+// hudPrefsPending {for, prefs}: the edits the server has not acknowledged,
+// sent or not, and the credential (credKey) they were made under. Stored, so
+// a worker restart neither loses nor reverts them; bound to that credential,
+// so a relink never sends one account's edit to another: the edit is dropped
+// and the new account's server copy wins, as on any relink (hudPrefs above).
+async function pendingPrefs() {
+  const { hudPrefsPending = null } = await chrome.storage.local.get("hudPrefsPending");
+  return hudPrefsPending && hudPrefsPending.prefs && Object.keys(hudPrefsPending.prefs).length ? hudPrefsPending : null;
+}
+
+// Drops the fields `sent` acknowledged (all of them when null) from the
+// pending edits made under `key`; a newer value for a field stays pending.
+function settlePrefs(key, sent) {
+  return withPrefs(async () => {
+    const pending = await pendingPrefs();
+    if (!pending || pending.for !== key) return;
+    const left = sent ? Object.fromEntries(Object.entries(pending.prefs).filter(([k, v]) => sent[k] !== v)) : {};
+    if (Object.keys(left).length) await chrome.storage.local.set({ hudPrefsPending: { for: key, prefs: left } });
+    else await chrome.storage.local.remove("hudPrefsPending");
+  });
+}
+
 async function hudSetPrefs(patch) {
-  const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
-  const hudMe = await currentMe();
-  const key = await credKey();
-  await chrome.storage.local.set({ hudPrefs: hudPrefsOf({ ...(hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS), ...patch }) });
-  const gen = ++prefEdits;
+  await withPrefs(async () => {
+    const key = await credKey();
+    const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
+    const pending = await pendingPrefs();
+    await chrome.storage.local.set({
+      hudPrefs: hudPrefsOf({ ...(hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS), ...patch }),
+      hudPrefsPending: { for: key, prefs: { ...(pending && pending.for === key ? pending.prefs : {}), ...patch } },
+    });
+    prefEdits++;
+  });
   await broadcastHud();
+  await withPrefsSync(sendPrefs);
+}
+
+async function sendPrefs() {
+  // Read together under the prefs chain: the answer to this PATCH is adopted
+  // only if no edit outside this delta happened since.
+  const { pending, gen } = await withPrefs(async () => ({ pending: await pendingPrefs(), gen: prefEdits }));
+  if (!pending) return; // an earlier PATCH already carried this edit
+  const key = await credKey();
+  if (pending.for !== key) return void (await settlePrefs(pending.for, null)); // another credential's: dropped, never sent
   // Prefs stay on the device for every credential the server cannot store
   // them against: a non-recorder token, a server without the route, a key.
+  const hudMe = await currentMe();
   const { base, token } = await getConfig();
-  if (!base || !isRecorderToken(token) || meUnavailable.has(key) || (hudMe && hudMe.kind === "key")) return;
+  if (!base || !isRecorderToken(token) || meUnavailable.has(key) || (hudMe && hudMe.kind === "key")) return void (await settlePrefs(key, null));
   try {
-    await adoptMe(await api("PATCH", "/api/v1/recorder/me", { prefs: patch }, undefined, { timeoutMs: ME_TIMEOUT_MS }), gen, key);
+    const me = await api("PATCH", "/api/v1/recorder/me", { prefs: pending.prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS });
+    await settlePrefs(key, pending.prefs);
+    await adoptMe(me, gen, key);
   } catch (e) {
-    noteMeFailed(e, key); // 409 (a key build) included: the prefs stay on the device
+    // 404 (no route) and 409 (a key build): the server can never store them.
+    if (statusOf(e) === 404 || statusOf(e) === 409) await settlePrefs(key, null);
+    noteMeFailed(e, key);
   }
   await broadcastHud();
 }
@@ -2207,7 +2373,7 @@ globalThis.__vt = { startSession, stopSession, togglePause, continueSession, get
 // browser profile (extension-update.spec.ts).
 globalThis.__vtUpdate = { extUpdateStatus, applyUpdate, seedConfig, hostCall, maybeSelfReload, boot: () => boot() };
 // e2e-only handles for the durable-queue paths (harmless in production).
-globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue };
+globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, noteRecent, updateRecent, refreshRecents };
 
 // Keyboard commands relay to the active tab's HUD.
 chrome.commands.onCommand.addListener(async (command) => {

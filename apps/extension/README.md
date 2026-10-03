@@ -80,6 +80,22 @@ Two things to know before touching any of it:
   textarea. A pill or sheet change ships from the kit, then a pin bump here.
   The pair panel is the one surface the HUD has no seat for: it keeps its own
   small shadow host in `content.js`, just inside the HUD's spot.
+- **A session id is a number per base AND workspace.** The options page can
+  switch either, and `#12` exists on two servers and in two workspaces of
+  one, so whatever outlives the live recording names its scope beside the id:
+  a recent is `(base, workspace, sessionId)` and the HUD lists only the
+  current scope's; the board wait (`awaiting.scope`) and a queued tail
+  (`queueScope:<id>`) are asked only of their own base, in their own
+  workspace (`api(…, { base })` refuses a read whose base moved). Never match
+  a stored session by id alone, and never send the token to an entry's base
+  unless it is the configured one. Recents from before 0.9.1 named no base
+  and are dropped. The IndexedDB queue itself is still keyed
+  `[sessionId, seq]`, so Start/Continue refuse an id whose other-scope tail
+  is still queued (`refuseForeignTail`) rather than mix the two.
+- **Stored read-modify-writes run on a `serialized()` chain** (`withLock` for
+  `rec`, `withRecents`, `withPrefs`): every `chrome.storage.local`
+  get→await→set that two messages can reach at once needs one, or the
+  slower writer restores what the other just changed.
 
 Without the host (no CLI on the machine) every path above degrades to the old
 manual banner — download, unzip over the folder, ↻.
@@ -97,9 +113,10 @@ manual banner — download, unzip over the folder, ↻.
   `Alt+Shift+S` stop. The ⋯ menu names the account (`GET /api/v1/recorder/me`,
   `vkr_` tokens only, 8 s cap; a `vkp_`/`vks_` token reads `API token ·
   <workspace>`, a failed read the cached account or `Linked device`), lists this
-  browser's last five recordings with their boards, and sets the size and the
-  technical details (user prefs; on the device for a key build, a non-recorder
-  token or a server without the route).
+  browser's last five recordings on the current server and workspace with
+  their boards, and sets the size and the technical details (user prefs; on the
+  device for a key build, a non-recorder token or a server without the route;
+  edits apply in order, one PATCH at a time).
 - **The sync chip is the health answer** (recorder-live D4/D5): `synced` once the server
   confirms it holds everything captured, `sending N` while a backlog drains,
   `offline · N` when vitrinka is unreachable, `ended` when the session was closed or deleted
