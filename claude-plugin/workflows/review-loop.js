@@ -523,7 +523,8 @@ function repoProblem(want, got) {
 
 // Every list of a pass (screens, review batches, raw reviews, backlog items,
 // fix lanes) lives in the pass directory and is planned by `vybava ui-loop`
-// (state, batches, merge-review, lanes, checkpoints; see UILOOP_MIN_VYBAVA). An agent relays a verb's
+// (state, doctor, batches, merge-review, lanes, checkpoints; see
+// UILOOP_STATE_CONTRACT). An agent relays a verb's
 // envelope and reads item bodies from disk by key; it never enumerates a list
 // itself — agents dropped or summarized them (pwf-ui pass 1: a backlog from 7
 // of 31 batches, a refused 340-item backlog, a fix stage with 0 lanes). The
@@ -550,42 +551,83 @@ function lanesProblem(state, lanes) {
   return ''
 }
 
-// The verify pass's `--only`, computed on disk: every screen an open backlog
-// item names plus every screen a done checkpoint says its fix changed. The
-// checkpoints come from `vybava ui-loop checkpoints`, never a `fix/*.json`
-// glob: a backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and
-// the verb also drops stale checkpoints and the fix/r<N>/ archives.
-function verifyOnlyCommand(passDir, pass) {
-  return `{ jq -r '.findings[] | select(.status != "met") | .screen' ${passDir}/review/backlog.json; ` +
-    `${checkpointsCommand(pass)} | jq -r '.data.checkpoints[] | select(.status == "done") | .screens[]?'; } | sort -u | paste -sd, -`
-}
-
 // The admitted fix checkpoints of a pass, as one envelope: {data: {pass,
 // passDir, checkpoints: [{key, status, lane, basis, commit, fileDigests,
-// apiChanges, screens, i18n, note}]}}. The only way a stage reads them.
+// apiChanges, screens, i18n, note}]}}. The only way a stage reads them: a
+// backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and the verb
+// also drops stale checkpoints and the fix/r<N>/ archives.
 function checkpointsCommand(pass) {
   return `vybava ui-loop checkpoints --pass ${pass} --json`
 }
 
-// The oldest Výbava the ui-loop stages run on: v0.27.2 reads checkpoints
-// recursively and ships `ui-loop checkpoints`. An older binary does not fail
-// loudly — a missing verb pipes nothing into jq and the verify pass silently
-// loses the fixed screens; the 5.14.1 skew showed a stale vybava mis-drives
-// the loop without an error. So Prepare relays `vybava --version` and the run
-// stops here instead. A source build prints a bare `dev` and passes.
-const UILOOP_MIN_VYBAVA = '0.27.2'
+// The `vybava ui-loop state` contract the stages read: Výbava's
+// `StateContract`, bumped whenever a field a workflow reads is added or
+// changes format, digests included. An older binary does not fail loudly — a
+// missing verb pipes nothing into jq, an omitted field once pushed relaying
+// agents to invent a placeholder, and the 5.14.1 skew showed a stale vybava
+// mis-drives the loop without an error. A semver floor let every source build
+// (`dev`) through and named a release rather than the fields the workflow
+// reads, so the gate is the integer the state itself reports. Contract 2
+// moved staleness into the state: `drift` and the verify selection
+// `next.only`, which the workflow once computed in prose and shell.
+const UILOOP_STATE_CONTRACT = 2
 
-function vybavaProblem(reported) {
-  const text = String(reported || '').trim()
-  const upgrade = `ui-loop needs vybava v${UILOOP_MIN_VYBAVA} or later: run \`brew upgrade --cask vybava\`, then rerun the stage`
-  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
-  if (!m) return /\bdev$/.test(text) ? '' : `prepare relayed no vybava version (\`vybava --version\` printed ${JSON.stringify(text)}) — ${upgrade}`
-  const want = UILOOP_MIN_VYBAVA.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const have = Number(m[i + 1])
-    if (have !== want[i]) return have > want[i] ? '' : `vybava ${m[0]} is installed — ${upgrade}`
-  }
+// Stops a vybava below the contract with the upgrade. `reported` is the
+// `vybava --version` line Prepare relays, only diagnostic text for the message.
+function contractProblem(state, reported) {
+  const have = state ? state.contract : undefined
+  const installed = String((state && state.vybava) || reported || '').trim()
+  const upgrade = `install the newer vybava with \`brew upgrade --cask vybava\`, then rerun the stage`
+  if (have === undefined || have === null) return `vybava ui-loop state reports no contract, so the installed vybava${installed ? ` (${installed})` : ''} predates ui-loop state contract ${UILOOP_STATE_CONTRACT} — ${upgrade}`
+  if (!Number.isInteger(have)) return `prepare relayed state.contract ${JSON.stringify(have)}, not the integer vybava prints — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if (have < UILOOP_STATE_CONTRACT) return `vybava${installed ? ` ${installed}` : ''} reports ui-loop state contract ${have}; the stages need ${UILOOP_STATE_CONTRACT} — ${upgrade}`
   return ''
+}
+
+// The state fields the CLI owns and the stages decide on. The schema leaves
+// them optional so a relay omits what the CLI did not print instead of
+// inventing it; this check stops the run on the omission or a value in
+// another format. A pass-0 state prints an empty basis and an empty
+// capturedHeadSha means a pass without capture provenance.
+const UILOOP_STATE_FIELDS = ['reviewBasis', 'capturedHeadSha', 'sourceUnchanged', 'scoreboardCurrent', 'config.lint.grid', 'config.lint.touchTarget']
+
+function stateProblem(state) {
+  const at = path => path.split('.').reduce((v, k) => (v == null ? undefined : v[k]), state)
+  const missing = UILOOP_STATE_FIELDS.find(f => at(f) == null)
+  if (missing) return `vybava did not report ${missing}: upgrade vybava (\`brew upgrade --cask vybava\`), then rerun the stage`
+  const bad = (field, value, want) => `state.${field} is ${JSON.stringify(value)}, not ${want} — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if ((state.pass || state.reviewBasis) && !/^[0-9a-f]{64}$/.test(state.reviewBasis)) return bad('reviewBasis', state.reviewBasis, 'a 64-hex digest')
+  if (state.capturedHeadSha && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(state.capturedHeadSha)) return bad('capturedHeadSha', state.capturedHeadSha, 'one full commit SHA')
+  for (const f of ['grid', 'touchTarget']) if (!(Number.isInteger(state.config.lint[f]) && state.config.lint[f] > 0)) return bad(`config.lint.${f}`, state.config.lint[f], 'a positive integer')
+  // A reported drift is whole; a verify always names its selection ([] is a
+  // full reshoot). The router runs both verbatim. A null drift is no relay
+  // fault: contract 2 prints it for a pass whose provenance it cannot read
+  // (no capture.json, or a revision this clone lacks), and the router hands
+  // such a pass back for a capture. An omitted drift is: contract 2 always
+  // prints the field, so only the relay can have dropped it.
+  const ids = v => Array.isArray(v) && v.every(s => typeof s === 'string')
+  const drift = state.drift
+  if (drift === undefined) return `prepare relayed no state.drift, which contract ${UILOOP_STATE_CONTRACT} always prints (null for a pass without provenance) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  if (drift && !(ids(drift.app) && ids(drift.rig) && ids(drift.spec) && Number.isInteger(drift.appTotal) && drift.appTotal >= drift.app.length)) return bad('drift', drift, '{app, rig, spec: path or rule id arrays, appTotal ≥ app.length}')
+  const only = state.next && state.next.only
+  if (only != null && !ids(only)) return bad('next.only', only, 'an array of screen ids')
+  if (state.next && state.next.stage === 'verify' && only == null) return bad('next.only', only, 'the verify selection (screen ids, [] for a full reshoot)')
+  return ''
+}
+
+// `vybava ui-loop doctor --for <stage>` stops the stage on a failing check,
+// naming each one's detail and fix. A check the stage does not need reports
+// warn, never fail, so a warning never stops it. A doctor that errs before
+// its checks prints no data: Prepare relays its diagnostics as problems.
+function doctorProblem(doctor, problems = []) {
+  if (!doctor || typeof doctor.ok !== 'boolean' || !Array.isArray(doctor.checks)) {
+    return problems.length
+      ? `prepare relayed no \`vybava ui-loop doctor --json\` data; its problems: ${problems.join('; ')} — fix what they name (or relay the doctor's data verbatim), then rerun the stage`
+      : 'prepare relayed no `vybava ui-loop doctor --json` envelope — relay its data verbatim as doctor; rerun the stage'
+  }
+  if (doctor.ok) return ''
+  const failing = doctor.checks.filter(c => c && c.status === 'fail')
+  return `vybava ui-loop doctor failed ${failing.length ? failing.map(c => `${c.id}: ${c.detail}${c.fix ? ` (fix: ${c.fix})` : ''}`).join('; ') : 'without naming a failing check'} — fix it, then rerun the stage`
 }
 
 // A lane's keys the lane reports as finished (done, skipped, blocked).
@@ -622,15 +664,26 @@ const UILOOP_DETECT_SCHEMA = {
 }
 
 // `vybava ui-loop state --json` data, relayed verbatim (Výbava docs/uiloop.md
-// "Stage verbs"): counts, never item bodies.
+// "Stage verbs"): counts, never item bodies. The fields the CLI owns are
+// optional here and checked in code (stateProblem, contractProblem): a
+// required one pushed relaying agents to invent a placeholder when an older
+// vybava omitted it.
+const UILOOP_CLI_OWNED = 'copy it verbatim from the CLI\'s output; OMIT it when the CLI did not print it — never invent a value or placeholder'
 const UILOOP_STATE = {
   type: 'object',
-  description: 'the `data` of `vybava ui-loop state --json`, verbatim',
+  description: 'the `data` of `vybava ui-loop state --json`, verbatim: copy every field the CLI printed and omit every field it did not, never inventing one',
   properties: {
+    contract: { type: 'integer', description: `the ui-loop state contract; ${UILOOP_CLI_OWNED}` },
+    vybava: { type: 'string', description: `the binary's version; ${UILOOP_CLI_OWNED}` },
     recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
-    headSha: { type: 'string' }, reviewBasis: { type: 'string' }, capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' }, scoreboardBasis: { type: 'string' }, scoreboardCurrent: { type: 'boolean' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
+    headSha: { type: 'string' }, scoreboardBasis: { type: 'string' }, checkpointApiNotes: { type: 'array', items: { type: 'string' } },
+    reviewBasis: { type: 'string', description: `a 64-hex digest (empty before the first pass); ${UILOOP_CLI_OWNED}` },
+    capturedHeadSha: { type: 'string', description: `a full commit SHA, or empty; ${UILOOP_CLI_OWNED}` },
+    sourceUnchanged: { type: 'boolean', description: `true when drift.app is empty; ${UILOOP_CLI_OWNED}` },
+    drift: { type: ['object', 'null'], description: `what changed since the captured revision — app: source paths (at most 20; appTotal counts them all), rig: paths under uiLoop.dir, spec: the rule ids whose text changed in uiLoop.spec; null for a pass without provenance or one whose revision this clone lacks; ${UILOOP_CLI_OWNED}`, properties: { app: { type: 'array', items: { type: 'string' } }, rig: { type: 'array', items: { type: 'string' } }, spec: { type: 'array', items: { type: 'string' } }, appTotal: { type: 'integer' } }, required: ['app', 'rig', 'spec', 'appTotal'] },
+    scoreboardCurrent: { type: 'boolean', description: UILOOP_CLI_OWNED },
     pass: { type: 'integer' }, passDir: { type: 'string' },
-    config: UILOOP_CONFIG,
+    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } } } },
     shots: { type: 'integer' }, screens: { type: 'integer' },
     areas: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, screens: { type: 'integer' } }, required: ['area', 'screens'] } },
     published: { type: 'boolean' }, unpublished: { type: 'array', items: { type: 'string' } },
@@ -640,9 +693,23 @@ const UILOOP_STATE = {
     previous: { type: ['object', 'null'], properties: { pass: { type: 'integer' }, file: { type: 'string' }, open: { type: 'integer' } } },
     checkpoints: { type: 'object', properties: { total: { type: 'integer' }, byStatus: { type: 'object' } } },
     boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
-    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' } }, required: ['stage', 'resume', 'reason'] },
+    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' }, only: { type: ['array', 'null'], items: { type: 'string' }, description: `the screen ids a verify or a reshooting capture shoots, every one ([] is a full reshoot), null on other stages; ${UILOOP_CLI_OWNED}` } }, required: ['stage', 'resume', 'reason'] },
   },
-  required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next', 'reviewBasis', 'capturedHeadSha', 'sourceUnchanged', 'scoreboardCurrent'],
+  required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next'],
+}
+
+// `vybava ui-loop doctor --for <stage> --json` data, relayed verbatim: `ok` is
+// false iff a check failed; a check the stage does not need reports warn.
+const UILOOP_DOCTOR = {
+  type: 'object',
+  description: 'the `data` of `vybava ui-loop doctor --json`, verbatim, also when it exits non-zero; omit it entirely when it printed no data (an unknown verb, or an error before its checks) and put its diagnostics in problems',
+  properties: {
+    ok: { type: 'boolean' },
+    vybava: { type: 'string' },
+    contract: { type: 'integer' },
+    checks: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warn', 'fail', 'skip'] }, detail: { type: 'string' }, fix: { type: 'string' } }, required: ['id', 'status', 'detail'] } },
+  },
+  required: ['ok', 'checks'],
 }
 
 const UILOOP_BATCH = { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' }, screens: { type: 'array', items: { type: 'string' } } }, required: ['id', 'area', 'screens'] }
@@ -656,19 +723,19 @@ const UILOOP_PREP_SCHEMA = {
     branch: { type: 'string' },
     repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
-    vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim; empty when there is no vybava binary' },
+    vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim (diagnostic text only); empty when there is no vybava binary' },
     state: UILOOP_STATE,
+    doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } } }, required: ['screens', 'batches', 'done', 'left'] },
     lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['configured', 'branch', 'repo', 'vybava'],
+  required: ['configured', 'branch', 'repo'],
 }
 
 const UILOOP_CAPTURE_SCHEMA = {
   type: 'object',
   properties: {
-    capturedHeadSha: { type: 'string' }, sourceUnchanged: { type: 'boolean' },
     pass: { type: 'integer' },
     passDir: { type: 'string' },
     shots: { type: 'integer' },
@@ -677,7 +744,7 @@ const UILOOP_CAPTURE_SCHEMA = {
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
     problems: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'shots', 'published', 'capturedHeadSha', 'sourceUnchanged'],
+  required: ['pass', 'shots', 'published'],
 }
 
 const UILOOP_BOARDS_SCHEMA = {
@@ -838,25 +905,34 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const asked = A.stage && A.stage !== 'auto' ? A.stage : ''
   const when = s => (asked ? (asked === s ? 'Now' : '') : `When state's data.next.stage is "${s}"`)
   const passFlag = A.pass ? ` --pass ${A.pass}` : ''
+  // Every state and lanes call names the caller's primitives: a drifted
+  // primitive makes state's verify a full reshoot before the repo sets uiLoop.primitives.
+  const primFlag = list(A.primitives).length ? ` --primitives ${list(A.primitives).join(',')}` : ''
   const batchStep = when('review')
   const laneStep = when('fix')
+  // The doctor judges the stage about to run; `done` runs only the final gate.
+  const judged = s => (s === 'done' ? 'review' : s)
+  const doctorFor = asked ? judged(asked) : '<state\'s data.next.stage; review when it is "done">'
   phase('Prepare')
   const prep = await run.agent(brief(withUiLoop(
-    `Relay the ui-loop state of this checkout. Run the commands below and return their envelopes' \`data\` VERBATIM — every array element, however long; never summarize, sample or recount anything yourself. Change nothing beyond what the commands write.\n` +
-    `1. The repo you are in (\`git rev-parse --show-toplevel\`, absolute), the branch, the devbox workspace from \`devbox url --json\` (empty when none), and the line \`vybava --version\` prints, verbatim, as vybava (empty when there is no binary). The run needs vybava v${UILOOP_MIN_VYBAVA} or later; relay an older one as it is and never upgrade it yourself — the workflow stops and asks for \`brew upgrade --cask vybava\`.\n` +
-    `2. \`vybava ui-loop check --json --no-ts\`: a CONFIG_MISSING diagnostic (or no vybava.config.ts, or no \`vybava\` binary) means configured=false and you stop; every other diagnostic is a problems line.\n` +
-    `3. \`vybava ui-loop state --json --cap ${cap}${passFlag}\` → its \`data\` as state (its diagnostics go to problems).\n` +
+    `Relay the ui-loop state of this checkout. Run the commands below and return their envelopes' \`data\` VERBATIM — every array element, however long; never summarize, sample or recount anything yourself. Copy every field a command printed as it is and OMIT a field it did not print: never invent a value or a placeholder. Change nothing beyond what the commands write.\n` +
+    `1. The repo you are in (\`git rev-parse --show-toplevel\`, absolute), the branch, the devbox workspace from \`devbox url --json\` (empty when none), and the line \`vybava --version\` prints, verbatim, as vybava (empty when there is no binary). The run needs ui-loop state contract ${UILOOP_STATE_CONTRACT}; never upgrade vybava yourself — the workflow checks the contract and asks for \`brew upgrade --cask vybava\`.\n` +
+    `2. \`vybava ui-loop state --json --cap ${cap}${passFlag}${primFlag}\` → its \`data\` as state (its diagnostics go to problems). A CONFIG_MISSING diagnostic (or no vybava.config.ts, or no \`vybava\` binary) means configured=false and you stop.\n` +
+    `3. \`vybava ui-loop doctor --for ${doctorFor} --json\` → its \`data\` as doctor, also when it exits non-zero (ok=false). When it prints no \`data\` (an older vybava without the verb, or an error before its checks), omit doctor and add each of its diagnostics to problems as "doctor <code>: <detail>".\n` +
     (batchStep ? `4. ${batchStep}: \`vybava ui-loop batches --json --pass <state.pass>${A.batch ? ` --size ${A.batch}` : ''}\` → its \`data\` as batches.\n` : '') +
-    (laneStep ? `${batchStep ? 5 : 4}. ${laneStep}: \`vybava ui-loop lanes --json --pass <state.pass> --max ${UILOOP_MAX_LANES}${list(A.primitives).length ? ` --primitives ${list(A.primitives).join(',')}` : ''}\` → its \`data\` as lanes.\n` : '')
+    (laneStep ? `${batchStep ? 5 : 4}. ${laneStep}: \`vybava ui-loop lanes --json --pass <state.pass> --max ${UILOOP_MAX_LANES}${primFlag}\` → its \`data\` as lanes.\n` : '')
   )), { label: 'prepare', phase: 'Prepare', effort: 'low', schema: UILOOP_PREP_SCHEMA })
   if (!prep) throw new Error('review-loop (ui-loop): prepare failed')
   const wrongRepo = repoProblem(A.repo, prep.repo)
   if (wrongRepo) throw new Error(`review-loop (ui-loop): ${wrongRepo} — nothing was changed; relaunch with repo set to the checkout the pass belongs to`)
-  const oldVybava = vybavaProblem(prep.vybava)
-  if (oldVybava) throw new Error(`review-loop (ui-loop): ${oldVybava} — nothing was changed`)
-  if (!prep.configured) throw new Error('review-loop (ui-loop): this repo has no uiLoop section in vybava.config.ts — run `vybava ui-loop init`, then `vitrinka:map` with scope "screens"')
+  if (!prep.configured) throw new Error(!prep.vybava ? 'review-loop (ui-loop): prepare found no `vybava` binary — install it with `brew install --cask vybava`, then rerun the stage' : 'review-loop (ui-loop): this repo has no uiLoop section in vybava.config.ts — run `vybava ui-loop init`, then `vitrinka:map` with scope "screens"')
   const state = prep.state
-  if (!state || !state.next) throw new Error('review-loop (ui-loop): prepare relayed no `vybava ui-loop state` envelope — re-run the stage (vybava v' + UILOOP_MIN_VYBAVA + '+)')
+  if (!state || !state.next) throw new Error(`review-loop (ui-loop): prepare relayed no \`vybava ui-loop state\` envelope — re-run the stage (it needs the vybava release that ships ui-loop state contract ${UILOOP_STATE_CONTRACT})`)
+  // The contract first: an older vybava omits the fields and the doctor verb
+  // the later checks would report. Every stop here has changed nothing.
+  const unready = contractProblem(state, prep.vybava) || stateProblem(state) || doctorProblem(prep.doctor, prep.problems)
+  if (unready) throw new Error(`review-loop (ui-loop): ${unready} — nothing was changed`)
+  for (const c of prep.doctor.checks) if (c && c.status === 'warn') log(`doctor: ${c.id} warns — ${c.detail}`)
   // The screen count is the review's whole scope: an empty scope with shots on
   // disk once read as "every area reviewed" and synthesized a backlog from 7
   // of 31 batches (pwf-ui pass 1). Never proceed on it.
@@ -864,19 +940,26 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const cfg = state.config || { areas: [], apps: [] }
   if (A.expectedHead && state.headSha !== A.expectedHead) throw new Error('review-loop (ui-loop): input revision changed; start a fresh pass')
   const recovery = state.recovery || A.recovery
-  const staleCapture = !!state.pass && (!state.capturedHeadSha || state.sourceUnchanged !== true)
-  const resumeFix = state.next.stage === 'fix' && !!state.capturedHeadSha && state.hasBacklog
-  const auto = staleCapture && !resumeFix && !recovery ? { stage: 'capture', resume: false, reason: 'application source differs from captured revision; capture again' } : state.next
-  let stage = staleCapture ? auto.stage : asked || auto.stage
-  // A verify cut off before its publish left a new, unpublished pass: finish
-  // that pass (capture resumes it) instead of shooting yet another one.
-  if (stage === 'verify' && auto.stage === 'capture' && auto.resume) stage = 'capture'
+  // state.next is the only router: the CLI weighs drift, picks the verify
+  // selection (next.only) and the resume, and the run takes them verbatim.
+  const auto = state.next
+  // A verify cut off before its publish left a new, unpublished pass: state
+  // routes the capture that resumes it, and an asked verify stops with that
+  // next below instead of shooting yet another pass.
+  const stage = asked || auto.stage
   log(`review-loop (ui-loop): pass ${state.pass} on ${prep.branch} — auto says ${auto.stage} (${auto.reason}); running ${stage}`)
   const carry = Object.assign({}, A, { mode: 'ui-loop', stage: undefined, only: undefined, pass: undefined, agentBudget: undefined, expectedHead: undefined, recovery: undefined })
   const why = stage === auto.stage ? auto.reason : `stage ${stage} requested (auto would run ${auto.stage}: ${auto.reason})`
   const out = { mode: 'ui-loop', stage, pass: state.pass, reason: why, boards: state.boards || [], problems: prep.problems || [] }
-  const nextOf = s => (s ? { stage: s, args: Object.assign({}, carry, { stage: s }) } : null)
+  const shoots = s => s === 'capture' || s === 'verify'
+  // A capture or verify shoots every area: its args never carry an areas limit.
+  const nextOf = s => (s ? { stage: s, args: Object.assign({}, carry, { stage: s }, shoots(s) ? { areas: undefined } : {}) } : null)
   const passDir = state.passDir || `${cfg.out}/pass-${state.pass}`
+  const drift = state.drift || { app: [], rig: [], spec: [], appTotal: 0 }
+  const driftLine = drift.app.length ? `${drift.appTotal} application path${drift.appTotal === 1 ? '' : 's'} changed since capture: ${drift.app.join(', ')}${drift.appTotal > drift.app.length ? ` and ${drift.appTotal - drift.app.length} more` : ''}` : `pass ${state.pass} has no capture provenance`
+  // Owner decisions written after the capture are final: the briefs that
+  // judge the shots or fix what they show read those rules first.
+  const decided = verb => (drift.spec.length ? `Owner decisions since capture: rules ${drift.spec.join(', ')} changed in ${cfg.spec}; they are final and override the shots' era — read those rules in the working-tree ${cfg.spec} before you ${verb}.\n` : '')
 
   if (recovery) {
     phase('Recover')
@@ -889,26 +972,49 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const clear = settlePassed && recovered && recovered.treeCleanOfMine === true && recovered.recoveryCleared === true && !(recovered.problems || []).length
     return Object.assign(out, { stage: 'fix', next: { stage: clear ? 'auto' : 'fix', args: Object.assign({}, carry, { pass: state.pass, stage: clear ? 'auto' : 'fix', recovery: clear ? undefined : recovery }) }, receipt: completionReceipt({ problems: [...out.problems, ...((recovered && recovered.problems) || []), ...((recovered && recovered.failures) || []), clear ? 'writer recovered; read stage evidence again' : 'interrupted writer still needs recovery'] }) })
   }
-  const uiGateSchema = { ...GATE_SCHEMA, properties: { ...GATE_SCHEMA.properties, sourceUnchanged: { type: 'boolean' } }, required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }
-  const verifiedGate = gate => gatePassed(gate) && gate.sourceUnchanged === true && !!state.capturedHeadSha && state.sourceUnchanged === true
+  // A null drift is a pass whose provenance state cannot read: no capture.json
+  // (a legacy pass), or a captured revision this clone lacks. Nothing tells
+  // whether its shots still show the application, so no review, verify or
+  // gate runs on them; the run hands back a capture (Výbava docs/uiloop.md:
+  // workflows recapture legacy passes), or the fetch that restores the drift.
+  if ((state.shots || 0) > 0 && state.drift == null && ['review', 'verify', 'done'].includes(stage)) {
+    const unread = state.capturedHeadSha
+      ? `this clone lacks its captured revision ${state.capturedHeadSha} (CAPTURE_REVISION_MISSING) — fetch it (\`git fetch --unshallow\`, or the branch it was captured on) and rerun, or run the capture in next for a new pass`
+      : 'it has no capture provenance (it predates capture.json) — run the capture in next for a new pass'
+    return Object.assign(out, { next: nextOf('capture'), reason: `stage ${stage} needs to know what changed since pass ${state.pass} was captured, but ${unread}` })
+  }
+  // An asked stage is never replaced: one that cannot run as asked stops with
+  // state's next and why — never a capture behind the caller's back.
+  if (asked && stage !== 'capture' && auto.stage === 'capture' && state.published && state.sourceUnchanged === false) return Object.assign(out, { next: nextOf('capture'), reason: `stage ${asked} needs pass ${state.pass}'s shots to show the application, but ${driftLine} — run the capture state routes to (${auto.reason})` })
+  if (stage === 'verify' && auto.stage !== 'verify') return Object.assign(out, { next: auto.stage === 'done' ? null : nextOf(auto.stage), reason: `verify shoots the selection state names, and state routes to ${auto.stage}: ${auto.reason}` })
+  if (shoots(stage) && list(A.areas).length) return Object.assign(out, { next: nextOf(stage), reason: `a run limited to areas ${list(A.areas).join(', ')} never shoots — run the ${stage} without areas (${auto.reason})` })
+  // The captured source is state's word (sourceUnchanged, drift); the gate
+  // answers only for what its own run left in the tree. Source can change
+  // after Prepare (another writer, a long review), so the gate reads state
+  // again once it has verified, and only that read can complete the pass.
+  const uiGateSchema = { ...GATE_SCHEMA, properties: { ...GATE_SCHEMA.properties, treeCleanOfMine: { type: 'boolean' }, sourceUnchanged: { type: 'boolean' } }, required: [...GATE_SCHEMA.required, 'treeCleanOfMine', 'sourceUnchanged'] }
+  const verifiedGate = gate => gatePassed(gate) && gate.treeCleanOfMine === true && !!state.capturedHeadSha && state.sourceUnchanged === true && gate.sourceUnchanged === true
   const verifyGate = () => run.agent(brief(
-    `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from runner counts; zero tests cannot pass an expected suite. Check the application tree and the tested Devbox source against capturedHeadSha ${state.capturedHeadSha}, excluding only ${cfg.out} and .vitrinka/. Include staged, unstaged and untracked files. No source edits are allowed. Return sourceUnchanged, green, ran, failures and headSha AFTER verification.`
+    `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from runner counts; zero tests cannot pass an expected suite. No source edits are allowed: treeCleanOfMine is false when the gates or you left a change in the application tree (staged, unstaged or untracked, outside ${cfg.out} and .vitrinka/) that was not there before you started. Then run \`vybava ui-loop state --json --cap ${cap} --pass ${state.pass}${primFlag}\` and return its \`data.sourceUnchanged\` verbatim as sourceUnchanged (false when it prints none). Return treeCleanOfMine, sourceUnchanged, green, ran, failures and headSha AFTER verification.`
   ), { label: 'gate:ui-loop', phase: 'Verify', schema: uiGateSchema })
-  if (staleCapture && !resumeFix && !recovery && state.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached with stale captured source`] }) })
   const retryGate = gate => {
     const attempts = (A.gateRetries || 0) + 1
     const failures = [...((gate && gate.failures) || [])]
+    if (state.sourceUnchanged !== true) failures.push(`the shots predate the application: ${driftLine}`)
+    else if (gate && gate.sourceUnchanged !== true) failures.push('the shots predate the application: its source changed during this run (state, read after verification)')
     if (!gate) failures.push('verification agent failed')
-    else if (gate.sourceUnchanged !== true) failures.push('application source changed during verification')
+    else if (gate.treeCleanOfMine !== true) failures.push('verification left changes in the application tree')
     else if (!(gate.testsExecuted > 0) || !(gate.ran || []).length) failures.push('verification has no executed test evidence')
     else if (!gate.green || !gate.headSha) failures.push('verification gate did not pass')
-    const stage = gate && gate.sourceUnchanged === false ? 'capture' : 'auto'
-    return Object.assign(out, { next: attempts < 3 ? { stage, args: Object.assign({}, carry, { stage, gateRetries: attempts }) } : null, receipt: completionReceipt({ problems: [...out.problems, ...failures] }) })
+    return Object.assign(out, { next: attempts < 3 ? { stage: 'auto', args: Object.assign({}, carry, { stage: 'auto', gateRetries: attempts }) } : null, receipt: completionReceipt({ problems: [...out.problems, ...failures] }) })
   }
   if (stage === 'done') {
     if (!state.hasBacklog || (state.review.left || []).length || !state.scoreboardCurrent || state.backlog.reviewed !== state.screens) {
       return Object.assign(out, { next: nextOf('review'), receipt: completionReceipt({ problems: [...out.problems, 'review coverage or the durable scoreboard receipt is missing or stale'] }) })
     }
+    // State ends a drifted pass at the cap or after a round that fixed
+    // nothing: its shots are no evidence for the application, so no gate.
+    if (state.sourceUnchanged !== true) return Object.assign(out, { next: auto.stage === 'done' ? null : nextOf(auto.stage), receipt: completionReceipt({ problems: [...out.problems, `the shots predate the application: ${driftLine}`] }) })
     const gate = await verifyGate()
     if (!verifiedGate(gate)) return retryGate(gate)
     return Object.assign(out, { next: null, receipt: completionReceipt({ complete: !state.backlog.open && !!state.shots && state.published && verifiedGate(gate), problems: out.problems, open: state.backlog.open ? [{ title: `${state.backlog.open} open UI findings` }] : [], evidence: verifiedGate(gate) ? [{ pass: state.pass, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
@@ -921,15 +1027,24 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   if (stage === 'capture' || stage === 'verify') {
     const resume = stage === 'capture' && auto.stage === 'capture' && auto.resume && !A.fresh
     if (!resume && state.pass >= cap) return Object.assign(out, { next: null, receipt: completionReceipt({ problems: [...out.problems, `cap of ${cap} passes reached; another capture is required`] }) })
-    // The verify selection lives on disk (open items' screens + what done
-    // checkpoints touched); only its emptiness is known here, from the counts.
-    const verifyOnly = stage === 'verify'
-    const fixed = ((state.checkpoints || {}).byStatus || {}).done || 0
-    if (verifyOnly && !fixed && !(state.backlog || {}).open) return Object.assign(out, { next: null, reason: 'nothing touched and nothing open — no verify pass needed' })
-    const only = verifyOnly ? ['"$ONLY"'] : staleCapture ? [] : list(A.only)
+    // The selection is state's next.only, verbatim: screen ids, or [] for a
+    // full reshoot. A capture state does not select (the first pass, a
+    // resume, one the caller asked for) shoots the caller's `only`. The run's
+    // own command reads the stage and the selection from state on disk
+    // together, never retyped from the relay: a relay that cut or garbled one
+    // id (pwf-ui selects ~230) would silently skip a screen a fix touched, and
+    // the selection can change after Prepare. `jq -e` fails when state no
+    // longer routes this stage; an empty ONLY is a full reshoot and passes no
+    // --only (one word, `--only=`, in sh, bash and zsh alike). The relay picks
+    // the prose.
+    const selected = stage === auto.stage && Array.isArray(auto.only) ? auto.only : null
+    if (selected && list(A.only).length) log(`only ${list(A.only).join(',')} ignored: state selects ${selected.length ? `${selected.length} screens` : 'a full reshoot'}`)
+    const readOnly = selected ? `ONLY=$(vybava ui-loop state --json --cap ${cap} --pass ${state.pass}${primFlag} | jq -er '.data.next | select(.stage == "${stage}") | .only | join(",")') && ` : ''
+    const only = selected ? '${ONLY:+"--only=$ONLY"}' : list(A.only).length ? `--only ${list(A.only).join(',')}` : ''
+    const what = selected && `${selected.length ? `the ${selected.length} screens \`vybava ui-loop state\` selects, which step 2 reads on disk — never type one` : 'every screen: a full reshoot'} (${auto.reason})`
     const flags = [
       list(A.apps).length ? `--app ${list(A.apps).join(',')}` : '',
-      only.length ? `--only ${only.join(',')}` : '',
+      only,
       list(A.viewports).length ? `--viewports ${list(A.viewports).join(',')}` : '',
       list(A.themes).length ? `--themes ${list(A.themes).join(',')}` : '',
       A.workers ? `--workers ${A.workers}` : '',
@@ -938,20 +1053,19 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const label = stage === 'verify' ? 'verify' : 'capture'
     phase('Capture')
     const cap1 = await run.agent(brief(withUiLoop(
-      `${verifyOnly ? `Verify pass: re-shoot, as a NEW pass, the screens pass ${state.pass}'s fix round touched plus every screen an open backlog item names. Compute that list on disk, never by hand: \`ONLY=$(${verifyOnlyCommand(passDir, state.pass)})\`.` : resume ? `Finish pass ${state.pass}: it holds shots that are not published.` : 'Capture a new ui-loop pass.'}\n` +
+      `${stage === 'verify' ? `Verify pass ${state.pass}'s fix round: re-shoot, as a NEW pass, ${what}.` : resume ? `Finish pass ${state.pass}: it holds shots that are not published.` : `Capture a new ui-loop pass${what ? ` of ${what}` : ''}.`}\n` +
       (resume && state.shots ? `Shots already exist: when report.json shows every selected shot ok or unreachable, skip straight to step 3.\n` : '') +
-      `1. \`vybava ui-loop check --json\` must pass (a VENDOR_DRIFT is fixed with \`vybava ui-loop sync\` and committed path-limited; any other diagnostic is a problems line and you stop).\n` +
-      `Before starting the runner, confirm the application tree is clean against HEAD (including staged and untracked source) and record that HEAD. The updated CLI persists capture.json before running the capture. On resume retain and validate the original capture.json revision; never invent provenance for a legacy pass.\n` +
-      `2. \`vybava ui-loop run ${flags} --wrap "${wrap}" --json\` from the repo root. The capture runs in the devbox workspace${prep.workspace ? ` (${prep.workspace})` : ''}, next to the app, never on the Mac. A run cut short is finished with the same command plus \`--resume\`, never by restarting the container.\n` +
+      `1. \`vybava ui-loop check --json\` must pass: a VENDOR_DRIFT is fixed with \`vybava ui-loop sync\` and committed path-limited; any other error diagnostic is a problems line and you stop. A warning (SPEC_LINT_DRIFT, DEVBOX_SYNC, …) is a problems line and never stops the capture.\n` +
+      `\`ui-loop run\` records the captured revision in capture.json before it shoots and refuses uncommitted application source, or a --resume whose source drifted since that revision: that diagnostic is a problems line and you stop — never commit, revert or stash source to get past it, and never write capture.json yourself.\n` +
+      `2. \`${readOnly}vybava ui-loop run ${flags} --wrap "${wrap}" --json\` from the repo root${readOnly ? `, as ONE command: it reads the stage and next.only from state on disk, and the read fails when state no longer routes ${stage} — a problems line, and you stop. An empty ONLY is state's full reshoot: the command then passes no --only` : ''}. The capture runs in the devbox workspace${prep.workspace ? ` (${prep.workspace})` : ''}, next to the app, never on the Mac. A run cut short is finished with the same command plus \`--resume\`, never by restarting the container.\n` +
       `3. Bring the pass back — devbox sync is one-way: \`rsync -a devops:ws/<workspace>/<app>/<out>/pass-<n>/ <out>/pass-<n>/\` with <workspace> from \`devbox url --json\` (docs/uiloop.md "On a Devbox").\n` +
       `4. \`vybava ui-loop split --json\`, then \`vybava ui-loop publish --json\`; a set that still fails after its retries is re-published alone with \`--sets <key>\` once, then reported.\n` +
-      `After capture and rsync, read capture.json and validate the original revision against both checkout and tested Devbox source, excluding only uiLoop.out and .vitrinka/. Report capturedHeadSha and sourceUnchanged; stop on application drift. Never overwrite the original marker. Return the pass, its passDir, the shot count by status (report.json), published, and every set {key, area, url, status}.`
+      `Return the pass, its passDir, the shot count by status (report.json), published, and every set {key, area, url, status}.`
     )), { label, phase: 'Capture', schema: UILOOP_CAPTURE_SCHEMA })
     if (!cap1) throw new Error(`review-loop (ui-loop): ${label} failed — run stage auto: when the pass was created it resumes that pass, otherwise it runs ${stage} again`)
     out.pass = cap1.pass
     out.capture = { shots: cap1.shots, byStatus: cap1.byStatus || {}, published: cap1.published }
     out.problems.push(...(cap1.problems || []))
-    if (!cap1.capturedHeadSha || cap1.sourceUnchanged !== true) return Object.assign(out, { next: nextOf('capture'), receipt: completionReceipt({ problems: [...out.problems, 'captured application source changed or lacks provenance'] }) })
     if (!cap1.published) return Object.assign(out, { next: nextOf('capture') })
 
     phase('Boards')
@@ -980,14 +1094,16 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const todo = all.filter(b => !doneIds.has(b.id)).filter(b => !list(A.areas).length || list(A.areas).includes(b.area))
     const now = todo.slice(0, Math.min(UILOOP_MAX_REVIEWERS, A.reviewers || UILOOP_MAX_REVIEWERS))
     const prev = state.previous && state.previous.open ? state.previous : null
+    const { grid, touchTarget } = cfg.lint
     log(`review: ${all.length} batches, ${doneIds.size} already reviewed, ${now.length} this run, ${todo.length - now.length} left for the next run`)
     const reviewer = b => () => run.agent(brief(withUiLoop(
       `Review batch ${b.id} of ui-loop pass ${state.pass} (area ${b.area}): screens ${JSON.stringify(b.screens)} (the batch as ${passDir}/review/batches.json defines it).\n` +
-      `Judge against the written spec \`${cfg.spec || 'the spec file uiLoop.spec names'}\` — read it first, owner decisions in it are final — and its hard rules: the 4pt grid, no text overflow, no horizontal scroll, safe areas respected, touch targets ≥ 44 on phone, one painter per background, dialogs sized for their content, UX that makes sense to the app's real user.\n` +
+      `Judge against the written spec \`${cfg.spec || 'the spec file uiLoop.spec names'}\` — read it first, owner decisions in it are final — and its hard rules: the ${grid}pt grid, no text overflow, no horizontal scroll, safe areas respected, touch targets ≥ ${touchTarget}×${touchTarget} on phone, one painter per background, dialogs sized for their content, UX that makes sense to the app's real user.\n` +
+      decided('judge') +
       `Files: ${passDir}/shots/<id>/<viewport>.<theme>.png (+ .full.png when the page scrolls) and its .json record (status, lint defects, consoleErrors, sourceFiles); the manifest entry is in \`${cfg.dir}/screens/${b.area}.ts\`.\n` +
       `Method: read EVERY png of every screen. ` +
       (prev ? `Pass ${prev.pass}'s open items on your screens are read from disk: \`jq -c --argjson s '${JSON.stringify(b.screens)}' '.findings[] | select(.status != "met" and (.screen as $x | $s | index($x))) | {key, screen, title, acceptance}' ${prev.file}\`. Judge each one's acceptance line: met / partly / not-met (pass ${prev.pass}'s png of the same viewport is the before). Never file one of them again as a new finding — its verdict is its entry.\n` : '') +
-      `Then list what is still or newly wrong: severity broken | needs-work | polish, a title, detail (with the region in image px), the files a fix edits (repo-relative, verified to exist), an acceptance line a later reviewer can judge from a screenshot, the viewports/themes/shots (\`<id>@<viewport>.<theme>\`) it shows on, systemic=true when a shared primitive or token is the cause. Ignore invisible lint noise; mocked data and seed names are fine. A screen whose shot is missing or blank goes to unreviewed as "<screen id> (why)".\n` +
+      `Then list what is still or newly wrong: severity broken | needs-work | polish, a title, detail (with the region in image px), the files a fix edits (repo-relative, verified to exist), an acceptance line a later reviewer can judge from a screenshot, the viewports/themes/shots (\`<id>@<viewport>.<theme>\`) it shows on, systemic=true when a shared primitive or token is the cause. Ignore invisible lint noise; mocked data and seed names are fine. A screen whose shot is missing or blank goes to unreviewed as "<screen id> (why)" and gets ONE finding of its own, so the fix stage repairs it (shot again unrepaired, it shows the same blank): severity broken, its shot records' status, step and error as detail, the recipe in \`${cfg.dir}/screens/${b.area}.ts\` (or the app file the error names) as files, acceptance "every shot of <screen id> is captured ok and shows its content"${prev ? ` — unless one of pass ${prev.pass}'s open items above already carries it` : ''}.\n` +
       `Write the whole batch to ${passDir}/review/raw/${b.id}.json in this shape (it is the batch's checkpoint; \`vybava ui-loop merge-review\` reads it): ${UILOOP_RAW_SHAPE}\n` +
       `Write basis ${state.reviewBasis} and screensRead (only screens whose every PNG you actually read) in the raw file too. Return only the receipt: the file, the finding and verdict counts, and the unreviewed entries.`
     )), { label: `review:${b.id}`, phase: 'Review', schema: UILOOP_REVIEW_SCHEMA })
@@ -1021,15 +1137,16 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     out.review.judged = synth.reviewed
     out.review.unreviewed = [...new Set([...out.review.unreviewed, ...(synth.unreviewed || [])])].sort()
     // A screen no reviewer could judge (missing or blank shot) is never
-    // silently counted reviewed — it is named, with the recapture that fixes it.
+    // silently counted reviewed. A recapture shoots the same blank: its
+    // recipe or capture is the defect, and the fix stage owns it.
     const ids = [...new Set(out.review.unreviewed.map(u => String(u).split(/[\s(@]/)[0]).filter(Boolean))].sort()
-    if (ids.length) out.problems.push(`${ids.length} screens could not be reviewed (missing or blank shots): recapture with review-loop {mode: "ui-loop", stage: "capture", only: ${JSON.stringify(ids)}}`)
+    if (ids.length) out.problems.push(`${ids.length} screens could not be reviewed (missing or blank shots) — recipe/capture defects for the fix stage: ${JSON.stringify(ids)}`)
     out.problems.push(...(synth.problems || []))
 
     phase('Scoreboard')
     const score = await run.agent(brief(withUiLoop(
       `Score ui-loop pass ${state.pass}: \`vybava ui-loop scoreboard --pass ${state.pass} --json\`, then read ${passDir}/scoreboard.md.\n` +
-      `On each area set board ${JSON.stringify(out.boards)} post a callout in this pass's first section (the row's \`section\`, headed by the "Pass ${state.pass}" summary callout): that area's row (screens broken / needs-work / polish / clean, findings open / met / partly / not-met, lint defects per rule, console errors, shots not ok, and the delta against the previous pass) and the totals line. Read \`docs {topic: "kind:board"}\` first; the callout replaces an earlier scoreboard callout of the same section. Read every board back. Only after all callouts are confirmed, read \`vybava ui-loop state --pass ${state.pass} --json\` for scoreboardBasis, write {basis: scoreboardBasis, posted: [{area, url}]} atomically to ${passDir}/review/scoreboard-receipt.json (temp file, fsync, rename, directory fsync), then read state back and return receiptVerified=true only when scoreboardCurrent=true. Missing or failed callouts never get a receipt. Return the scoreboard file, receiptVerified, totals and every board url you posted to.`
+      `On each area set board ${JSON.stringify(out.boards)} post a callout in this pass's first section (the row's \`section\`, headed by the "Pass ${state.pass}" summary callout): that area's row (screens broken / needs-work / polish / clean, findings open / met / partly / not-met, lint defects per rule, console errors, shots not ok, and the delta against the previous pass) and the totals line. Read \`docs {topic: "kind:board"}\` first; the callout replaces an earlier scoreboard callout of the same section. Read every board back. Only after all callouts are confirmed, read \`vybava ui-loop state --pass ${state.pass}${primFlag} --json\` for scoreboardBasis, write {basis: scoreboardBasis, posted: [{area, url}]} atomically to ${passDir}/review/scoreboard-receipt.json (temp file, fsync, rename, directory fsync), then read state back and return receiptVerified=true only when scoreboardCurrent=true. Missing or failed callouts never get a receipt. Return the scoreboard file, receiptVerified, totals and every board url you posted to.`
     )), { label: 'scoreboard', phase: 'Scoreboard', effort: 'low', schema: UILOOP_SCORE_SCHEMA })
     if (score) { out.scoreboard = { file: score.scoreboardFile, totals: score.totals || {}, posted: score.posted }; out.problems.push(...(score.problems || [])) }
     else out.problems.push('scoreboard: posting failed — rerun review')
@@ -1037,7 +1154,13 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const coverageOk = !ids.length && synth.reviewed === state.screens
     const gate = !synth.open && coverageOk && scoreOk ? await verifyGate() : null
     if (!synth.open && coverageOk && scoreOk && !verifiedGate(gate)) return retryGate(gate)
-    return Object.assign(out, { next: nextOf(ids.length ? 'capture' : !scoreOk ? 'review' : synth.open ? 'fix' : !coverageOk ? 'review' : null), receipt: completionReceipt({ complete: !synth.open && coverageOk && scoreOk && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
+    // Each such screen is a finding of its own (the reviewer brief). When
+    // nothing open carries them, no stage would act: say what to run.
+    if (ids.length && !synth.open && scoreOk) {
+      out.reason = `${ids.length} screens could not be reviewed and no open finding carries them to the fix stage: ${JSON.stringify(ids)} — repair each recipe in ${cfg.dir}/screens/<area>.ts, or the app its shot records name (${passDir}/shots/<id>/<viewport>.<theme>.json: status, step, error), then shoot them again with stage capture and only ${JSON.stringify(ids)}`
+      out.problems.push(out.reason)
+    }
+    return Object.assign(out, { next: nextOf(!scoreOk ? 'review' : synth.open ? 'fix' : !coverageOk && !ids.length ? 'review' : null), receipt: completionReceipt({ complete: !synth.open && coverageOk && scoreOk && verifiedGate(gate), problems: out.problems, evidence: verifiedGate(gate) ? [{ backlog: synth.backlogFile, shots: state.shots, headSha: gate.headSha, ran: gate.ran }] : [] }) })
   }
 
   // ---- fix: lanes by ownership (`vybava ui-loop lanes`) — primitives first, then their dirs are frozen and ≤ 4 area lanes run; Settle applies the deferred i18n and type-checks
@@ -1052,6 +1175,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     log(`fix: ${prim.length} primitives lanes, ${areas.length} area lanes, ${lanes.frozen.length} frozen dirs, ${foreign.length} foreign, ${i18nItems.length} i18n-only, ${lanes.finished} already finished`)
     const laneBrief = (l, kind, apiNotes) => brief(withUiLoop(
       `You are fix lane ${l.lane} (${kind}) of ui-loop pass ${state.pass}, on branch ${prep.branch}. The spec is \`${cfg.spec}\` (read it first; its rules and owner decisions are final); the apps run on the devbox${prep.workspace ? ` workspace ${prep.workspace}` : ''} and stay running.\n` +
+      decided('fix') +
       `Before any source edit, atomically write ${passDir}/fix/recovery.json = ${JSON.stringify({ lane: l.lane, kind, dirs: l.dirs, keys: l.keys })} (temp/fsync/rename/directory sync). It is the durable writer identity. Keep it on failure or dirty source; remove it only after all your source edits are committed and the application tree is clean outside pass output/.vitrinka.\n` +
       `WHAT TO FIX: these backlog keys, in this order (worst first): ${JSON.stringify(l.keys)}.\n` +
       `Read each item's full body from ${passDir}/review/backlog.json by key (\`jq '.findings[] | select(.key=="<key>")' ${passDir}/review/backlog.json\`): title, detail, acceptance, files, screen, viewports, themes, shots. Look at its shots under ${passDir}/shots/<screen>/<viewport>.<theme>.png before and while you fix.\n` +
@@ -1138,7 +1262,8 @@ function laneSummary(results) {
 //   routes mode: routes?, journeys?, projectType?, matrix?, cap?: 3, severity?: 'minor'|'major'|'blocker',
 //         task?, project?, board?, base?, scope?: string (what to test, prose)
 //   ui-loop mode (lib/uiloop-review.js): stage?: 'auto'|'capture'|'review'|'fix'|'verify', pass?, cap?: 6 passes, fresh?,
-//         apps?, only?, viewports?, themes?, workers?, wrap?, areas?, batch?: 14, reviewers?: 4, primitives?: directory prefixes (vybava ui-loop lanes --primitives),
+//         apps?, only? (a capture state does not select), viewports?, themes?, workers?, wrap?, areas? (review only: a run with areas never shoots),
+//         batch?: 14, reviewers?: 4, primitives?: directory prefixes (vybava ui-loop state and lanes --primitives),
 //         repo?: absolute path — every agent works there (cd first); the run stops when Detect/Prepare report another repo }
 const A = args || {}
 const run = workflowRun(A)

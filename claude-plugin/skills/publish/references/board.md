@@ -36,9 +36,16 @@ part of creation.
      new families. When omitted the server infers it (brainstorm→brainstorming,
      journeys→journeys, `pr-<N>-*`→reviews, `s-YYYYMMDD*`→testing) —
      `design` has no pattern and must always be passed explicitly.
-   - `meta` — the JSON bag: `{parentBoard}` for child boards,
-     `{commitSha, tracedAt}` for git-tied ones. Stamp later with
-     `set_board_meta` (merge-patch — send only the keys that change).
+   - `meta` — the JSON bag: `{commitSha, tracedAt}` for git-tied ones.
+     Stamp later with `set_board_meta` (merge-patch — send only the keys
+     that change).
+   - `parentBoard` (+ `section`) — FILE the board into an index: the server
+     stamps `meta.parentBoard` AND places its board card in that section of
+     the index (created if new), idempotently; the reply's `index:
+     {board, section, cardId}` is the receipt. The same args on
+     `set_board_meta` file an existing board. `index: true` (or
+     `set_board_meta {meta: {index: true}}`) makes a board an index: the
+     sidebar folds every board it holds under it, by its sections.
    - `theme` — at birth or later via `set_board_meta {theme}` (`""` = house
      default; open vocabulary). Known bundles: `sketch` (hand-drawn: rough
      strokes + Caveat hand type, exports follow), `light-paper` /
@@ -85,8 +92,9 @@ compose-ready skeleton: `get_templates` → **template 10**. The shape:
   sections, clear it and advance `commitSha`/`tracedAt` in one
   `set_board_meta` merge-patch.
 - **Runs are child boards**, never sections on the suite: create with
-  `meta.parentBoard = "<suite-slug>"` (nests under the suite in the sidebar)
-  and portal-link it in the suite's "Runs" section (`kind:"board"`). Fill the
+  `parentBoard: "<suite-slug>", section: "Runs"` — ONE call nests it under
+  the suite in the sidebar AND places its board card in the suite's "Runs"
+  section; never compose that card by hand. Fill the
   run as a QA session (template 1): steps flip `status` via `update_cards` as
   the run progresses — never stack retest cards — and close with ONE summary
   callout.

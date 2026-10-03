@@ -151,7 +151,7 @@ task, run the `handoff` skill (`hand_back`) — the chat block is its
 | `get {kind:"annotation"}` × N up front | `list {kind:"work"}` once; enrich only Phase-1 flagged items |
 | `scrape_board` for context | the prompts + `covered` cards; scrape only per-section on demand |
 | Reading crops in main context | ONE batched subagent returning text findings |
-| Reporting NEW defects you noticed as document/`finding` cards | `get_card_image` per screen → ONE `annotate` batch (keys, regions, `agent`); they wait `staged` for the user's Accept |
+| Reporting NEW defects you noticed as document/`finding` cards | `get_card_image {cardIds}` sheet to survey, `{cardId}` to measure → ONE `annotate` batch (keys, regions, `agent`); they wait `staged` for the user's Accept |
 | Fix → verify → reply per item | fix per BLOCK, verify per batch, resolve per block |
 | Re-fetching an item to re-read its prompt | keep the Phase-2 block map in your task tracker |
 | A verifier agent per screenshot | one verifier per batch, PASS/FAIL table back |
