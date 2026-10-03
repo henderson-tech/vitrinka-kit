@@ -17,8 +17,11 @@ unattended run only) and other omissions children, `summary` becomes the
 next version of the task's `handoff` attachment, `surfaces` · `buildOn` · `branch` · `worktree` ·
 `prerequisites` · `readFirst` become the next pickup's ON · BRANCH · BEFORE ·
 READ rows, `refs` (pr, board) attach, `sessionId` ends the live run — and
-returns `rendered`, the chat block. The schema carries each field's shape;
-the full contract is `docs {topic: "tasks"}`.
+returns `rendered`, the chat block. Each pr ref carries its status, read right
+before the call (`gh pr view <url> --json state,isDraft`): `meta: {url, state:
+merged | open | draft | closed}` — re-attaching updates it, and the block prints
+`🔀 PR (merged | waiting | draft | closed): <url>`, `unknown` when none was given.
+The schema carries each field's shape; the full contract is `docs {topic: "tasks"}`.
 
 ## Contracts
 

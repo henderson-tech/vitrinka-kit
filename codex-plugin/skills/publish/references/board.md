@@ -41,9 +41,10 @@ part of creation.
      `set_board_meta` (merge-patch — send only the keys that change).
    - `theme` — at birth or later via `set_board_meta {theme}` (`""` = house
      default; open vocabulary). Known bundles: `sketch` (hand-drawn: rough
-     strokes + Caveat hand type, exports follow), `playful`, `technical`,
-     `diary`, `girlies`, `release`. Pick `sketch` when the user asks for a
-     hand-drawn / whiteboard mood.
+     strokes + Caveat hand type, exports follow), `light-paper` /
+     `dark-paper` (the house look pinned light or dark for every reader),
+     `playful`, `technical`, `diary`, `girlies`, `release`. Pick `sketch` when
+     the user asks for a hand-drawn / whiteboard mood.
 3. **Structure template-first**: `get_templates` ONCE, start from the matching
    skeleton (QA session, decision map, dashboard, deck, journey suite …) in
    one `compose_board` call per coherent unit — intent not coordinates; a

@@ -30,6 +30,17 @@ for exactly this deploy.
 | `/vendor/xyflow-react.mjs` (+ its css) | React Flow 12 for node/edge canvases. |
 | `/vendor/uplot.mjs` | uPlot canvas engine (huge series; viz cards use it). |
 
+## Fonts
+
+An artifact's text renders only in fonts that travel with it, live and in
+its server still alike: any OS font or generic (`system-ui`,
+`-apple-system`, `Helvetica`, `sans-serif`, `Menlo`, `Georgia`, …) is drawn
+in the bundled Inter / JetBrains Mono / Source Serif 4 by category, MathML
+in Noto Sans Math; emoji stay the OS's, and so do scripts beyond Latin,
+Greek and Cyrillic. A custom face counts only when it travels with the
+document (`@font-face` with a `data:`/`blob:` src, or from `/vendor`) — a
+remote or relative src is replaced.
+
 ## Choosing the right tool
 
 - **Chart on a BOARD** → `chart` card (`line/area/bars/pie/donut/scatter/heatmap/…`,
