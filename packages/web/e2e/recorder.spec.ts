@@ -6,6 +6,8 @@
  * pill, clicks, pushes a route, sends a note, drags a region annotation and
  * stops — then asserts what the stub saw.
  */
+import { readFileSync } from 'node:fs';
+
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
 import { type Seen, type Servers, startServers } from './fixture/servers';
@@ -25,7 +27,8 @@ test.afterAll(async () => {
 });
 
 test('records a journey: create · click · nav · note · region annotation · rrweb · stop', async ({ page }) => {
-  await page.goto(`${pageUrl}/`);
+  // A magic-link style start URL: its token must never reach the stream.
+  await page.goto(`${pageUrl}/?token=e2e-url-secret`);
   await page.getByRole('button', { name: 'Start recording' }).click();
   const pill = page.locator('[data-e2e="recorder-pill"]');
   await expect(pill).toBeVisible();
@@ -95,6 +98,13 @@ test('records a journey: create · click · nav · note · region annotation · 
   expect((click.payload!.rect as { w: number }).w).toBeGreaterThan(0);
   const nav = events.find((e) => e.kind === 'nav' && e.payload?.route === '/orders/42')!;
   expect(nav.payload).toMatchObject({ spa: true });
+  // The start URL's secret is scrubbed in the session's first nav AND in
+  // rrweb's Meta event, which carries location.href on every full snapshot.
+  const startNav = events.find((e) => e.kind === 'nav' && e.payload?.route === '/')!;
+  expect(startNav.payload).toMatchObject({ url: `${pageUrl}/?token=[redacted]` });
+  const chunkBodies = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => JSON.stringify(s.body));
+  expect(chunkBodies.join('')).toContain('?token=[redacted]');
+  expect(JSON.stringify(events) + chunkBodies.join('')).not.toContain('e2e-url-secret');
   expect(events.some((e) => e.kind === 'note' && e.payload?.text === 'checkout looks off' && !e.payload.annotate)).toBe(true);
   const region = events.find((e) => e.kind === 'note' && e.payload?.annotate === true)!;
   expect(region.payload).toMatchObject({ text: 'this area', selector: '', route: '/orders/42' });
@@ -473,7 +483,10 @@ test('size and details: the menu scales the HUD, shows technical details, and bo
   await expect.poll(async () => (await pill.boundingBox())!.height).toBeGreaterThan(md);
   const detail = page.locator('[data-e2e="recorder-detail"]');
   await expect(detail).toContainText('sess-e2e');
-  await expect(detail).toContainText('web/0.2.1');
+  // The package version, not a literal: a release that bumps package.json
+  // but forgets RECORDER_VERSION fails here.
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  await expect(detail).toContainText(`web/${pkg.version}`);
   await expect(detail).toContainText('events');
   await page.reload();
   await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'lg');

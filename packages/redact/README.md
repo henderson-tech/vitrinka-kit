@@ -1,8 +1,8 @@
 # @vitrinka/redact
 
 The vitrinka recorder redaction engine: safe-by-default scrubbing of
-auth-bearing headers, sensitive body keys, and URL query/fragment secrets in
-recorded sessions — extensible per workspace via the redaction policy the
+auth-bearing headers, sensitive body keys, URL query/fragment secrets and
+PEM private keys (by value, under any key) in recorded sessions — extensible per workspace via the redaction policy the
 vitrinka server serves, and shared by every vitrinka capture client
 ([`@vitrinka/expo`](../expo) and the [browser extension](../../apps/extension)).
 

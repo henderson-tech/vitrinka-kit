@@ -2,12 +2,13 @@
  * Click lane — a capture-phase document listener (sees clicks the app
  * swallows). Shape matches the extension's content script exactly:
  * `{selector, text, rect}` — `shortSelector` (id > data-testid > a ≤4-hop
- * tag.class path), the element's text (redacted, 80 chars) and its bounding
- * rect in device pixels — plus `route`.
+ * tag.class path), the element's text (`clickText`: redacted, 80 chars,
+ * never more than the DOM lane shows) and its bounding rect in device pixels
+ * — plus `route`.
  */
 import { pushEvent } from '../queue';
 import { currentRoute } from '../state';
-import { redactText } from './redact';
+import { maskDirectives, redactText } from './redact';
 import { elementText, shortSelector } from './selector';
 
 export { elementText, shortSelector };
@@ -24,6 +25,16 @@ export function imageRect(el: Element): { x: number; y: number; w: number; h: nu
     w: Math.round(r.width * s),
     h: Math.round(r.height * s),
   };
+}
+
+/**
+ * A click's `text` under the active rules: '' when a `maskAllText` policy
+ * has rrweb mask every text node, otherwise `elementText` (no form-field
+ * values, nothing rr-masked) through the free-text scrub.
+ */
+export function clickText(el: Element): string {
+  if (maskDirectives().maskAllText) return '';
+  return redactText(elementText(el)) ?? '';
 }
 
 export interface ClickLaneOptions {
@@ -43,7 +54,7 @@ export function installClickLane(opts: ClickLaneOptions): () => void {
         'click',
         {
           selector: shortSelector(el),
-          text: redactText(elementText(el)) ?? '',
+          text: clickText(el),
           rect: imageRect(el),
           route: currentRoute.pathname,
         },

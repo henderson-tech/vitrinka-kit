@@ -11,6 +11,7 @@
  * Capture layers import the bound helpers below so every call site stays a
  * one-liner and can never forget to pass the rules.
  */
+import type { eventWithTime, metaEvent } from '@rrweb/types';
 import {
   compileRules,
   redactAndCap as engineRedactAndCap,
@@ -64,6 +65,25 @@ export function redactAndCap(
 /** Scrub URL query/fragment secrets under the active rules. */
 export function redactUrl(url: string): string {
   return engineRedactUrl(rules, url);
+}
+
+/** rrweb's `EventType.Meta`; `@rrweb/types` is type-only here, so the value. */
+const RRWEB_META = 4;
+
+function isMetaEvent(ev: eventWithTime): ev is metaEvent & eventWithTime {
+  return ev.type === RRWEB_META;
+}
+
+/**
+ * Scrub an rrweb event before it is buffered. The Meta event that opens every
+ * full snapshot (start, each checkout, resume) carries the page's raw
+ * `location.href`, query and fragment included; it gets `redactUrl`. Every
+ * other event passes through as is — the DOM itself is masked by rrweb under
+ * `maskDirectives`.
+ */
+export function redactRRWebEvent(ev: eventWithTime): eventWithTime {
+  if (!isMetaEvent(ev)) return ev;
+  return { ...ev, data: { ...ev.data, href: redactUrl(ev.data.href) } };
 }
 
 /** Scrub + cap a captured header map under the active rules. */

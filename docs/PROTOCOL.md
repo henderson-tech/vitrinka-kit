@@ -77,7 +77,7 @@ Only during a session you explicitly start:
 | Channel | Expo recorder | Browser extension | Web recorder |
 |---|---|---|---|
 | Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`; images recorded by URL, never inlined) |
-| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text, rect), navigation (pushState/replaceState/popstate or the router's pathname) |
+| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) |
 | Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads |
 | Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections |
 | Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD |
@@ -96,7 +96,14 @@ conformance vectors in
   form-encoded and multipart bodies — including bodies truncated at the size
   cap, and URL-encoded / double-encoded forms.
 - **URLs**: sensitive query AND fragment parameters are scrubbed
-  (OAuth callbacks, magic links, SAS URLs), with `;`-separated pairs handled.
+  (OAuth callbacks, magic links, SAS URLs), with `;`-separated pairs handled
+  — in request URLs, and in the web recorder also in every navigation URL
+  (the page a session starts on included) and in the page URL rrweb stamps
+  on every full snapshot.
+- **Values**: a PEM private key (`-----BEGIN … PRIVATE KEY-----`, any key
+  type, encrypted or not) is scrubbed wherever it appears — a body field
+  under any name, a form value, a console line — even when a size cap cut
+  off its END line. Certificates and public keys stay.
 - **Multipart uploads beyond the 64 KiB body cap record as an omission
   marker**, not a partial body: a truncated multipart body cannot be parsed
   into parts, and a partial scan would leak exactly the fields the key scrub
@@ -108,7 +115,10 @@ same redaction at ingest for every client, so recordings from any client
 never store raw secrets). The web recorder additionally feeds the engine's
 `maskDirectives` to rrweb, so the DOM stream never carries input values and,
 under `maskAllText`, no text at all; console text runs through the same
-`redactText` pass as bodies.
+`redactText` pass as bodies. A click's text never shows more than the DOM
+stream does: never an input, textarea or select (value or text), nothing
+for an element at, inside or wrapping a `.rr-mask` / `.rr-block` element,
+none at all under `maskAllText` — and what remains passes `redactText`.
 
 At session start the recorder fetches your workspace's redaction policy
 (`GET /api/v1/recorder/policy`), which can only ADD rules: extra header

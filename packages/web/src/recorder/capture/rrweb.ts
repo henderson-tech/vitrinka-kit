@@ -2,7 +2,9 @@
  * rrweb lane — the DOM stream is the session's keyframe (no screenshots).
  * Batched every 2s into chunks the way the extension does; `maskDirectives`
  * from the active redaction rules drive rrweb's own masking (inputs always,
- * all text under a `maskAllText` policy). The HUD host is blocked from the
+ * all text under a `maskAllText` policy), and every event passes
+ * `redactRRWebEvent` before it is buffered (the Meta event's page URL loses
+ * its query/fragment secrets). The HUD host is blocked from the
  * recording so the pill never appears in replay.
  */
 import type { eventWithTime } from '@rrweb/types';
@@ -11,7 +13,7 @@ import { record } from 'rrweb';
 import { RRWEB_BLOCK_ATTR } from '../block';
 import { pushRRWebBatch } from '../queue';
 import { currentRoute } from '../state';
-import { maskDirectives } from './redact';
+import { maskDirectives, redactRRWebEvent } from './redact';
 
 export { RRWEB_BLOCK_ATTR };
 
@@ -38,8 +40,9 @@ export function startRRWeb(): void {
   const mask = maskDirectives();
   try {
     const stopFn = record({
+      // Scrubbed on the way in: nothing raw ever sits in the buffer.
       emit: (ev) => {
-        buf.push(ev);
+        buf.push(redactRRWebEvent(ev));
       },
       checkoutEveryNms: CHECKOUT_MS,
       // Never inline: to read a no-CORS cross-origin image rrweb sets

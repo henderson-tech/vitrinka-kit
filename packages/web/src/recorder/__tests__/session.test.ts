@@ -51,6 +51,17 @@ describe('session', () => {
     expect(getState()).toBeNull();
   });
 
+  it('scrubs URL secrets from the start URL before its nav is queued', async () => {
+    fakeLocation('https://app.example.test/reset?token=hunter2&lang=cs#access_token=at-1');
+    await startSession();
+    await stopSession();
+    const events = (stub.calls.find((c) => c.path.endsWith('/events'))!.body as { events: Record<string, unknown>[] }).events;
+    expect(events[0]).toMatchObject({
+      kind: 'nav',
+      payload: { url: 'https://app.example.test/reset?token=[redacted]&lang=cs#access_token=[redacted]' },
+    });
+  });
+
   it('names the configured project on create, and omits it when unset', async () => {
     await startSession();
     const bare = stub.calls.find((c) => c.path === '/api/v1/sessions' && c.method === 'POST')!;
