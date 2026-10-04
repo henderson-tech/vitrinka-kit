@@ -61,8 +61,8 @@
     return { x: Math.round(r.x * s), y: Math.round(r.y * s), w: Math.round(r.width * s), h: Math.round(r.height * s) };
   };
 
-  document.addEventListener("click", (e) => {
-    if (picking) return; // pick mode owns the click
+  const captureClick = (e) => {
+    if (stopped || picking) return; // pick mode owns the click
     const el = e.target instanceof Element ? (e.target.closest("a,button,[role=button],input,select,textarea,label") || e.target) : null;
     if (!el || hud.contains(el)) return;
     send({
@@ -73,12 +73,16 @@
         rect: imageRect(el),
       },
     });
-  }, true);
+  };
+  document.addEventListener("click", captureClick, true);
 
   // -------------------------------------------------------------------------
   // rrweb (D3): batch events to the SW every 2s; SW uploads them as chunks
 
   let rrBuf = [];
+  let stopRR = null;
+  let stopped = false;
+  const emitRR = (ev) => { if (!stopped) rrBuf.push(ev); };
   try {
     // rrweb ≥2.x UMD exposes a module object ({record}); ≤alpha.4 exposed the
     // bare function. Accept both so a bundle swap can't silently stop recording.
@@ -104,6 +108,7 @@
       // directives into rrweb options. The one-message wait costs
       // milliseconds before the full snapshot.
       send({ type: "vt-policy" }).then((r) => {
+        if (stopped) return;
         try {
           // Missing/failed responses cannot establish a workspace's policy.
           const settled = r && r.ok === true && r.mask
@@ -112,19 +117,20 @@
           blurShots = !settled || r.pixel === "blur";
           maskInputs = mask.maskAllInputs;
           maskText = mask.maskAllText;
-          const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true };
+          const opts = { emit: emitRR, inlineImages: true, collectFonts: true };
           if (mask.maskAllInputs) opts.maskAllInputs = true;
           if (mask.maskAllText) {
             opts.maskAllText = true;                                  // rrweb ≥2.x spelling
             opts.maskTextSelector = mask.maskTextSelector || "*";     // alpha-era spelling
           }
-          rrRec(opts);
+          stopRR = rrRec(opts);
         } catch (e) { console.warn("vitrinka: rrweb failed to start", e); }
       }).catch(() => {
         // The message channel itself failed — start anyway, fully masked.
+        if (stopped) return;
         try {
           blurShots = maskInputs = maskText = true;
-          rrRec({ emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true,
+          stopRR = rrRec({ emit: emitRR, inlineImages: true, collectFonts: true,
             maskAllInputs: true, maskAllText: true, maskTextSelector: "*" });
         } catch (e) { console.warn("vitrinka: rrweb failed to start", e); }
       });
@@ -451,7 +457,7 @@
   $(".b-snap").onclick = startPick;
 
   // commands + stop from the SW
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  const onMessage = (msg, _sender, sendResponse) => {
     if (msg.type === "vt-pick") startPick();
     // A surviving content-script instance (re-injection no-ops) would keep a
     // stale pixel policy across a stop→start with a changed workspace policy
@@ -461,6 +467,12 @@
     else if (msg.type === "vt-paused") setPaused(msg.paused, msg.elapsedMs);
     else if (msg.type === "vt-health") renderHealth(msg.health);
     else if (msg.type === "vt-stop") {
+      stopped = true;
+      try { if (typeof stopRR === "function") stopRR(); }
+      catch (e) { console.warn("vitrinka: rrweb failed to stop", e); }
+      stopRR = null;
+      chrome.runtime.onMessage.removeListener(onMessage);
+      document.removeEventListener("click", captureClick, true);
       clearInterval(clock); clearInterval(rrTimer); clearTimeout(vitalsTimer);
       sendVitals(); // the final page's vitals ride out before the SW drains
       hud.remove(); outline.remove(); dim.remove(); hint.remove();
@@ -474,7 +486,8 @@
       else finish();
       return true;
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
 
   document.documentElement.append(hud);
 })();
