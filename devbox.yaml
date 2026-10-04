@@ -2,7 +2,7 @@ project: vitrinka-kit
 
 apps:
   kit:
-    cmd: "bun x serve . -l {port:web}"
+    cmd: "bun -e 'Bun.serve({hostname: \"0.0.0.0\", port: {port:web}, fetch: () => new Response(\"vitrinka-kit verification workspace\")})'"
     ports: [web]
     sync: .
     sync_ignores:
