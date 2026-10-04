@@ -80,6 +80,13 @@ describe('redactAndCap ordering', () => {
     expect(out).not.toContain('SECRET-TAIL');
   });
 
+  test('oversized multipart omits even a parseable prefix with a private epilogue', () => {
+    const body = '--b\r\nContent-Disposition: form-data; name="note"\r\n\r\nok\r\n--b--\r\nprivate-epilogue' + 'x'.repeat(100);
+    const out = redactAndCap(DEFAULTS, body, 100, 'multipart/form-data; boundary=b');
+    expect(out).toContain('multipart body omitted');
+    expect(out).not.toContain('private-epilogue');
+  });
+
   test('fullFidelity still caps (size is a transport concern, not a policy one)', () => {
     const rules = compileRules({ fullFidelity: true });
     const out = redactAndCap(rules, 'a'.repeat(100), 10, 'text/plain');

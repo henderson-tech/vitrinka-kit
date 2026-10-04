@@ -645,6 +645,9 @@ export function redactAndCap(
   contentType?: string,
 ): string | undefined {
   if (rules.full) return body.length > cap ? `${body.slice(0, cap)}…[truncated]` : body;
+  if (body.length > cap && contentType?.toLowerCase().includes('multipart/form-data')) {
+    return `[multipart body omitted: oversized (${body.length} chars)]`;
+  }
   if (looksLikeJson(body) && body.length <= JSON_STRUCTURAL_LIMIT) {
     const clean = redactBody(rules, body, contentType);
     return clean.length > cap ? `${clean.slice(0, cap)}…[truncated]` : clean;
