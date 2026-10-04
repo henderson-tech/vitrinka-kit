@@ -180,7 +180,9 @@ buffer starts — scrubbed URLs, click text that never reads a value). Nothing
 of it is written to storage or sent until you press Send; a reload, an
 unlink or a recording start discards it.
 
-**The report.** The sheet freezes the last minute as it opens, asks what
+**The report.** The sheet freezes the last minute as it opens (when that
+holds no full snapshot — a window over a cap was dropped — it takes one of
+the current screen first), asks what
 went wrong (required) and offers **Mark on screen** — annotate mode's
 element pick or region drag. Send files one short session under the pill's
 credential: title `Bug report: <first line>`, `meta.kind: "report"` and

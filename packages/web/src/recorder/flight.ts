@@ -15,7 +15,8 @@
  * - Caps: ≤ 4 MiB of serialized rrweb (each event measured at emit), ≤ 20 000
  *   rrweb events, ≤ 500 lane events. Over an rrweb cap the older window goes;
  *   a window over a cap on its own goes too, and buffering resumes at the
- *   next checkout (a clip must open on a full snapshot).
+ *   next checkout (a clip must open on a full snapshot) — or at the one a
+ *   report takes when its clip holds none (report.ts `holdReport`).
  *
  * DOM-free and React-free: the rrweb lane (capture/rrweb.ts) feeds it.
  */
@@ -27,6 +28,9 @@ export const FLIGHT_CHECKOUT_MS = 30_000;
 export const FLIGHT_MAX_RRWEB_BYTES = 4 * 1024 * 1024;
 export const FLIGHT_MAX_RRWEB_EVENTS = 20_000;
 export const FLIGHT_MAX_LANE_EVENTS = 500;
+
+/** rrweb's `EventType.FullSnapshot`; `@rrweb/types` is type-only here, so the value. */
+const RRWEB_FULL_SNAPSHOT = 2;
 
 /** One lane event as captured — stamped with its ORIGINAL time, no seq yet. */
 export interface FlightLaneEvent {
@@ -143,4 +147,9 @@ export function takeFlightClip(): FlightClip | null {
     windows: windows.map((w) => ({ ...w, events: w.events.slice() })),
     lanes: lanes.slice(),
   };
+}
+
+/** Does the clip hold a window that opens on a Meta + FullSnapshot — a screen to replay? */
+export function clipHasSnapshot(clip: FlightClip): boolean {
+  return clip.windows.some((w) => w.events[1]?.type === RRWEB_FULL_SNAPSHOT);
 }

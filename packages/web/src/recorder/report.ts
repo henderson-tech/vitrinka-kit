@@ -8,7 +8,8 @@
  *   workspace policy FIRST, so the buffer captures under the recording's own
  *   rules from its first byte; the provider starts rrweb's flight mode once
  *   `flightActive()`.
- * - Report while idle: the clip frozen when the sheet opened (`holdReport`)
+ * - Report while idle: the clip frozen when the sheet opened (`holdReport`,
+ *   which takes a fresh checkout when the clip holds no snapshot)
  *   is filed as one short session under the pill's credential — create
  *   `{meta.kind: "report", devicePixelRatio}` → the lane events with their
  *   ORIGINAL timestamps (led by a nav to the page the first snapshot shows,
@@ -24,8 +25,9 @@
 import type { RecorderEvent, SessionDone } from '../protocol';
 import { api, fetchPolicy, uploadChunk } from './api';
 import { setRedactionPolicy } from './capture/redact';
+import { checkoutRRWeb } from './capture/rrweb';
 import { recorderConfig, vitrinkaLinked } from './config';
-import { type FlightClip, flightActive, startFlightBuffer, stopFlightBuffer, takeFlightClip } from './flight';
+import { clipHasSnapshot, type FlightClip, flightActive, startFlightBuffer, stopFlightBuffer, takeFlightClip } from './flight';
 import { EVENTS_PER_POST, getState, MAX_BATCH_BYTES, splitRRWebEvents, utf8Bytes } from './queue';
 import { noteRecent } from './recents';
 import { addAnnotation, createSession, imagePixels, type ViewRect } from './session';
@@ -133,7 +135,20 @@ let sending = false;
  */
 export function holdReport(on: boolean): void {
   if (!sending) job = null;
-  held = on && getState() === null ? takeFlightClip() : null;
+  let clip = on && getState() === null ? takeFlightClip() : null;
+  // No window to replay — a window over a cap was dropped and the next 30 s
+  // checkout has not come, or the first snapshot never did. The server
+  // renders stills only from rrweb, so such a report would reach no board
+  // and its annotation no intake. Take a checkout now (rrweb emits it
+  // synchronously into the buffer) so the clip carries at least the current
+  // screen. Never when a window is held: a checkout rotates the older one out
+  // and would shrink a good clip. With rrweb not running the checkout is a
+  // no-op and the report still sends, without a DOM recording.
+  if (clip && !clipHasSnapshot(clip)) {
+    checkoutRRWeb();
+    clip = takeFlightClip();
+  }
+  held = clip;
 }
 
 const TITLE_LINE_CAP = 100;
