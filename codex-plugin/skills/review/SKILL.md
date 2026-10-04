@@ -70,7 +70,9 @@ command's arguments.
    measure on those pixels, never on a sheet, a thumbnail or the card's
    text. Image bytes never leave a tool result: no base64 in a shell
    command, no image files written to build your own montage — that is
-   what the sheet is for.
+   what the sheet is for. In a code-mode script, hand the image block to
+   the host's image call (`image(block)`) and print only the text block;
+   never stringify or log the whole result.
 2. Judge each screen against the brief from Phase 0. Every finding names
    the rule it breaks, the region on the image, and what correct looks
    like. Sort into `finding` (a defect) and `suggestion` (taste).
