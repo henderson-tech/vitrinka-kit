@@ -40,6 +40,14 @@
   // sit far outside the image. Set from the vt-policy response; recomputed at
   // use time so a window resize can't stale the factor.
   let blurShots = false;
+  let maskInputs = true;
+  let maskText = false;
+  const clickText = (el) => {
+    // Field values lack the key context a free-text scrub needs to find secrets.
+    const input = /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    if (maskText || (maskInputs && input)) return "[redacted]";
+    return (el.innerText || el.value || "").trim().slice(0, 80);
+  };
   const imageScale = () => {
     const s = window.devicePixelRatio || 1;
     // CSS px → captured-image px: device scale normally; 96/viewport-width
@@ -61,7 +69,7 @@
       type: "vt-click", route: location.pathname,
       payload: {
         selector: shortSelector(el),
-        text: (el.innerText || el.value || "").trim().slice(0, 80),
+        text: clickText(el),
         rect: imageRect(el),
       },
     });
@@ -100,6 +108,7 @@
           blurShots = (r && r.pixel) === "blur";
           // Fail closed when the SW (or an older SW build) sent no directives.
           const mask = (r && r.mask) || { maskAllInputs: true, maskAllText: false };
+          maskInputs = mask.maskAllInputs !== false;
           const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true };
           if (mask.maskAllInputs) opts.maskAllInputs = true;
           if (mask.maskAllText) {
