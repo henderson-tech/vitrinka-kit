@@ -1,0 +1,24 @@
+project: vitrinka-kit
+
+apps:
+  kit:
+    cmd: "bun x serve . -l {port:web}"
+    ports: [web]
+    sync: .
+    sync_ignores:
+      - .env
+      - .env.*
+      - "!.env.example"
+    deps:
+      key: [bun.lock]
+      cmd: "bun install --frozen-lockfile"
+
+scripts:
+  test:
+    cmd: "bun run build && bun run typecheck && bun run test"
+    up: false
+    profile: small
+
+resources:
+  memory: 1G
+  test: small
