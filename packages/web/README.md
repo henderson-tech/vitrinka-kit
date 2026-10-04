@@ -210,9 +210,9 @@ same mount as one self-contained script with React bundled in:
 
 | Lane | Event `kind` | Payload |
 |---|---|---|
-| rrweb | `rrweb` | `{count}` + `blobKey` — the batch itself is uploaded as a chunk; inputs always masked, all text under a `maskAllText` policy; images recorded by URL, never inlined (inlining would alter the page's own `<img>`) |
-| clicks | `click` | `{selector, text, rect, route}` |
-| navigation | `nav` | `{url, route, spa}` |
+| rrweb | `rrweb` | `{count}` + `blobKey` — the batch itself is uploaded as a chunk; inputs always masked, all text under a `maskAllText` policy; the page URL each full snapshot carries is scrubbed of query/fragment secrets; images recorded by URL, never inlined (inlining would alter the page's own `<img>`) |
+| clicks | `click` | `{selector, text, rect, route}` — `text` is never a form field's value, and empty at, inside or around `.rr-mask` / `.rr-block` and under `maskAllText` |
+| navigation | `nav` | `{url, route, spa}` — `url` scrubbed of query/fragment secrets, the start URL included |
 | network | `net` | `{method, url, status, ms, reqHeaders, resHeaders, reqBody, resBody, via}` — redacted, capped at 64 KiB per body; the recorder's own uploads are never recorded |
 | console | `console` | `{level: 'error', text}` |
 | notes | `note` | `{text, route}`; annotations add `{rect, selector, annotate: true, task?}` |

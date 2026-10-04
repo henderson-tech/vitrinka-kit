@@ -268,6 +268,38 @@
       "mustContain": ["ok"]
     },
     {
+      "name": "a PEM private key is scrubbed by value under a benign JSON key",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"name\":\"deploy\",\"keyPem\":\"-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo\\n4lgOEePzNm0tRgeLezV6ffAt0gunVTLw\\n-----END RSA PRIVATE KEY-----\\n\"}",
+      "mustNotContain": ["MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo", "4lgOEePzNm0tRgeLezV6ffAt0gunVTLw"],
+      "mustContain": ["\"name\":\"deploy\"", "\"keyPem\":\"[redacted]\\n\""],
+      "outputIsJson": true
+    },
+    {
+      "name": "free-text PEM private keys are scrubbed, including one cut off before its END line",
+      "surface": "body",
+      "contentType": "text/plain",
+      "input": "ssh key loaded: -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END OPENSSH PRIVATE KEY----- done\nretry with -----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkq",
+      "mustNotContain": ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmU", "MIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkq"],
+      "mustContain": ["ssh key loaded: [redacted] done", "retry with [redacted]"]
+    },
+    {
+      "name": "a form-encoded PEM private key loses its value",
+      "surface": "body",
+      "contentType": "application/x-www-form-urlencoded",
+      "input": "name=deploy&keyPem=-----BEGIN+PRIVATE+KEY-----%0AMIIEvQIBADANBgkqhkiG9w0BAQEFAASC%0A-----END+PRIVATE+KEY-----",
+      "mustNotContain": ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"],
+      "mustContain": ["name=deploy", "keyPem=[redacted]"]
+    },
+    {
+      "name": "BEGIN in prose, a certificate and a public key stay byte-identical",
+      "surface": "body",
+      "contentType": "text/plain",
+      "input": "BEGIN the rollout. PRIVATE KEY rotation is next week.\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUbW9jayBjZXJ0\n-----END CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----",
+      "exact": "BEGIN the rollout. PRIVATE KEY rotation is next week.\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUbW9jayBjZXJ0\n-----END CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----"
+    },
+    {
       "name": "fullFidelity: headers pass through untouched",
       "surface": "headers",
       "policy": { "fullFidelity": true },

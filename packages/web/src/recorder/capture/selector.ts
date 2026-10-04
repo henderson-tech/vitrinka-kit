@@ -26,9 +26,20 @@ export function shortSelector(el: Element | null): string {
   return parts.join(' > ');
 }
 
-/** The element's own visible text or value, trimmed and capped. */
+/** Form fields: rrweb masks every input value, so their text is never read. */
+const FORM_FIELD = 'input,textarea,select';
+
+/** What the DOM lane already hides — rrweb's mask and block classes. */
+const MASKED = '.rr-mask,.rr-block';
+
+/**
+ * The element's own visible text, trimmed and capped — never more than the
+ * DOM lane shows. Never a form field's value or text (rrweb masks every
+ * input, so a click on a filled password field must not record it), and ''
+ * for an element at, under or around `.rr-mask` / `.rr-block`: `innerText`
+ * of a wrapper would carry its masked child's text.
+ */
 export function elementText(el: Element): string {
-  const html = el as HTMLElement & { value?: unknown };
-  const raw = html.innerText || (typeof html.value === 'string' ? html.value : '') || '';
-  return raw.trim().slice(0, TEXT_CAP);
+  if (el.matches(FORM_FIELD) || el.closest(MASKED) || el.querySelector(MASKED)) return '';
+  return ((el as HTMLElement).innerText || '').trim().slice(0, TEXT_CAP);
 }

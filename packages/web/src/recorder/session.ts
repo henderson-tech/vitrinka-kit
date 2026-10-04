@@ -15,7 +15,7 @@ import type { RedactionPolicy } from '@vitrinka/redact';
 
 import type { SessionDone } from '../protocol';
 import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
-import { setRedactionPolicy } from './capture/redact';
+import { redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
 import {
   armReconcile,
@@ -38,7 +38,7 @@ export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.2.1';
+export const RECORDER_VERSION = '0.2.2';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -158,7 +158,7 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   armReconcile();
   pushEvent(
     'nav',
-    { url: currentUrl(), route: currentRoute.pathname },
+    { url: redactUrl(currentUrl()), route: currentRoute.pathname },
     { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
   );
   notify();

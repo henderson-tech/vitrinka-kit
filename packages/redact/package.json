@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/redact",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "vitrinka recorder redaction engine — safe-by-default scrubbing of auth headers, sensitive body keys, and URL secrets, driven by the workspace redaction policy. Shared by every vitrinka capture client.",
   "license": "Elastic-2.0",
   "repository": {

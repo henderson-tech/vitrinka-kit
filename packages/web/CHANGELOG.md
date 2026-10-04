@@ -1,5 +1,22 @@
 # @vitrinka/web
 
+## 0.2.2
+
+- **A click never records more than the DOM stream shows.** A click on a
+  filled input, textarea or select used to record its value as the click's
+  text — a password field included — though rrweb masks every input. Now a
+  form field's text is always empty, and so is the text of an element at,
+  inside or wrapping `.rr-mask` / `.rr-block`. Under a `maskAllText` policy
+  a click records no text at all.
+- **URL secrets are scrubbed from the start URL and from rrweb.** The
+  session's first navigation and rrweb's Meta event (the page URL every
+  full snapshot opens with: start, each checkout, resume) carried the raw
+  `location.href`, so a magic-link or OAuth-callback token in the query or
+  fragment reached the recording. Both now pass `redactUrl`, like every
+  later navigation already did.
+- **PEM private keys are scrubbed** from bodies, console lines and headers,
+  whatever key carries them (`@vitrinka/redact` 0.1.2).
+
 ## 0.2.1
 
 - **Linking survives a flaky network.** One failed approval check (a
