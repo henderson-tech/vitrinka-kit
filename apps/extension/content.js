@@ -39,9 +39,9 @@
   // so rects must land in THAT pixel space — device-pixel coordinates would
   // sit far outside the image. Set from the vt-policy response; recomputed at
   // use time so a window resize can't stale the factor.
-  let blurShots = false;
+  let blurShots = true;
   let maskInputs = true;
-  let maskText = false;
+  let maskText = true;
   const clickText = (el) => {
     // Field values lack the key context a free-text scrub needs to find secrets.
     const input = /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
@@ -105,10 +105,13 @@
       // milliseconds before the full snapshot.
       send({ type: "vt-policy" }).then((r) => {
         try {
-          blurShots = (r && r.pixel) === "blur";
-          // Fail closed when the SW (or an older SW build) sent no directives.
-          const mask = (r && r.mask) || { maskAllInputs: true, maskAllText: false };
-          maskInputs = mask.maskAllInputs !== false;
+          // Missing/failed responses cannot establish a workspace's policy.
+          const settled = r && r.ok === true && r.mask
+            && typeof r.mask.maskAllInputs === "boolean" && typeof r.mask.maskAllText === "boolean";
+          const mask = settled ? r.mask : { maskAllInputs: true, maskAllText: true };
+          blurShots = !settled || r.pixel === "blur";
+          maskInputs = mask.maskAllInputs;
+          maskText = mask.maskAllText;
           const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true };
           if (mask.maskAllInputs) opts.maskAllInputs = true;
           if (mask.maskAllText) {
@@ -120,7 +123,9 @@
       }).catch(() => {
         // The message channel itself failed — start anyway, fully masked.
         try {
-          rrRec({ emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true, maskAllInputs: true });
+          blurShots = maskInputs = maskText = true;
+          rrRec({ emit: (ev) => rrBuf.push(ev), inlineImages: true, collectFonts: true,
+            maskAllInputs: true, maskAllText: true, maskTextSelector: "*" });
         } catch (e) { console.warn("vitrinka: rrweb failed to start", e); }
       });
     }
