@@ -106,7 +106,10 @@ recording running:
   (masked inputs, the workspace policy — fetched once when the buffer
   starts — scrubbed URLs, click text that never reads a value), held in
   memory, never persisted, and discarded on reload, unlink or when a
-  recording starts.
+  recording starts. The clip is frozen when the report sheet opens; if it
+  then holds no window that opens on a full snapshot (a window over a cap
+  was dropped and the next checkout has not come yet), a fresh checkout is
+  taken first, so a report always carries at least the current screen.
 - **What a report sends**, only on Send, under the pill's own credential:
   1. `POST /api/v1/sessions` — `title: "Bug report: <first line>"`,
      `meta.kind: "report"`, `meta.devicePixelRatio`, and the same `host`,

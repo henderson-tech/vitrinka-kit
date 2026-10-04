@@ -4,9 +4,10 @@
  * the opt-out, and what a report files — idle as its own short session,
  * recording as a task annotation in the live one.
  */
-import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, setSystemTime } from 'bun:test';
 import { type eventWithTime, EventType } from '@rrweb/types';
 
+import { startFlightRRWeb, stopRRWeb } from '../capture/rrweb';
 import { configureRecorder } from '../config';
 import { flightActive, pushFlightRRWeb, startFlightBuffer, takeFlightClip } from '../flight';
 import { __bufferForTests, pushEvent, setState } from '../queue';
@@ -27,6 +28,28 @@ const full = (t: number): eventWithTime => ({
 });
 const custom = (t: number, payload = ''): eventWithTime => ({ type: EventType.Custom, data: { tag: 'step', payload }, timestamp: t });
 
+// rrweb without a DOM: `record` keeps the lane's emit and emits nothing on its
+// own; a checkout (`takeFullSnapshot`) emits Meta + FullSnapshot through it
+// synchronously, as rrweb does.
+let rrwebEmit: ((ev: eventWithTime) => void) | null = null;
+let checkouts = 0;
+const fakeRecord = Object.assign(
+  (opts: { emit?: (ev: eventWithTime) => void }) => {
+    rrwebEmit = opts.emit ?? null;
+    return () => {
+      rrwebEmit = null;
+    };
+  },
+  {
+    takeFullSnapshot: () => {
+      checkouts++;
+      rrwebEmit?.(meta(Date.now()));
+      rrwebEmit?.(full(Date.now()));
+    },
+  },
+);
+mock.module('rrweb', () => ({ record: fakeRecord }));
+
 beforeEach(() => {
   stub = installStub();
   freshRecorder();
@@ -35,6 +58,7 @@ beforeEach(() => {
   currentRoute.pathname = '/orders/42';
 });
 afterEach(() => {
+  stopRRWeb();
   setSystemTime();
   stub.restore();
 });
@@ -192,6 +216,26 @@ describe('report', () => {
     ]);
     expect(done!.body).toEqual({ status: 'done' });
     expect(out.boardUrl).toBe('https://vitrinka.test/acme/b/example-session-1?x=1');
+  });
+
+  it('a report frozen over an empty buffer takes one checkout and opens on a full snapshot; with a window held it takes none', async () => {
+    setSystemTime(new Date(T0));
+    wantFlight();
+    await syncFlight();
+    startFlightRRWeb();
+    checkouts = 0;
+    // The lone window went over a cap, or the first snapshot never came.
+    expect(takeFlightClip()!.windows).toEqual([]);
+
+    holdReport(true);
+    expect(checkouts).toBe(1);
+    stub.calls.length = 0;
+    await sendReport({ text: 'The board stays empty', rect: null, selector: '' });
+    const chunk = stub.calls.find((c) => c.path.includes('/chunk?seq='));
+    expect((chunk!.body as eventWithTime[]).map((e) => e.type)).toEqual([EventType.Meta, EventType.FullSnapshot]);
+
+    holdReport(true);
+    expect(checkouts).toBe(1);
   });
 
   it('while recording, files a task annotation into the live session and creates nothing', async () => {

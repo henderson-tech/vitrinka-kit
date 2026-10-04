@@ -1,5 +1,17 @@
 # @vitrinka/web
 
+## 0.3.1
+
+- **A bug report always carries the current screen.** When a checkout
+  window went over the 4 MiB / 20 000-event cap on its own, it was dropped
+  and the buffer stayed empty until the next 30-second checkout; a report
+  opened in that gap (or before the first snapshot) froze a clip with no
+  rrweb window, so vitrinka rendered no stills, the board stayed empty and
+  the description never reached intake. Opening the report sheet now takes
+  a fresh checkout when the clip holds no snapshot, so the clip opens on at
+  least the current screen. A clip that already holds a window is frozen
+  as-is — a checkout would rotate its older window out.
+
 ## 0.3.0
 
 - **Report a bug, without a recording running.** A new ⋯ menu row. While
