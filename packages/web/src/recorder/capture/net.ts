@@ -14,6 +14,7 @@
  * completion; fetch clones).
  */
 import { isVitrinkaUrl } from '../config';
+import { flightTarget } from '../flight';
 import { getState, pushEvent, trackCapture } from '../queue';
 import { currentRoute } from '../state';
 import { redactAndCap, redactHeaders, redactUrl } from './redact';
@@ -40,25 +41,29 @@ export function __setBodyReadDeadlineForTests(ms: number): () => void {
   };
 }
 
-/** Is a session actively capturing right now? Gates all body work. */
+/** Is a session (or the idle flight recorder) capturing right now? Gates all body work. */
 function capturing(): boolean {
-  return activeSessionId() !== null;
-}
-
-/** Id of the capturing session, else null (paused AND dead count as null). */
-function activeSessionId(): string | null {
-  const rec = getState();
-  return rec !== null && !rec.paused && !rec.dead ? rec.sessionId : null;
+  return captureTarget() !== null;
 }
 
 /**
- * Is `id` STILL the capturing session? In-flight requests must be bound to the
+ * Id of what captures right now: the live session (paused AND dead count as
+ * null), else the idle flight recorder's buffer, else null.
+ */
+function captureTarget(): string | null {
+  const rec = getState();
+  if (rec) return !rec.paused && !rec.dead ? rec.sessionId : null;
+  return flightTarget();
+}
+
+/**
+ * Is `id` STILL the capture target? In-flight requests must be bound to the
  * session they started in: a request begun in session A that completes after A
  * stopped and B started would otherwise be appended to B, with B's route
- * attached.
+ * attached — and one begun in the flight buffer never lands in a session.
  */
 function stillCapturing(id: string | null): boolean {
-  return id !== null && activeSessionId() === id;
+  return id !== null && captureTarget() === id;
 }
 
 /**
@@ -378,7 +383,7 @@ export function patchNetwork(): void {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     // Not recording (or recorder's own traffic) → pass straight through: no
     // clone, no body read, zero added cost.
-    const origin = activeSessionId();
+    const origin = captureTarget();
     if (isVitrinkaUrl(url) || origin === null) return origFetch(input, init);
     const method =
       init?.method ??
@@ -480,7 +485,7 @@ export function patchNetwork(): void {
     body?: Parameters<XMLHttpRequest['send']>[0],
   ) {
     const meta = (this as XMLHttpRequest & { __vt?: VtMeta }).__vt;
-    const origin = activeSessionId();
+    const origin = captureTarget();
     if (meta && !isVitrinkaUrl(meta.url) && origin !== null) {
       const started = Date.now();
       this.addEventListener('loadend', () => {

@@ -14,6 +14,7 @@ import { forgetLink, linkDevice } from './link';
 import { cachedAccount, cachedPrefs, fetchMe, savePrefs } from './me';
 import { getState, health } from './queue';
 import { readRecents, refreshRecents } from './recents';
+import { canReport, holdReport, sendReport } from './report';
 import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from './session';
 import { annotateState, setAnnotating, subscribe } from './state';
 
@@ -59,6 +60,7 @@ function build(): HudSnapshot {
     ),
     workspaceUrl: cfg.url,
     version: RECORDER_ID,
+    canReport: canReport(),
   };
 }
 
@@ -109,5 +111,7 @@ export function createPageController(): HudController {
       await savePrefs(patch);
     },
     refreshRecents: () => refreshRecents(getState()?.sessionId ?? null),
+    holdReport,
+    report: (r) => sendReport(r),
   };
 }

@@ -1,7 +1,8 @@
 /**
  * Recorder root — mounted ONLY when `url` + `key` are present (see index.ts).
  * Installs the capture lanes once per document, recovers a session that
- * survived a reload, and keeps the rrweb lane in step with the session.
+ * survived a reload, and keeps the rrweb lane in step with the session — or,
+ * idle under a mounted pill, with the flight recorder (report.ts).
  */
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 
@@ -9,12 +10,14 @@ import { installClickLane } from './capture/click';
 import { patchConsole, unpatchConsole } from './capture/console';
 import { installNavLane, noteNavigation, primeNavigation } from './capture/nav';
 import { patchNetwork, unpatchNetwork } from './capture/net';
-import { checkoutRRWeb, flushRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
+import { checkoutRRWeb, flushRRWeb, startFlightRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
 import { configureRecorder, type RecorderConfig } from './config';
 import { installControl } from './control';
+import { flightActive } from './flight';
 import { installUnauthorizedHandler } from './link';
 import { insideHud } from './hud/host';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
+import { dropFlight, syncFlight } from './report';
 import { onBeforeStop, recoverRedactionPolicy } from './session';
 import { annotateState, setTabIdentity, subscribe } from './state';
 
@@ -54,7 +57,7 @@ export function RecorderProvider({
     // The fetch/XHR and console patches are idempotent (a globalThis mark)
     // and UNINSTALLED on unmount below, so the recorder never outlives its
     // tree; the History wrap is idempotent too and stays (a nav event with no
-    // session is dropped at the queue, so it costs nothing).
+    // session is dropped at the queue unless the flight recorder holds it).
     patchNetwork();
     patchConsole();
     installNavLane();
@@ -65,17 +68,25 @@ export function RecorderProvider({
     const uninstall401 = installUnauthorizedHandler();
 
     // Keep the rrweb lane in step with the session: start on record, a fresh
-    // checkout on resume, ship-and-stop on stop.
+    // checkout on resume, ship-and-stop on stop. While idle the same lane
+    // feeds the pill's flight recorder; it hands rrweb over (one record() at
+    // a time) before a recording takes it.
     let wasRecording = false;
     let wasPaused = false;
+    let wasFlying = false;
     const syncLanes = () => {
+      void syncFlight();
       const rec = getState();
       const recording = rec !== null && !rec.dead;
+      const flying = flightActive();
+      if (wasFlying && !flying) stopRRWeb();
       if (recording && !wasRecording) startRRWeb();
       else if (!recording && wasRecording) stopRRWeb();
       else if (recording && wasPaused && !rec.paused) checkoutRRWeb();
+      if (flying && !wasFlying) startFlightRRWeb();
       wasRecording = recording;
       wasPaused = rec?.paused ?? false;
+      wasFlying = flying;
     };
     const unsubscribe = subscribe(syncLanes);
     const offBeforeStop = onBeforeStop(flushRRWeb);
@@ -114,6 +125,7 @@ export function RecorderProvider({
       uninstallControl();
       uninstall401();
       stopRRWeb();
+      dropFlight();
       unpatchNetwork();
       unpatchConsole();
     };

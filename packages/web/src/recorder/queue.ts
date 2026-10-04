@@ -30,6 +30,7 @@ import type { RedactionPolicy } from '@vitrinka/redact';
 
 import type { RecorderEvent } from '../protocol';
 import { api, permanentStatus, uploadChunk, VitrinkaApiError } from './api';
+import { pushFlightEvent } from './flight';
 import { notify } from './state';
 import { getRecorderStorage } from './storage';
 
@@ -45,7 +46,9 @@ const MAX_PENDING = 200; // rrweb chunks in memory; oldest evicted loudly
  * dropped.
  */
 const WIRE_BODY_CAP = 4 * 1024 * 1024;
-const MAX_BATCH_BYTES = 3 * 1024 * 1024; // pack margin
+export const MAX_BATCH_BYTES = 3 * 1024 * 1024; // pack margin
+/** The server's per-POST event cap. */
+export const EVENTS_PER_POST = 500;
 const MAX_EVENT_BYTES = WIRE_BODY_CAP - 1024; // solo cap; headroom for the {"events":[…]} envelope
 /**
  * rrweb chunk budgets (extension `splitRRWebEvents`): the server's chunk cap
@@ -61,7 +64,7 @@ const CHUNK_PERSIST_BUDGET = 1024 * 1024;
 const encoder = new TextEncoder();
 
 /** UTF-8 byte length of a string — the unit the server's body limit counts. */
-function utf8Bytes(s: string): number {
+export function utf8Bytes(s: string): number {
   return encoder.encode(s).length;
 }
 
@@ -426,10 +429,12 @@ export function isSessionLive(id: string): boolean {
 }
 
 /**
- * Append an event to the durable buffer (drops when no live session or
- * paused). `tabId`/`tabHost`/`ts`/`seq` are filled here; capture layers pass
- * kind+payload plus the route they observed. Returns the stamped ts (null
- * when dropped).
+ * Append an event to the durable buffer (drops while paused or dead).
+ * `tabId`/`tabHost`/`ts`/`seq` are filled here; capture layers pass
+ * kind+payload plus the route they observed. With no session the event goes
+ * to the flight recorder when the idle pill keeps one (memory only — never
+ * storage, never the network), else it is dropped. Returns the stamped ts
+ * (null when dropped).
  */
 export function pushEvent(
   kind: string,
@@ -437,7 +442,8 @@ export function pushEvent(
   route: { tabId: string; tabHost: string },
 ): string | null {
   const rec = getState();
-  if (!rec || rec.paused || rec.dead) return null;
+  if (!rec) return pushFlightEvent(kind, payload, route);
+  if (rec.paused || rec.dead) return null;
   rec.seq++;
   const ts = new Date().toISOString();
   const buffer = getBuffer();
@@ -655,7 +661,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   // A keepalive POST (pagehide) is capped by the browser at 64 KiB.
   const packCap = opts.keepalive ? 60 * 1024 : MAX_BATCH_BYTES;
   for (const ev of buffer) {
-    if (batch.length >= 500) break;
+    if (batch.length >= EVENTS_PER_POST) break;
     const b = utf8Bytes(JSON.stringify(ev)) + 1;
     if (b > MAX_EVENT_BYTES) {
       console.warn(`vitrinka: event seq ${ev.seq} (${b} bytes) exceeds the wire cap — dropped`);

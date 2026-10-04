@@ -31,6 +31,12 @@ export interface RecorderConfig {
   project?: string;
   /** Device-link label; defaults to `<browser> on <os> · <host>`. */
   label?: string;
+  /**
+   * The idle pill's in-memory last minute that "Report a bug" sends
+   * (flight.ts). `false` turns it off: nothing is captured until a recording
+   * starts, and Report a bug is offered only during one.
+   */
+  flightRecorder?: boolean;
 }
 
 const config: RecorderConfig = { url: '', key: '' };
@@ -42,6 +48,7 @@ export function configureRecorder(next: RecorderConfig): void {
   config.environment = next.environment;
   config.project = next.project;
   config.label = next.label;
+  config.flightRecorder = next.flightRecorder;
 }
 
 export function recorderConfig(): Readonly<RecorderConfig> {

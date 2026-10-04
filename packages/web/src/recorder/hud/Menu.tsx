@@ -1,6 +1,6 @@
 /**
- * The ⋯ menu: who the recorder is linked as, the open board, the device's
- * recent recordings and "Go to vitrinka", then the HUD's own settings —
+ * The ⋯ menu: who the recorder is linked as, "Report a bug", the open board,
+ * the device's recent recordings and "Go to vitrinka", then the HUD's own settings —
  * size, verbose details, position (a miniature screen of the eight spots) —
  * and Unlink. A fixed float placed beside the dock by the caller; ↑/↓ move
  * between items, Esc closes.
@@ -8,7 +8,7 @@
 import { type KeyboardEvent, type ReactElement, type RefObject } from 'react';
 
 import type { HudAccount, HudSize, HudSnapshot } from './controller';
-import { HomeIcon, NewTabIcon, UnlinkIcon } from './icons';
+import { BugIcon, HomeIcon, NewTabIcon, UnlinkIcon } from './icons';
 import { isVertical, type Place, SPOT_NAMES, SPOTS, type Spot } from './spots';
 import { fmtAgo, fmtDuration } from './status';
 
@@ -47,6 +47,8 @@ export interface MenuProps {
   onVerbose: (on: boolean) => void;
   onAskUnlink: () => void;
   onLink: () => void;
+  /** Opens the bug report sheet; the row shows only when set. */
+  onReport?: () => void;
 }
 
 export function Menu(p: MenuProps): ReactElement {
@@ -97,6 +99,11 @@ export function Menu(p: MenuProps): ReactElement {
       {!snap.linked ? (
         <button type="button" role="menuitem" className="mi" onClick={act(p.onLink)}>
           <span>Link recorder</span>
+        </button>
+      ) : null}
+      {p.onReport ? (
+        <button type="button" role="menuitem" className="mi" onClick={act(p.onReport)}>
+          <BugIcon /> Report a bug
         </button>
       ) : null}
       {rec?.boardUrl ? (

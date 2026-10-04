@@ -29,7 +29,7 @@ describe('session', () => {
     expect(create.body).toMatchObject({
       host: 'app.example.test',
       title: 'checkout',
-      meta: { recorder: RECORDER_ID, platform: 'web' },
+      meta: { recorder: RECORDER_ID, platform: 'web', devicePixelRatio: 1 },
     });
     expect(RECORDER_ID.startsWith('web/')).toBe(true);
     expect(create.init.mode).toBe('cors');

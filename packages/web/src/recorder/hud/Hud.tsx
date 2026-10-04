@@ -4,7 +4,8 @@
  * recorder's, or another host's. Owns the dock (where the HUD rests), the
  * pill's inline flows (flow.ts), the sheet (open/title/ctx/pick + the
  * surviving draft) and where it opens, the ⋯ menu, the tooltip and details
- * floats, annotate mode, the keyboard shortcuts, the Esc-anywhere /
+ * floats, annotate mode, the bug report (its sheet, "Mark on screen" through
+ * annotate mode, its send flow), the keyboard shortcuts, the Esc-anywhere /
  * click-outside close and the status line a screen reader hears while the
  * pill is folded.
  */
@@ -23,7 +24,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { RecorderStorage } from '../storage';
-import type { HudController, HudLinkFlow } from './controller';
+import type { HudController, HudLinkFlow, HudReport } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
 import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
@@ -54,6 +55,25 @@ interface SheetState {
   title: string;
   ctx: string;
   pick: Pick | null;
+  /** The bug report sheet; `pick` is then the mark on screen. */
+  report?: true;
+}
+
+/** What a pick names in the sheet's context line. */
+function pickCtx(pick: Pick): string {
+  return pick.selector
+    ? `${pick.selector} · ${location.pathname}`
+    : `${Math.round(pick.rect.w)}×${Math.round(pick.rect.h)} · ${location.pathname}`;
+}
+
+/** The bug report sheet: the mark (null = the whole viewport) and what the report carries. */
+function reportSheet(mark: Pick | null, recording: boolean): SheetState {
+  return {
+    title: 'Report a bug',
+    ctx: mark ? pickCtx(mark) : `${recording ? 'this recording' : 'last minute'} · ${location.pathname}`,
+    pick: mark,
+    report: true,
+  };
 }
 
 /** "Saving…" stays at least this long, so a fast save still reads as one. */
@@ -89,6 +109,11 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const rec = snap.recording;
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [draft, setDraft] = useState('');
+  const [reportDraft, setReportDraft] = useState('');
+  // Annotate mode is picking the report's mark (it returns to the report sheet).
+  const [marking, setMarking] = useState(false);
+  const markRef = useRef<Pick | null>(null);
+  const reportRef = useRef<HudReport | null>(null);
   const [starting, setStarting] = useState(false);
   const [menu, setMenu] = useState(false);
   const [flow, dispatch] = useReducer(flowReducer, NO_FLOW);
@@ -159,19 +184,45 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     if (!s.recording) return;
     setSheet(null);
     setMenu(false);
+    setMarking(false);
     controller.setAnnotating(!s.annotating);
   }, [controller]);
   const onPick = useCallback(
     (pick: Pick) => {
       controller.setAnnotating(false);
-      const ctx = pick.selector
-        ? `${pick.selector} · ${location.pathname}`
-        : `${Math.round(pick.rect.w)}×${Math.round(pick.rect.h)} · ${location.pathname}`;
-      setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx, pick });
+      if (marking) {
+        setMarking(false);
+        setSheet(reportSheet(pick, controller.getSnapshot().recording !== null));
+        return;
+      }
+      setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx: pickCtx(pick), pick });
     },
-    [controller],
+    [controller, marking],
   );
-  const cancelAnnotate = useCallback(() => controller.setAnnotating(false), [controller]);
+  const cancelAnnotate = useCallback(() => {
+    controller.setAnnotating(false);
+    if (!marking) return;
+    // Back to the report as it was (its earlier mark, if any).
+    setMarking(false);
+    setSheet(reportSheet(markRef.current, controller.getSnapshot().recording !== null));
+  }, [controller, marking]);
+  // "Report a bug" (⋯ menu): idle, the last minute is frozen as the sheet opens.
+  const openReport = useCallback(() => {
+    const s = controller.getSnapshot();
+    if (!s.canReport || !controller.report) return;
+    setMenu(false);
+    setMarking(false);
+    controller.setAnnotating(false);
+    controller.holdReport?.(true);
+    setSheet(reportSheet(null, s.recording !== null));
+  }, [controller]);
+  // "Mark on screen": the sheet steps aside (draft and frozen clip kept) for annotate mode.
+  const markOnScreen = useCallback(() => {
+    markRef.current = sheet?.pick ?? null;
+    setSheet(null);
+    setMarking(true);
+    controller.setAnnotating(true);
+  }, [sheet, controller]);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const saidSaved = useCallback(() => {
     clearTimeout(flashTimer.current);
@@ -179,11 +230,62 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     flashTimer.current = setTimeout(() => setFlash(false), FLASH_MS);
   }, []);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
+  // The frozen last minute lives while the report is composed (sheet open or
+  // marking); any other close drops it. A send already took it.
+  const composingReport = sheet?.report === true || marking;
+  useEffect(() => {
+    if (!composingReport) controller.holdReport?.(false);
+  }, [composingReport, controller]);
+
+  // Idle, a report is its own short session: the pill says Sending…, then Sent · Open board.
+  const runReport = useCallback(
+    (r: HudReport) => {
+      const t0 = Date.now();
+      const settle = (ev: Parameters<typeof dispatch>[0]) =>
+        setTimeout(() => dispatch(ev), Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
+      const sent = controller.report?.(r);
+      if (!sent) return;
+      sent.then(
+        (res) => {
+          setReportDraft('');
+          settle({ type: 'saved', ...(res.boardUrl ? { boardUrl: res.boardUrl } : {}) });
+        },
+        (e: unknown) => {
+          console.warn('vitrinka: report —', errorText(e));
+          settle({ type: 'failed', message: errorText(e) });
+        },
+      );
+    },
+    [controller],
+  );
+  const fileReport = useCallback(
+    (r: HudReport) => {
+      // Recording: a task annotation in the session — the clock says Saved.
+      if (controller.getSnapshot().recording) {
+        controller.report?.(r).then(
+          () => {
+            setReportDraft('');
+            saidSaved();
+          },
+          (e: unknown) => console.warn('vitrinka: report —', errorText(e)),
+        );
+        return;
+      }
+      reportRef.current = r;
+      dispatch({ type: 'send' });
+      runReport(r);
+    },
+    [controller, runReport, saidSaved],
+  );
   const onSend = useCallback(
     (text: string, task: boolean) => {
       const s = sheet;
       setSheet(null);
       if (!s) return;
+      if (s.report) {
+        fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '' });
+        return;
+      }
       if (s.pick) {
         controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task });
         setDraft('');
@@ -194,7 +296,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         saidSaved();
       }
     },
-    [sheet, controller, saidSaved],
+    [sheet, controller, saidSaved, fileReport],
   );
   const onStart = useCallback(() => {
     if (!controller.getSnapshot().linked) {
@@ -250,11 +352,21 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     controller.unlink();
   }, [flow, controller, runStop, closeLink]);
   const onCancel = useCallback(() => dispatch({ type: 'cancel' }), []);
-  const onDismiss = useCallback(() => dispatch({ type: 'dismiss' }), []);
+  const failedReport = flow.face === 'failed' && flow.report === true;
+  const onDismiss = useCallback(() => {
+    // A report not sent is dropped with its failure.
+    if (failedReport) controller.holdReport?.(false);
+    dispatch({ type: 'dismiss' });
+  }, [failedReport, controller]);
   const onRetry = useCallback(() => {
+    if (failedReport) {
+      dispatch({ type: 'retry', queued: 0 });
+      if (reportRef.current) runReport(reportRef.current);
+      return;
+    }
     dispatch({ type: 'retry', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
     runStop();
-  }, [controller, runStop]);
+  }, [failedReport, controller, runStop, runReport]);
   // A stop confirm outlives nothing: the session ended under it (401, the server).
   useEffect(() => {
     if (!rec && flow.face === 'confirm' && flow.action === 'stop') dispatch({ type: 'cancel' });
@@ -429,15 +541,19 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         {portal.own ? <style>{HUD_CSS}</style> : null}
         <div ref={layerRef} className={layerCls} style={layer.style}>
           <Sheet
+            key={shownSheet.report ? 'report' : 'note'}
             className={`${motionCls} ${sheetP.cls}`}
             origin={layer.origin}
             title={shownSheet.title}
             ctx={shownSheet.ctx}
-            pick={shownSheet.pick !== null}
-            draft={draft}
-            onDraft={setDraft}
+            pick={shownSheet.pick !== null && !shownSheet.report}
+            draft={shownSheet.report ? reportDraft : draft}
+            onDraft={shownSheet.report ? setReportDraft : setDraft}
             onSend={onSend}
             onClose={closeSheet}
+            {...(shownSheet.report
+              ? { placeholder: 'What went wrong?', required: true, onMark: markOnScreen, marked: shownSheet.pick !== null }
+              : {})}
           />
         </div>
       </div>
@@ -466,7 +582,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   return (
     <div ref={rootRef} className="hud" data-size={snap.prefs.size} data-spot={'spot' in place ? place.spot : undefined}>
       <style>{HUD_CSS}</style>
-      {annotating && rec ? <AnnotateOverlay onPick={onPick} onCancel={cancelAnnotate} /> : null}
+      {annotating && (rec || marking) ? <AnnotateOverlay onPick={onPick} onCancel={cancelAnnotate} /> : null}
       <div ref={dock.ref} className={dock.dragging ? 'dock dragging' : 'dock'} {...dockAttrs} onClickCapture={dock.onClickCapture}>
         <RecorderPill
           snap={snap}
@@ -507,6 +623,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
           onVerbose={(verbose) => void controller.setPrefs({ verbose })}
           onAskUnlink={askUnlink}
           onLink={beginLink}
+          {...(snap.canReport && controller.report ? { onReport: openReport } : {})}
         />
       ) : null}
       {/* before the details card: a showing tooltip fades it (styles.ts), they share a side */}

@@ -550,6 +550,71 @@ test('the HUD never enters the recording: its surfaces are blocked, its clicks a
   expect(events.filter((e) => e.kind === 'console')).toEqual([]);
 });
 
+test('report a bug from the idle pill: the last minute files as its own session, closed by a task annotation', async ({ page }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/`);
+  const openMenu = async () => {
+    await page.getByRole('button', { name: 'Start recording' }).hover();
+    await page.locator('.seg.on .b-more').click();
+  };
+  // The row shows once the flight recorder holds the page (its policy read answered).
+  await openMenu();
+  await expect(page.getByRole('menuitem', { name: 'Report a bug' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  // Idle, the pill keeps the last minute in memory: nothing reaches a session door.
+  await page.locator('#buy').click();
+  await page.locator('#go').click();
+  await expect(page).toHaveURL(/\/orders\/42$/);
+  expect(seen.some((s) => s.path.startsWith('/api/v1/sessions'))).toBe(false);
+
+  await openMenu();
+  await page.getByRole('menuitem', { name: 'Report a bug' }).click();
+  const ta = page.getByPlaceholder('What went wrong?');
+  await expect(ta).toBeFocused();
+  await ta.fill('Order total shows NaN');
+  // Mark on screen: annotate mode picks a region, then the sheet is back with the draft.
+  await page.getByRole('button', { name: 'Mark on screen' }).click();
+  await expect(page.locator('[data-e2e="annotate-dim"]')).toBeVisible();
+  const box = (await page.locator('#target').boundingBox())!;
+  await page.mouse.move(box.x + 20, box.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 120, box.y + 90, { steps: 5 });
+  await page.mouse.up();
+  await expect(ta).toHaveValue('Order total shows NaN');
+  await expect(page.getByRole('button', { name: 'Mark on screen' })).toHaveAttribute('aria-pressed', 'true');
+  await ta.press('Enter');
+  const saved = page.locator('[data-e2e="saved"]');
+  await expect(saved).toContainText('Sent', { timeout: 30_000 });
+  await expect(saved.getByRole('link', { name: /Open board/ })).toHaveAttribute('href', `${stubUrl}/acme/b/fixture-session-1`);
+
+  const create = seen.find((s) => s.method === 'POST' && s.path === '/api/v1/sessions')!;
+  expect(create.body).toMatchObject({ title: 'Bug report: Order total shows NaN', meta: { kind: 'report', platform: 'web', devicePixelRatio: 1 } });
+  type Ev = { seq: number; ts: string; kind: string; payload?: Record<string, unknown>; blobKey?: string };
+  const posts = seen.filter((s) => s.path.endsWith('/events'));
+  const events = posts.flatMap((s) => (s.body as { events: Ev[] }).events);
+  const click = events.find((e) => e.kind === 'click' && e.payload?.selector === '#buy')!;
+  expect(click.payload).toMatchObject({ text: 'Buy now (0)', route: '/' });
+  expect(events.some((e) => e.kind === 'nav' && e.payload?.route === '/orders/42')).toBe(true);
+  const rr = events.find((e) => e.kind === 'rrweb')!;
+  expect(rr.blobKey).toMatch(/^blob-\d+$/);
+  const note = events.find((e) => e.kind === 'note')!;
+  expect(note.payload).toMatchObject({ text: 'Order total shows NaN', selector: '', annotate: true, task: true, route: '/orders/42' });
+  expect((note.payload!.rect as { w: number }).w).toBeGreaterThan(50);
+  // The clip keeps its original times; the annotation is stamped at Send.
+  expect(Date.parse(click.ts)).toBeLessThan(Date.parse(note.ts));
+  // create → lane events → chunk → annotation → done.
+  const at = (pred: (s: (typeof seen)[number]) => boolean) => seen.findIndex(pred);
+  const order = [
+    seen.indexOf(create),
+    at((s) => s.path.endsWith('/events') && (s.body as { events: Ev[] }).events.some((e) => e.kind === 'click')),
+    at((s) => s.path.includes('/chunk?seq=')),
+    at((s) => s.path.endsWith('/events') && (s.body as { events: Ev[] }).events.some((e) => e.kind === 'note')),
+    at((s) => s.method === 'PATCH' && (s.body as { status?: string })?.status === 'done'),
+  ];
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+});
+
 /** Start recording and enter annotate mode by finger, the way a phone does it. */
 async function annotateByTap(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Start recording' }).tap();

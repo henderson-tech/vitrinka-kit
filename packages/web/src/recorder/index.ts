@@ -14,6 +14,7 @@ import { envConfig, vitrinkaConfigured } from './config';
 import { mountRecorderHud } from './hud/mount';
 import { createPageController } from './page-controller';
 import { RecorderProvider, useRecorderRoute } from './RecorderProvider';
+import { wantFlight } from './report';
 import { getRecorderStorage } from './storage';
 
 export { useRecorderRoute };
@@ -37,6 +38,11 @@ export interface VitrinkaRecorderRootProps {
   environment?: string;
   /** Explicit project; omitted = the host's project rule decides. */
   project?: string;
+  /**
+   * `false` turns off the flight recorder: the idle pill keeps no in-memory
+   * last minute, so "Report a bug" is offered only while recording.
+   */
+  flightRecorder?: boolean;
   /** A router's pathname, when the History wrap is not enough. */
   route?: string | null;
   children?: ReactNode;
@@ -59,6 +65,7 @@ export function VitrinkaRecorderRoot(props: VitrinkaRecorderRootProps): ReactEle
         environment: props.environment,
         project: props.project,
         label: props.label,
+        flightRecorder: props.flightRecorder,
       },
     },
     createElement(RouteFeed, { route: props.route }),
@@ -86,10 +93,16 @@ export function VitrinkaRecorderPill(props: VitrinkaRecorderPillProps): null {
   titleRef.current = props.title;
   useEffect(() => {
     if (!vitrinkaConfigured()) return;
-    return mountRecorderHud(createPageController(), {
+    // The idle pill keeps the last minute for "Report a bug" (report.ts gates it).
+    const releaseFlight = wantFlight();
+    const unmount = mountRecorderHud(createPageController(), {
       title: () => titleRef.current ?? document.title,
       storage: getRecorderStorage(),
     });
+    return () => {
+      unmount();
+      releaseFlight();
+    };
   }, []);
   return null;
 }

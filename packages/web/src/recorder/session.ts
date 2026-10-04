@@ -38,7 +38,7 @@ export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.2.2';
+export const RECORDER_VERSION = '0.3.0';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -106,26 +106,43 @@ function pageHost(): string {
   }
 }
 
-export async function startSession(opts: StartOptions = {}): Promise<SessionState> {
+/**
+ * `POST /api/v1/sessions` as every web session makes it — a recording and a
+ * bug report alike: the page's `host`, the configured project and lane, and
+ * the recorder meta. `devicePixelRatio` is the scale every rect is recorded
+ * in (`imagePixels`), so the server shoots its stills at it.
+ */
+export function createSession(
+  title: string,
+  opts: { environment?: string; meta?: Record<string, unknown> } = {},
+): Promise<SessionOut> {
   const cfg = recorderConfig();
-  // The safe defaults apply from the first captured byte; the workspace
-  // policy (fetched in parallel — fetchPolicy never rejects) can only ADD
-  // rules or, self-host only, fullFidelity.
-  setRedactionPolicy(null);
-  const policyPromise = fetchPolicy();
   const environment = opts.environment ?? cfg.environment;
-  const ses = await api<SessionOut>('POST', '/api/v1/sessions', {
+  return api<SessionOut>('POST', '/api/v1/sessions', {
     host: pageHost(),
-    title: opts.title || '',
+    title,
     ...(cfg.project ? { project: cfg.project } : {}),
     ...(environment ? { environment } : {}),
     meta: {
       recorder: RECORDER_ID,
       userAgent: globalThis.navigator?.userAgent ?? '',
       platform: 'web',
+      devicePixelRatio: globalThis.devicePixelRatio || 1,
       ...(cfg.appVersion ? { appVersion: cfg.appVersion } : {}),
-      ...(opts.driver ? { driver: opts.driver } : {}),
+      ...opts.meta,
     },
+  });
+}
+
+export async function startSession(opts: StartOptions = {}): Promise<SessionState> {
+  // The safe defaults apply from the first captured byte; the workspace
+  // policy (fetched in parallel — fetchPolicy never rejects) can only ADD
+  // rules or, self-host only, fullFidelity.
+  setRedactionPolicy(null);
+  const policyPromise = fetchPolicy();
+  const ses = await createSession(opts.title || '', {
+    ...(opts.environment ? { environment: opts.environment } : {}),
+    ...(opts.driver ? { meta: { driver: opts.driver } } : {}),
   });
   void policyPromise.then((policy) => {
     const rec = getState();
