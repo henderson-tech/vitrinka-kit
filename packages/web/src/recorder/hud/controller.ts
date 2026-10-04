@@ -97,6 +97,11 @@ export interface HudSnapshot {
   workspaceUrl: string;
   /** Recorder id, e.g. `web/0.2.1` (verbose mode shows it). */
   version: string;
+  /**
+   * "Report a bug" can file now (the ⋯ menu shows the row): into the live
+   * session, or, idle, with the last minute the host keeps. Absent = never.
+   */
+  canReport?: boolean;
 }
 
 /** The code half of a device link, as the link sheet paints it. */
@@ -130,6 +135,16 @@ export interface HudAnnotation {
   task: boolean;
 }
 
+/** What "Report a bug" sends from the sheet. */
+export interface HudReport {
+  /** The description (required); its first line titles the report. */
+  text: string;
+  /** The region marked on screen, CSS px; null = the whole viewport. */
+  rect: HudRect | null;
+  /** The marked element's selector; '' for a region or no mark. */
+  selector: string;
+}
+
 export interface HudController {
   getSnapshot(): HudSnapshot;
   subscribe(listener: () => void): () => void;
@@ -148,6 +163,19 @@ export interface HudController {
   setPrefs(patch: Partial<HudPrefs>): Promise<void>;
   /** Fill missing board links of recents from the server. Never rejects. */
   refreshRecents(): Promise<void>;
+  /**
+   * The report sheet opened (`true`: idle, freeze the last minute it will
+   * send) or was dismissed (`false`: drop it). Optional, with `report`.
+   */
+  holdReport?(on: boolean): void;
+  /**
+   * File a bug report. Recording: a task annotation in the live session
+   * (resolves at once). Idle: the held last minute as its own short session
+   * — resolves `{boardUrl?}` once it is done, rejects with the reason; a
+   * second call after a rejection retries the same report. Optional: a host
+   * without it never offers the menu row.
+   */
+  report?(r: HudReport): Promise<{ boardUrl?: string }>;
 }
 
 export const DEFAULT_PREFS: HudPrefs = { size: 'md', verbose: false };

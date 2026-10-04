@@ -11,7 +11,8 @@ screenshots), **clicks** (selector, text, rect), **navigation**, **network**
 (fetch + XHR, headers + bodies redacted), **console errors**, and the
 **notes and annotations** you type in the pill. Everything is redacted by
 [`@vitrinka/redact`](../redact) before it is buffered; the full contract is
-[`docs/PROTOCOL.md`](../../docs/PROTOCOL.md).
+[`docs/PROTOCOL.md`](../../docs/PROTOCOL.md). Idle, the pill can also send
+the last minute as a bug report ([Report a bug](#report-a-bug)).
 
 ## Install
 
@@ -130,7 +131,7 @@ controls**) that unfolds into the tools on hover, focus or tap and folds back
 | ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel); the pill says **Saved** |
 | ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it: `board` (an annotation on the board) or `task` (also filed as an intake draft) |
 | ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Saved · Open board** until you dismiss it |
-| ⋯ | | the linked account · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
+| ⋯ | | the linked account · **Report a bug** (below) · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
 
 Move it anywhere: drag the puck or capsule and it lands on one of eight
 spots (a 3×3 grid without the centre). A flick lands where it is thrown.
@@ -163,6 +164,45 @@ Radix focus trap or a `<dialog>.showModal()` never fights it, and nothing
 you do on the pill reaches the page (a "close on outside click" never fires
 because of the recorder).
 
+## Report a bug
+
+**Report a bug** (⋯ menu) files what led up to a bug — no recording needed.
+
+**The last minute.** While the pill is mounted and idle on a device that can
+record (a recorder key or a linked device), it keeps the page's last minute
+**in memory**: the rrweb DOM stream as two 30-second checkout windows (a clip
+covers the last 30–60 s and always opens on a full snapshot), plus the
+click, navigation, console and network events since the older window
+opened. Caps: 4 MiB of serialized rrweb, 20 000 rrweb events, 500 lane
+events; over a cap the older window goes. It runs the recording's own
+redaction (masked inputs, your workspace policy — fetched once when the
+buffer starts — scrubbed URLs, click text that never reads a value). Nothing
+of it is written to storage or sent until you press Send; a reload, an
+unlink or a recording start discards it.
+
+**The report.** The sheet freezes the last minute as it opens, asks what
+went wrong (required) and offers **Mark on screen** — annotate mode's
+element pick or region drag. Send files one short session under the pill's
+credential: title `Bug report: <first line>`, `meta.kind: "report"` and
+`meta.devicePixelRatio`; the buffered events with their original
+timestamps; the rrweb windows as chunks; your description as an annotation
+with `task: true` (the marked region, else the whole viewport); then done.
+vitrinka renders stills from the clip, pins the annotation on the board and
+files it as an intake draft. The pill says **Sending…**, then **Sent · Open
+board** (it is in Recents too); a failure offers **Retry**, which resumes
+the same report. During a recording, Report adds that task annotation to
+the running session instead.
+
+**Turning it off.** A host that cannot accept even in-memory capture passes
+`flightRecorder={false}`:
+
+```tsx
+<VitrinkaRecorderRoot url={…} flightRecorder={false}>
+```
+
+Then nothing is captured until a recording starts, and Report a bug is
+offered only during one.
+
 ## Driving it from code
 
 `window.__vitrinkaRecorder` — for agents and tests:
@@ -191,10 +231,12 @@ const unmount = mountRecorderHud(controller, { title: () => document.title });
 - `getSnapshot()` returns the same object until something changes;
   `subscribe(fn)` calls back after a change. The snapshot holds `linked`,
   `canUnlink`, `annotating`, `recording` (session, clock, sync), `account`,
-  `prefs`, `recents`, `workspaceUrl` and `version`.
+  `prefs`, `recents`, `workspaceUrl`, `version` and, optionally,
+  `canReport`.
 - Actions: `start`, `togglePause`, `stop` (resolves `{boardUrl?}`, rejects
   while the server is unreachable), `note`, `annotate`, `setAnnotating`,
-  `link`, `unlink`, `getMe`, `setPrefs` and `refreshRecents`.
+  `link`, `unlink`, `getMe`, `setPrefs` and `refreshRecents`; optionally
+  `holdReport` and `report` — without them the menu has no **Report a bug**.
 
 The full contract is in `src/recorder/hud/controller.ts`.
 

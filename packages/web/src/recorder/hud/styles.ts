@@ -400,6 +400,7 @@ textarea:focus { outline:none; box-shadow:inset 0 0 0 1px var(--fg-3); }
 .sendb { all:unset; box-sizing:border-box; cursor:pointer; display:inline-flex; align-items:center; gap:6px; height:calc(28px * var(--s)); padding:0 12px;
   border-radius:8px; background:var(--rec); color:#fff; font-size:calc(var(--fs) + .5px); font-weight:600; line-height:1; text-decoration:none; }
 @media (hover: hover) { .sendb:hover { background:#ff5670; } }
+.sendb[aria-disabled="true"] { opacity:.45; cursor:default; background:var(--rec); }
 .hints { margin-top:9px; font-size:var(--fs-s); line-height:1; color:var(--fg-3); }
 `;
 

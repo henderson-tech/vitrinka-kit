@@ -32,6 +32,19 @@ describe('flow', () => {
     const unlink = flowReducer(NO_FLOW, { type: 'ask', action: 'unlink' });
     expect(flowReducer(unlink, { type: 'confirm', queued: 3 })).toEqual(NO_FLOW);
   });
+
+  it('a bug report: send → saving, a failure retried, then saved — every face marked as the report', () => {
+    const sending = flowReducer(NO_FLOW, { type: 'send' });
+    expect(sending).toEqual({ face: 'saving', total: 0, report: true });
+    const failed = flowReducer(sending, { type: 'failed', message: 'Failed to fetch' });
+    expect(failed).toEqual({ face: 'failed', message: 'Failed to fetch', report: true });
+    const retried = flowReducer(failed, { type: 'retry', queued: 0 });
+    expect(flowReducer(retried, { type: 'saved', boardUrl: 'https://v.test/b/2' })).toEqual({
+      face: 'saved',
+      boardUrl: 'https://v.test/b/2',
+      report: true,
+    });
+  });
 });
 
 describe('syncChip', () => {

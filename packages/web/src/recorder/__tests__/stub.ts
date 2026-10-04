@@ -8,6 +8,7 @@ import { configureRecorder } from '../config';
 import { __resetMeForTests } from '../me';
 import { __resetForTests } from '../queue';
 import { __resetRecentsForTests } from '../recents';
+import { __resetReportForTests } from '../report';
 import { __resetNavForTests } from '../capture/nav';
 import { setRedactionPolicy } from '../capture/redact';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../storage';
@@ -109,6 +110,7 @@ export function freshRecorder(): void {
   __resetNavForTests();
   __resetMeForTests();
   __resetRecentsForTests();
+  __resetReportForTests();
   setRedactionPolicy(null);
 }
 

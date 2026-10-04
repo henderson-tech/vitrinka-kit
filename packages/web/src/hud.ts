@@ -17,6 +17,7 @@ export {
   type HudRecentStatus,
   type HudRecording,
   type HudRect,
+  type HudReport,
   type HudSize,
   type HudSnapshot,
   type HudSync,

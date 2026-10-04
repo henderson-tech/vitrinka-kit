@@ -1,5 +1,32 @@
 # @vitrinka/web
 
+## 0.3.0
+
+- **Report a bug, without a recording running.** A new ⋯ menu row. While
+  the pill is mounted and idle on a device that can record, it keeps the
+  page's last minute in memory — rrweb as two 30-second checkout windows,
+  plus the click, navigation, console and network lanes. Report freezes
+  that clip, asks what went wrong (required) and lets you **Mark on
+  screen** (annotate mode's element pick or region drag). Send files one
+  short session: `meta.kind: "report"`, title `Bug report: <first line>`,
+  the buffered events with their original timestamps, the rrweb windows as
+  chunks, then your description as a task annotation, then done. vitrinka
+  renders stills from the clip and the annotation becomes an intake draft.
+  The pill says **Sending…**, then **Sent · Open board**, or offers
+  **Retry**. During a recording, Report adds the task annotation to the
+  running session instead.
+- **The buffer never leaves memory before Send.** Nothing is written to
+  storage or sent; it runs the recording's own redaction (the workspace
+  policy is fetched once when it starts); caps of 4 MiB / 20 000 rrweb
+  events and 500 lane events drop the older window; a reload, an unlink or
+  a recording start discards it. `flightRecorder={false}` on
+  `VitrinkaRecorderRoot` turns it off.
+- **Every session sends `meta.devicePixelRatio`**, the scale its rects are
+  in, so the server renders stills at it.
+- `HudController` gains optional `holdReport` / `report` and the snapshot an
+  optional `canReport`; a host without them (the extension today) shows no
+  report row.
+
 ## 0.2.2
 
 - **A click never records more than the DOM stream shows.** A click on a

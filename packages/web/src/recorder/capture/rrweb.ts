@@ -5,12 +5,15 @@
  * all text under a `maskAllText` policy), and every event passes
  * `redactRRWebEvent` before it is buffered (the Meta event's page URL loses
  * its query/fragment secrets). The HUD host is blocked from the
- * recording so the pill never appears in replay.
+ * recording so the pill never appears in replay. While no session is live
+ * the same lane can feed the idle pill's flight recorder instead
+ * (`startFlightRRWeb`): same masking, same scrub, memory only.
  */
 import type { eventWithTime } from '@rrweb/types';
 import { record } from 'rrweb';
 
 import { RRWEB_BLOCK_ATTR } from '../block';
+import { FLIGHT_CHECKOUT_MS, pushFlightRRWeb } from '../flight';
 import { pushRRWebBatch } from '../queue';
 import { currentRoute } from '../state';
 import { maskDirectives, redactRRWebEvent } from './redact';
@@ -34,17 +37,33 @@ function ship(): void {
   pushRRWebBatch(events, { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost });
 }
 
-/** Start recording the DOM; idempotent. */
+/** Start recording the DOM into the live session; idempotent. */
 export function startRRWeb(): void {
+  startRecord('session');
+}
+
+/**
+ * Start recording the DOM into the idle pill's flight recorder (flight.ts):
+ * a checkout every 30 s, each event straight into the in-memory windows.
+ * Idempotent; `stopRRWeb` stops it.
+ */
+export function startFlightRRWeb(): void {
+  startRecord('flight');
+}
+
+function startRecord(sink: 'session' | 'flight'): void {
   if (stop) return;
   const mask = maskDirectives();
   try {
     const stopFn = record({
       // Scrubbed on the way in: nothing raw ever sits in the buffer.
-      emit: (ev) => {
-        buf.push(redactRRWebEvent(ev));
-      },
-      checkoutEveryNms: CHECKOUT_MS,
+      emit:
+        sink === 'flight'
+          ? (ev) => pushFlightRRWeb(redactRRWebEvent(ev))
+          : (ev) => {
+              buf.push(redactRRWebEvent(ev));
+            },
+      checkoutEveryNms: sink === 'flight' ? FLIGHT_CHECKOUT_MS : CHECKOUT_MS,
       // Never inline: to read a no-CORS cross-origin image rrweb sets
       // crossOrigin='anonymous' on the page's own <img>, the browser refetches
       // it in CORS mode and a host without ACAO shows a broken image — the
@@ -60,7 +79,7 @@ export function startRRWeb(): void {
     console.warn('vitrinka: rrweb failed to start', e);
     return;
   }
-  timer = setInterval(ship, BATCH_MS);
+  if (sink === 'session') timer = setInterval(ship, BATCH_MS);
 }
 
 /** Ship the tail and stop recording. */

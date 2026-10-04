@@ -10,7 +10,8 @@
  *   vertical pill (a measured morph, see useMorph).
  * - Flows (flow.ts): the pill itself asks "Stop & save?" / "Unlink this
  *   device?", spins while saving, says "Saved · Open board" until dismissed,
- *   or says why it could not save. Always horizontal.
+ *   or says why it could not save (a bug report: "Sending…", "Sent",
+ *   "Couldn't send"). Always horizontal.
  * - Tucked: a 6px edge tab.
  * The handle, the puck and the tab are the drag handles. Tooltips are
  * `data-tip` / `data-keys` on the triggers (Tooltip.tsx paints them).
@@ -153,8 +154,10 @@ function SyncGlyph({ chip }: { chip: SyncChip }): ReactElement {
 }
 
 /** "Couldn't save" in a few words; the full sentence rides the tooltip. */
-function shortFailure(message: string): string {
-  if (/unreachable|offline|fetch|network/i.test(message)) return 'Offline — kept here';
+function shortFailure(message: string, report: boolean): string {
+  const offline = /unreachable|offline|fetch|network/i.test(message);
+  if (report) return offline ? 'Offline — not sent' : 'Couldn’t send';
+  if (offline) return 'Offline — kept here';
   if (/ended locally|rejected/i.test(message)) return 'Ended by the server';
   return 'Couldn’t save';
 }
@@ -361,6 +364,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   const confirmAction = shownFlow.face === 'confirm' ? shownFlow.action : 'stop';
   const savedUrl = shownFlow.face === 'saved' ? shownFlow.boardUrl : undefined;
   const failure = shownFlow.face === 'failed' ? shownFlow.message : '';
+  // A bug report's send: "Sending…", "Sent", "Couldn't send" — and it can always be retried.
+  const report = 'report' in shownFlow && shownFlow.report === true;
 
   return (
     <div
@@ -517,13 +522,13 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
       <Seg on={p.flow.face === 'saving'} className="s-saving">
         <div className="flow saving" role="status" data-e2e="saving">
           <SpinnerIcon />
-          <span>Saving…</span>
+          <span>{report ? 'Sending…' : 'Saving…'}</span>
           {progress !== null && rec ? <span className="muted">{rec.sync.queued} left</span> : null}
           <span
             className="bar-track"
             data-indeterminate={progress === null ? '' : undefined}
             role="progressbar"
-            aria-label="Saving"
+            aria-label={report ? 'Sending' : 'Saving'}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={progress === null ? undefined : Math.round(progress * 100)}
@@ -538,7 +543,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
           <span className="ok t-check" data-state={flowShown === 'saved' ? 'in' : undefined}>
             <CheckIcon />
           </span>
-          <span>Saved</span>
+          <span>{report ? 'Sent' : 'Saved'}</span>
           {savedUrl ? (
             <a
               ref={(el) => {
@@ -570,8 +575,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
           <span className="warn">
             <AlertIcon />
           </span>
-          <span className="msg">{shortFailure(failure)}</span>
-          {rec ? (
+          <span className="msg">{shortFailure(failure, report)}</span>
+          {rec || report ? (
             <button type="button" className="fb" onClick={p.onRetry}>
               Retry
             </button>

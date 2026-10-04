@@ -16,7 +16,7 @@ any host other than that server. The wire types live in
 these routes:
 
 ```
-GET   /api/v1/recorder/policy      workspace redaction policy (session start)
+GET   /api/v1/recorder/policy      workspace redaction policy (session start; the web pill's flight recorder)
 GET   /api/v1/recorder/me          who the token is + HUD prefs (web HUD)
 PATCH /api/v1/recorder/me          HUD prefs {size, verbose} (web HUD, linked devices)
 POST  /api/v1/sessions             create a recording session
@@ -70,7 +70,12 @@ Only during a session you explicitly start:
   lane. Within an enabled build, capture runs only between you starting a
   recording from the pill (or the `window.__vitrinkaRecorder` control
   handle) and stopping it; the pill is always visible while recording. A
-  recording survives a reload of the same tab and continues in it.
+  recording survives a reload of the same tab and continues in it. The one
+  exception is the **flight recorder** behind "Report a bug" (below): while
+  the pill is mounted and idle on a device that can record (a key or a
+  link), it keeps the page's last minute **in memory only** — nothing is
+  written to storage and nothing is sent until you press Send on a report;
+  a reload discards it. The host turns it off with `flightRecorder: false`.
 
 ## What is captured (per session)
 
@@ -81,6 +86,40 @@ Only during a session you explicitly start:
 | Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads |
 | Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections |
 | Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD |
+
+Every web session's create carries `meta.recorder` (`web/<version>`),
+`meta.platform` (`web`), `meta.userAgent`, `meta.appVersion` when the host
+passes one, and `meta.devicePixelRatio` — the scale every recorded rect is
+in, so the server renders its stills at it.
+
+### Bug reports (web recorder)
+
+"Report a bug" in the pill's ⋯ menu files what led up to a bug without a
+recording running:
+
+- **What the idle pill keeps** (the flight recorder): the rrweb DOM stream as
+  two checkout windows of 30 s (a clip covers the last 30–60 s and always
+  opens on a full snapshot), and the click, navigation, console and network
+  events since the older window opened — capped at 4 MiB of serialized
+  rrweb, 20 000 rrweb events and 500 lane events (over a cap the older
+  window goes). It is captured under exactly the redaction a recording uses
+  (masked inputs, the workspace policy — fetched once when the buffer
+  starts — scrubbed URLs, click text that never reads a value), held in
+  memory, never persisted, and discarded on reload, unlink or when a
+  recording starts.
+- **What a report sends**, only on Send, under the pill's own credential:
+  1. `POST /api/v1/sessions` — `title: "Bug report: <first line>"`,
+     `meta.kind: "report"`, `meta.devicePixelRatio`, and the same `host`,
+     `project` and `environment` as a recording;
+  2. the buffered events with their **original** timestamps (seq 1…n), led
+     by a `nav` to the page the first snapshot shows;
+  3. the rrweb windows as chunks (`/chunk?seq=N`, then their `rrweb` rows);
+  4. the description as a note `{text, rect, selector, annotate: true, task:
+     true, route}` stamped at Send — `rect` is the region marked on screen
+     (device pixels), else the whole viewport;
+  5. `PATCH /api/v1/sessions/:id {status: "done"}`.
+- **During a recording**, Report adds that task annotation to the running
+  session instead; no second session, no clip.
 
 ## Redaction
 
@@ -121,7 +160,8 @@ for an element at, inside or wrapping a `.rr-mask` / `.rr-block` element,
 none at all under `maskAllText` — and what remains passes `redactText`.
 
 At session start the recorder fetches your workspace's redaction policy
-(`GET /api/v1/recorder/policy`), which can only ADD rules: extra header
+(`GET /api/v1/recorder/policy`; the web pill's flight recorder fetches it
+before its buffer starts), which can only ADD rules: extra header
 names, extra body keys, extra patterns, or `maskAllText`. If the fetch fails,
 the built-in defaults above apply — **never** capture-everything. A
 `fullFidelity` policy (self-hosted deployments only; the server refuses to
@@ -155,4 +195,6 @@ status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 
 Recorded sessions live on your vitrinka server under its access rules; the
 recorders keep only an undelivered upload tail on-device (removed once
-delivered or when the session is discarded).
+delivered or when the session is discarded). The web pill's flight-recorder
+buffer is never on-device storage: it lives in the page's memory for at
+most its two windows.

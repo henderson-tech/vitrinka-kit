@@ -70,7 +70,8 @@ export function redactUrl(url: string): string {
 /** rrweb's `EventType.Meta`; `@rrweb/types` is type-only here, so the value. */
 const RRWEB_META = 4;
 
-function isMetaEvent(ev: eventWithTime): ev is metaEvent & eventWithTime {
+/** rrweb's Meta event — the head of every full snapshot (start, each checkout, resume). */
+export function isMetaEvent(ev: eventWithTime): ev is metaEvent & eventWithTime {
   return ev.type === RRWEB_META;
 }
 
