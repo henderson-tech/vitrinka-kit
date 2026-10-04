@@ -267,28 +267,36 @@ const UILOOP_RULES = [
   'One deploy lock and one e2e lock per workspace: take the lock the repo names before a deploy or an e2e run and release it after.',
   'The capture harness shoots on Chrome\'s GPU path (`--enable-gpu --use-angle=swiftshader` in vendor/playwright.config.ts); never drop the flags, or glass is silently missing from every shot.',
   'Owner decisions written in the spec are final — never re-litigate them.',
+  'A lease under <pass>/locks/ (capture, synth, publish, batch-<id>) belongs to the run that took it: never delete or edit one. A CAPTURE_RUNNING or LEASE_HELD diagnostic means another run owns that step: stop and report it where your brief says (problems unless it names a field), never work around it.',
 ]
 
 // A checkpoint's `commit`, as every writer (lane, Settle, Recover) records it.
 // The CLI admits a checkpoint in a pass with capture.json only when `commit`
-// is ONE full SHA (40 or 64 hex) that is an ancestor of HEAD; a skip or block
-// is further admitted only while the source is unchanged since that commit.
+// is ONE full SHA (40 or 64 hex) that is an ancestor of HEAD; a skip, block
+// or deferral is further admitted only while the files it judged (the item's
+// and its needs') still hold the digests it recorded (contract 8).
 // pwf-ui pass 1 recorded `"commit"` loosely — 332 of 340 were short SHAs,
 // empty, comma lists or a repo/branch string — and a strict pass silently
 // counts every such item open again: its strings, its verify screens lost.
-const UILOOP_CHECKPOINT_COMMIT = 'the full 40-hex SHA `git rev-parse HEAD` prints right after the item\'s own commit (a skip or block commits nothing: the HEAD at checkpoint time) — one SHA, never abbreviated, never a list, never a repo or branch name'
+const UILOOP_CHECKPOINT_COMMIT = 'the full 40-hex SHA `git rev-parse HEAD` prints right after the item\'s own commit (a skip, block or deferral commits nothing: the HEAD at checkpoint time) — one SHA, never abbreviated, never a list, never a repo or branch name'
 
 const UILOOP_FIX_RULES = [
   'One item at a time: understand the defect in code first, then make minimal, surgical edits in the repo\'s idiom — the provider before the consumer, the class half before the template half.',
-  'OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane. Edit ONLY files directly inside your lane\'s dirs — not their subdirectories unless listed. A fix that needs a file outside them is not made: checkpoint the item blocked with the exact change (file, what to change) as its note.',
+  'OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane. Edit ONLY files directly inside your lane\'s dirs — not their subdirectories unless listed. A fix that needs a file outside them is not made here: write a `deferred` checkpoint with needs [{file, change}] — each repo-relative file outside your dirs it must change and what to change there — and go on; the rework phase gives it a lane that owns those files and its own. `blocked` is only for a blocker outside this repo (seed data, a backend change, another repo, an owner decision), with the question for its owner as note.',
   'i18n catalogs (a .json under an `i18n` directory) are owned by nobody: never edit one. A fix that needs a new or changed string uses the key in code and lists it in its checkpoint and your return as i18n [{key, <locale>: text}] (every locale the catalogs carry); the settle step adds them.',
   'After every edit the shared dev server must stay green: wait ~20 s, read its log (`devbox logs <app>` in the workspace); an error your edit caused is fixed at once or reverted within 5 minutes. Another lane\'s red is not yours: note it and keep going.',
   'Commit each item path-limited: `git add <your files>` then `git commit -m "fix(<scope>): <what> (<key>)" -- <your files>` — never `git add -A`, never a bare `git commit`, never stash, reset, rebase or push. An index.lock collision means another lane is committing: wait 3 s and retry.',
-  'After the commit write the item\'s checkpoint <passDir>/fix/<key>.json = {"v":1,"basis":the review basis,"key","lane","status":"done|skipped|blocked","commit","screens":[the screen ids the fix changes],"fileDigests":{repo-relative source path: SHA256 of its bytes},"apiChanges":[…],"note","i18n":[…]} and NEVER commit it (the pass directory is gitignored environment output). Its "commit" is ' + UILOOP_CHECKPOINT_COMMIT + '. Only a checkpoint admitted by the CLI (matching basis, ancestor commit and current source file digests) is finished. Stale checkpoints must be reevaluated. A skip needs a concrete reason (a design decision the spec does not settle, a false finding with evidence); never guess a redesign.',
+  'After the commit write the item\'s checkpoint <passDir>/fix/<key>.json = {"v":1,"basis":the review basis,"key","lane","status":"done|skipped|blocked|deferred","commit","screens":[the screen ids the fix changes],"fileDigests":{repo-relative source path: SHA256 of its bytes},"needs":[{"file","change"}] (deferred only),"apiChanges":[…],"note","i18n":[…]} and NEVER commit it (the pass directory is gitignored environment output). Its "commit" is ' + UILOOP_CHECKPOINT_COMMIT + '. Its fileDigests hold every source file the fix changed; a skip, block or deferral changes none, so they hold every in-repo file the item lists except i18n catalogs (Settle commits those every round), plus every needs file, as the tree has them now. Only a checkpoint admitted by the CLI (matching basis, ancestor commit and current file digests) counts: done, skipped and blocked finish the item, deferred leaves it to the rework phase. Stale checkpoints must be reevaluated. A skip needs a concrete reason (a design decision the spec does not settle, a false finding with evidence); never guess a redesign.',
   'Never run a capture (`vybava ui-loop run`), open a browser, restart or re-provision the devbox, or edit <dir>/vendor: judge from the pass\'s shots (Read the PNG) and the code. If you run low on context, stop cleanly after a finished item and return the keys you did not reach in remaining.',
   'After a usage-limit cutoff the successor maps the dirty files to lanes (git status against the checkpoints), commits an in-flight map, and resumes from the first item without a checkpoint.',
   '`cn`/`cx` (tailwind-merge) drop a position or display class beside a recipe that sets one: put layout on a wrapper or extend the recipe. A focus ring follows its control\'s radius; grouped rows take an inset ring.',
 ]
+
+// How a recipe reaches a control, for every writer of one (map's manifest
+// writers, the fix stage's rig lane). CSS chains and `nth=` indexes broke on
+// layout changes and a ⋯ overflow sheet (pwf-ui carried 23 `nth=`); a
+// literal name the app no longer renders is what `check --labels` reports.
+const UILOOP_ACTION_STEP = 'Reach a control with the harness\'s role-first `action` step, `{action: {name: \'<its accessible name>\', role?: \'button\' | \'menuitem\' | \'link\' | \'tab\', within?: \'<container selector>\'}}`: it looks in the topmost overlay first, then the page, matches the name as a case-insensitive prefix at a word boundary, and opens the project\'s `overflow` triggers (a ⋯ sheet) when the control hides behind one. Prefer it to CSS chains, `nth=` indexes and text selectors, which break on the next layout change. Spell `name` as the app\'s label sources (its i18n catalogs, its templates) spell it, so `vybava ui-loop check --labels` finds it; a selector stays only where the control has no accessible name.'
 
 function withUiLoop(prompt, fix) {
   const rules = fix ? [...UILOOP_RULES, ...UILOOP_FIX_RULES] : UILOOP_RULES
@@ -324,20 +332,86 @@ function repoProblem(want, got) {
 // helpers below only check that what an agent relayed is whole.
 
 // The relayed batch list must be the whole pass: every batch non-empty and
-// the screens they hold adding up to the state's screen count.
+// the screens they hold, plus the screens carried from an earlier pass (a
+// carried screen drops out of the batches), adding up to the state's screen
+// count — the reviewable screens, each with an ok shot (contract 7). A v1
+// batch a review started before contract 7 keeps may still hold a never-shot
+// screen (state's notShot): it counts toward the envelope, never the pass. A
+// split batch's parts stand in its place (contract 5). A batch's
+// digests go verbatim into its raw review, so they must be one 64-hex digest
+// per screen of the batch: a dropped one is a screen its reviewer cannot
+// record, which would hold the batch open forever.
 function batchesProblem(state, batches) {
   if (!batches || !Array.isArray(batches.batches)) return 'prepare relayed no batch list — `vybava ui-loop batches --json` must be returned verbatim as batches'
   const held = batches.batches.reduce((n, b) => n + ((b && b.screens) || []).length, 0)
+  const unshot = new Set(state.notShot || [])
+  const reviewable = batches.batches.reduce((n, b) => n + ((b && b.screens) || []).filter(id => !unshot.has(id)).length, 0)
+  const carried = (batches.carried || []).length
   if (batches.batches.some(b => !b || !b.id || !(b.screens || []).length)) return 'prepare relayed a batch without an id or screens'
-  if (held !== batches.screens || held !== state.screens) return `prepare relayed batches holding ${held} screens; the batches envelope says ${batches.screens} and the pass has ${state.screens} — the list was cut; re-run the stage`
+  if (held !== batches.screens || reviewable + carried !== state.screens) return `prepare relayed batches holding ${held} screens${carried ? ` and ${carried} carried` : ''}; the batches envelope says ${batches.screens} and the pass has ${state.screens} — the list was cut; re-run the stage`
+  const bent = batches.batches.find(badDigests)
+  if (bent) return `prepare relayed batch ${bent.id} with digests that are not one 64-hex digest per screen of the batch — relay \`vybava ui-loop batches\` verbatim; re-run the stage`
+  return ''
+}
+
+// A v2 batch's digests that are not one 64-hex digest per screen of it; also
+// a split's parts, which reach a reviewer as the stall relay printed them.
+function badDigests(b) {
+  return !!b.digests && (Object.keys(b.digests).some(id => !b.screens.includes(id)) || b.screens.some(id => !/^[0-9a-f]{64}$/.test(b.digests[id])))
+}
+
+// `batches --claim N --owner <run>` leases up to N unfinished batches to this
+// run (`batch-<id>` under <pass>/locks) and returns them as `claimed`: the
+// only batches the run reviews, so identical runs never review one batch
+// twice. A relay that dropped the field or named a batch the list does not
+// leave open would review a batch another run holds.
+function claimsProblem(batches, max) {
+  if (!Array.isArray(batches.claimed)) return 'prepare relayed no batches.claimed, which `vybava ui-loop batches --claim` always prints ([] when other runs hold every batch left) — relay it verbatim; re-run the stage'
+  const open = new Set(batches.batches.map(b => b.id).filter(id => !(batches.done || []).includes(id)))
+  const stray = batches.claimed.find(b => !b || !open.has(b.id))
+  if (stray) return `prepare relayed claimed batch ${JSON.stringify(stray && stray.id)}, which is no unfinished batch of the list — relay \`vybava ui-loop batches\` verbatim; re-run the stage`
+  if (batches.claimed.length > max) return `prepare relayed ${batches.claimed.length} claimed batches; the run claims at most ${max} — relay \`vybava ui-loop batches\` verbatim; re-run the stage`
+  return ''
+}
+
+// A reviewer the watchdog stopped returns no receipt: a stall, which
+// `batches --stall <id>` counts (state.review.stalls). An image-heavy batch
+// once stalled its reviewer on every attempt, so the pass never synthesized
+// (fixit/4721). A stall never loops: the second stall of a batch splits it in
+// halves (`--split`), and a part's second stall — or a one-screen batch's,
+// which cannot split — blocks it (`--block`). A blocked batch is never
+// retried and merge-review counts its screens unreviewed.
+const UILOOP_STALL_LIMIT = 2
+const UILOOP_STALL_REASON = 'reviewer stalled twice'
+
+// What each stalled batch gets, from the stalls state counted before this
+// run: '' (the stall is only counted), 'split' or 'block'. A part is named
+// `<batch>.1` or `<batch>.2`; a planned batch `<area>-<n>` never ends so.
+function stallPlan(stalled, stalls) {
+  return stalled.map(b => {
+    const n = (stalls[b.id] || 0) + 1
+    return { batch: b.id, stalls: n, act: n < UILOOP_STALL_LIMIT ? '' : /\.\d+$/.test(b.id) || b.screens.length < 2 ? 'block' : 'split' }
+  })
+}
+
+// Contract 5 always prints the review's stalls ({} when none) and blocked
+// batches ([] when none). The plan reads the counts: a relay that dropped
+// them would retry a batch that stalls on every attempt forever.
+function stallsProblem(state) {
+  const review = state.review || {}
+  const counts = review.stalls
+  if (!counts || typeof counts !== 'object' || Array.isArray(counts) || !Array.isArray(review.blocked)) return `prepare relayed no state.review.stalls or state.review.blocked, which contract ${UILOOP_STATE_CONTRACT} always prints ({} and [] when no reviewer stalled) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  const bent = Object.keys(counts).find(id => !(Number.isInteger(counts[id]) && counts[id] > 0))
+  if (bent) return `state.review.stalls of ${bent} is ${JSON.stringify(counts[bent])}, not a stall count — relay \`vybava ui-loop state\` verbatim; rerun the stage`
   return ''
 }
 
 // The relayed lanes must account for every open item: lane keys, foreign,
 // i18n-only and already-finished items together are the backlog's open count.
+// A deferred item (contract 8) sits in a rework lane, the only lane it is in.
 function lanesProblem(state, lanes) {
-  if (!lanes || !Array.isArray(lanes.primitives) || !Array.isArray(lanes.areas)) return 'prepare relayed no lanes — `vybava ui-loop lanes --json` must be returned verbatim as lanes'
-  const keys = [...lanes.primitives, ...lanes.areas].reduce((n, l) => n + (l.keys || []).length, 0)
+  if (!lanes || !Array.isArray(lanes.primitives) || !Array.isArray(lanes.areas) || (lanes.rework != null && !Array.isArray(lanes.rework))) return 'prepare relayed no lanes — `vybava ui-loop lanes --json` must be returned verbatim as lanes'
+  const keys = [...lanes.primitives, ...lanes.areas, ...(lanes.rework || [])].reduce((n, l) => n + (l.keys || []).length, 0)
   const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.finished || 0)
   const open = state.backlog ? state.backlog.open : -1
   if (total !== lanes.open || total !== open) return `prepare relayed lanes covering ${total} items; the lanes envelope says ${lanes.open} open and the backlog ${open} — the list was cut; re-run the stage`
@@ -348,9 +422,28 @@ function lanesProblem(state, lanes) {
 // passDir, checkpoints: [{key, status, lane, basis, commit, fileDigests,
 // apiChanges, screens, i18n, note}]}}. The only way a stage reads them: a
 // backlog key with "/" nests its checkpoint (fix/<a>/<b>.json), and the verb
-// also drops stale checkpoints and the fix/r<N>/ archives.
+// also drops stale checkpoints and the fix/r<N>/ archives. The one exception
+// is a rework lane, which reads its own keys' deferrals at fix/<key>.json:
+// the round's commits to a needs file make the verb drop them.
 function checkpointsCommand(pass) {
   return `vybava ui-loop checkpoints --pass ${pass} --json`
+}
+
+// The screens whose recipe died in a pass: the ids of every recipe-failed or
+// error shot `vybava ui-loop split` lists in publish/index.json's notes. An
+// unreachable shot is the seed data's (pwf-ui pass 4: 84 screens), never the
+// recipe's. Prepare counts them (`count`: the length inside the program, a
+// `| length` after the file would pipe into a shell command); the rig lane
+// reads the ids itself.
+function recipeFailedJq(passDir, count) {
+  return `jq -c '[.notes[]?.shots[]? | select(.status == "recipe-failed" or .status == "error") | .id] | unique${count ? ' | length' : ''}' ${passDir}/publish/index.json`
+}
+
+// The pass's recipe-drift groups in `vybava ui-loop triage`'s triage.json
+// (contract 10), in the field names UILOOP_TRIAGE relays: the rig lane's
+// work, never a backlog item. `count` makes it the number Prepare relays.
+function recipeDriftJq(passDir, count) {
+  return `jq -c '${count ? '[' : ''}.groups[]? | select(.class == "recipe-drift")${count ? '] | length' : ' | {signature, screens, evidence, commit}'}' ${passDir}/triage.json`
 }
 
 // The `vybava ui-loop state` contract the stages read: Výbava's
@@ -363,7 +456,32 @@ function checkpointsCommand(pass) {
 // reads, so the gate is the integer the state itself reports. Contract 2
 // moved staleness into the state: `drift` and the verify selection
 // `next.only`, which the workflow once computed in prose and shell.
-const UILOOP_STATE_CONTRACT = 2
+// Contract 3 judges review evidence per screen: a batch carries each
+// screen's `digests`, its raw review records the ones it read as `screens`,
+// and a screen whose shots did not move is `carried` from an earlier pass.
+// Contract 4 leases a pass's steps (<pass>/locks): a running capture is
+// `capture` and routes `next.stage` 'wait', `batches --claim` partitions the
+// review between `next.parallel` identical runs, and merge-review and publish
+// take `synth` and `publish`, so one run synthesizes and posts.
+// Contract 5 splits on stall: `batches --stall/--split/--block`, a split
+// batch's `parts` in its place, and `state.review.stalls` and `blocked`.
+// Contract 6 pauses the loop: `state.paused` and `next.stage` 'paused', which
+// starts no stage, and run, batches --claim and lanes refuse with PAUSED.
+// Contract 7 retires screens: `state.screens` counts the reviewable ones (an
+// ok shot each), `retired` the screens the manifest retired (never shot,
+// batched or gated), and `coverageGaps` / `notShot` every other screen
+// without an ok shot, one entry per screen however many shots it missed.
+// Contract 8 defers a cross-lane fix instead of blocking it: a `deferred`
+// checkpoint with `needs` [{file, change}], `lanes.rework` (the deferred
+// items, each lane owning their needs' dirs and their own) and
+// `state.rework`; a skip, block or deferral is judged by its own files'
+// digests, so a sibling lane's commit elsewhere no longer voids it.
+// Contract 9 makes recipe repair a loop step: `check --labels` (data.labels),
+// the harness's `action` step and `run --probe`, which the fix stage's rig
+// lane uses, and a `run --resume` or `--retake` after rig-only edits.
+// Contract 10 triages a pass's failures: `vybava ui-loop triage` writes
+// <pass>/triage.json (see UILOOP_TRIAGE_CLASSES) and state carries `triage`.
+const UILOOP_STATE_CONTRACT = 10
 
 // Stops a vybava below the contract with the upgrade. `reported` is the
 // `vybava --version` line Prepare relays, only diagnostic text for the message.
@@ -405,6 +523,15 @@ function stateProblem(state) {
   const only = state.next && state.next.only
   if (only != null && !ids(only)) return bad('next.only', only, 'an array of screen ids')
   if (state.next && state.next.stage === 'verify' && only == null) return bad('next.only', only, 'the verify selection (screen ids, [] for a full reshoot)')
+  const parallel = state.next && state.next.parallel
+  if (parallel != null && !(Number.isInteger(parallel) && parallel >= 0)) return bad('next.parallel', parallel, 'a count of review runs')
+  // Contract 7 always prints the coverage gaps and notShot, their ids ([]
+  // when every screen has an ok shot): a relay that dropped or cut one would
+  // let a pass with never-shot screens read as covered.
+  const gaps = state.coverageGaps
+  if (!Array.isArray(gaps) || !ids(state.notShot)) return `prepare relayed no state.coverageGaps or state.notShot, which contract ${UILOOP_STATE_CONTRACT} always prints ([] when every screen has an ok shot) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  const gapIds = gaps.map(g => g && typeof g.reason === 'string' ? g.id : null)
+  if (!ids(gapIds) || [...gapIds].sort().join('\n') !== [...state.notShot].sort().join('\n')) return bad('notShot', state.notShot, 'the ids of state.coverageGaps, one {id, reason} per screen')
   return ''
 }
 
@@ -423,9 +550,110 @@ function doctorProblem(doctor, problems = []) {
   return `vybava ui-loop doctor failed ${failing.length ? failing.map(c => `${c.id}: ${c.detail}${c.fix ? ` (fix: ${c.fix})` : ''}`).join('; ') : 'without naming a failing check'} — fix it, then rerun the stage`
 }
 
-// A lane's keys the lane reports as finished (done, skipped, blocked).
+// `vybava ui-loop triage --pass N` (contract 10) groups every shot of a pass
+// that is not ok, and every ok one with a same-origin ≥ 400 or a pageerror,
+// by signature, each group in one class. infra (a transient network failure,
+// a page that stayed blank) is repaired by a retake; recipe-drift (the
+// literal a recipe looked for left the app) by the rig lane, which reads
+// triage.json itself; app-suspect is ONE application failure behind many
+// screens, which the synthesis files as one broken item, never a finding per
+// screen. triage.json is never review evidence.
+const UILOOP_TRIAGE_CLASSES = ['infra', 'recipe-drift', 'app-suspect', 'retired', 'coverage-gap', 'unknown']
+
+// A relayed triage must be whole and the pass's: each group a signature, a
+// class of the contract and its screen ids, which the classes the stages act
+// on never lack, and a side-effect retake its screens and command. Another
+// pass's triage would drop this pass's findings and retake the wrong
+// screens. A bent one is a problems line, never a stop: the synthesis then
+// files a finding per failed screen, as it did before the triage.
+function triageProblem(triage, pass) {
+  if (!triage || !Array.isArray(triage.groups)) return 'the relay carried no `vybava ui-loop triage` groups'
+  if (triage.pass !== pass) return `the relayed triage is pass ${JSON.stringify(triage.pass)}, not pass ${pass} — relay \`vybava ui-loop triage --pass ${pass}\` verbatim`
+  const side = triage.sideEffectRetake
+  if (side != null && (!Array.isArray(side.screens) || !side.command)) return 'the relayed triage\'s sideEffectRetake lacks its screens or command — relay `vybava ui-loop triage` verbatim'
+  const bent = triage.groups.findIndex(g => !g || !g.signature || !UILOOP_TRIAGE_CLASSES.includes(g.class) || !Array.isArray(g.screens) ||
+    g.screens.some(id => typeof id !== 'string' || !id) || (!g.screens.length && (g.class === 'infra' || g.class === 'app-suspect')))
+  if (bent >= 0) return `the relayed triage group ${bent} (${JSON.stringify((triage.groups[bent] || {}).signature)}) lacks a signature, a known class or its screen ids — relay \`vybava ui-loop triage\` verbatim`
+  return ''
+}
+
+// The app-suspect groups as the backlog items the synthesis files, one per
+// group. The backlog names one screen an item: the group's first (vybava
+// sorts them); detail and shots carry the rest. The key is that screen and
+// the signature, so the next pass judges the same item while the failure
+// lasts on that screen, and the same signature on other screens is an item
+// of its own: many name neither a screen nor a target (a ready timeout), and
+// a key of the signature alone folded a new screen's failure into an old
+// item. vybava groups by class and signature, so two groups of a pass never
+// share both; the slug drops case and punctuation (`/api/foo-bar` and
+// `/api/foo/bar` read alike), so every key ends in a hash of the screen and
+// the signature as vybava printed them, never an ordinal: it never depends
+// on the group order. The readable part is cut so a key stays ≤ 80.
+function triageItems(triage) {
+  const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  // FNV-1a, 32 bits: the same on every run, so a key is too.
+  const hash = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0') }
+  return triage.groups.filter(g => g.class === 'app-suspect').map(g => {
+    const key = `${`triage-${slug(g.screens[0])}-${slug(g.signature)}`.slice(0, 71).replace(/-+$/, '')}-${hash(`${g.screens[0]}\n${g.signature}`)}`
+    const n = g.screens.length
+    return Object.assign({ key, screen: g.screens[0], screens: g.screens, signature: g.signature, evidence: g.evidence }, g.commit ? { commit: g.commit } : {}, {
+      title: `App failure on ${n} screen${n === 1 ? '' : 's'}: ${g.signature}`,
+      acceptance: `every shot of ${g.screens.join(', ')} is captured ok and shows its content, without ${g.signature}`,
+    })
+  })
+}
+
+// The infra groups' screens as one retake, a problems line: a failure that
+// was the network's or the box's goes away when they are shot again, into
+// the triaged pass. A screen whose recipe has a side effect (it writes data,
+// or must not repeat) is never in it: vybava prints its retake as
+// sideEffectRetake, a command only someone's choice runs, so it is a line
+// of its own with vybava's reason.
+function triageRetake(triage, wrap) {
+  const side = triage.sideEffectRetake || null
+  const chosen = new Set(side ? side.screens : [])
+  const infra = triage.groups.filter(g => g.class === 'infra' && g.screens.some(id => !chosen.has(id)))
+  const ids = [...new Set(infra.flatMap(g => g.screens))].filter(id => !chosen.has(id)).sort()
+  return [
+    ...(ids.length ? [`${ids.length} screens failed on infrastructure, not in the app (${infra.map(g => g.signature).join('; ')}) — retake them: \`vybava ui-loop run --retake ${ids.join(',')} --pass ${triage.pass} --wrap "${wrap}"\``] : []),
+    ...(side && side.screens.length ? [`${side.screens.length} screens whose recipe has a side effect failed on infrastructure too (${JSON.stringify(side.screens)}): ${side.reason} — \`${side.command} --wrap "${wrap}"\``] : []),
+  ]
+}
+
+// A lane's keys the lane reports as finished (done, skipped, blocked); a
+// deferred key waits for the rework phase.
 function finishedBy(results) {
   return new Set(results.flatMap(r => [...(r.done || []), ...(r.skipped || []).map(s => (typeof s === 'string' ? s : s.key)), ...(r.blocked || []).map(b => (typeof b === 'string' ? b : b.key))]))
+}
+
+// A lane blocks only on what lies outside the repo (a cross-lane need is
+// deferred), and Settle blocks the foreign items: together, one list for
+// their owner to answer as a single /qna batch. A round spans runs (the
+// rework phase is the next run's), so `earlier` is the list the round's
+// previous runs handed on. The list is each key's latest status: a blocked
+// checkpoint goes stale when its files change and the item is judged again,
+// so a key this run reports in any status replaces its earlier question, and
+// only a block asks one.
+function ownerQuestions(results, settle, earlier = []) {
+  const now = [...results.flatMap(r => (r.blocked || []).map(b => ({ key: b.key, lane: r.lane, ask: b.ask }))), ...((settle && settle.blocked) || []).map(b => ({ key: b.key, lane: 'settle', ask: b.ask }))]
+  return latestByKey(earlier, results, settle, now)
+}
+
+// A rework lane is an item's last: its deferral ends the round for the item
+// unfixed, and the CLI counts it finished, so no later run of the round sees
+// it again. The round's list of them rides its continuations like the owner
+// questions, each key's latest status too.
+function reworkStuck(results, settle, reworkLanes, earlier = []) {
+  const now = results.filter(r => reworkLanes.has(r.lane)).flatMap(r => (r.deferred || []).map(d => ({ key: d.key, lane: r.lane, needs: d.needs })))
+  return latestByKey(earlier, results, settle, now)
+}
+
+// What earlier runs of the round carried, less every key this run reports in
+// any status (a lane's done, skip, deferral or block; Settle's checkpoint or
+// block), plus this run's entries.
+function latestByKey(earlier, results, settle, now) {
+  const reported = new Set([...finishedBy(results), ...results.flatMap(r => (r.deferred || []).map(d => d.key)), ...((settle && settle.checkpointed) || []), ...((settle && settle.blocked) || []).map(b => b.key), ...now.map(x => x.key)])
+  return [...earlier.filter(x => !reported.has(x.key)), ...now]
 }
 // ---- lib/uiloop-schemas.js — the ui-loop mode's detect prompt and structured-output schemas
 // The ui-loop mode runs when the repo's vybava.config.ts carries a `uiLoop`
@@ -462,6 +690,7 @@ const UILOOP_DETECT_SCHEMA = {
 // required one pushed relaying agents to invent a placeholder when an older
 // vybava omitted it.
 const UILOOP_CLI_OWNED = 'copy it verbatim from the CLI\'s output; OMIT it when the CLI did not print it — never invent a value or placeholder'
+const UILOOP_BLOCKED = { type: 'object', properties: { batch: { type: 'string' }, reason: { type: 'string' } }, required: ['batch', 'reason'] }
 const UILOOP_STATE = {
   type: 'object',
   description: 'the `data` of `vybava ui-loop state --json`, verbatim: copy every field the CLI printed and omit every field it did not, never inventing one',
@@ -476,17 +705,25 @@ const UILOOP_STATE = {
     drift: { type: ['object', 'null'], description: `what changed since the captured revision — app: source paths (at most 20; appTotal counts them all), rig: paths under uiLoop.dir, spec: the rule ids whose text changed in uiLoop.spec; null for a pass without provenance or one whose revision this clone lacks; ${UILOOP_CLI_OWNED}`, properties: { app: { type: 'array', items: { type: 'string' } }, rig: { type: 'array', items: { type: 'string' } }, spec: { type: 'array', items: { type: 'string' } }, appTotal: { type: 'integer' } }, required: ['app', 'rig', 'spec', 'appTotal'] },
     scoreboardCurrent: { type: 'boolean', description: UILOOP_CLI_OWNED },
     pass: { type: 'integer' }, passDir: { type: 'string' },
+    capture: { type: 'object', description: `the capture lease: running while a \`vybava ui-loop run\` holds it, with that pass, since (RFC3339) and owner; ${UILOOP_CLI_OWNED}`, properties: { running: { type: 'boolean' }, pass: { type: 'integer' }, since: { type: 'string' }, owner: { type: 'string' } }, required: ['running'] },
+    pending: { type: ['integer', 'null'], description: `a newer pass with no shots and no running capture (state reads the newest pass with shots instead), null when none; ${UILOOP_CLI_OWNED}` },
+    paused: { type: ['object', 'null'], description: `the loop's pause (\`vybava ui-loop pause\`): who paused it, when (RFC3339), why and the newest pass then; null while the loop runs; ${UILOOP_CLI_OWNED}`, properties: { by: { type: 'string' }, at: { type: 'string' }, reason: { type: 'string' }, pass: { type: 'integer' } }, required: ['by', 'at'] },
+    triage: { type: ['object', 'null'], description: `the pass's failure triage (\`vybava ui-loop triage\`): its triage.json, how many groups and the groups by class; null before the pass was triaged; ${UILOOP_CLI_OWNED}`, properties: { file: { type: 'string' }, groups: { type: 'integer' }, byClass: { type: 'object', additionalProperties: { type: 'integer' } } }, required: ['file', 'groups', 'byClass'] },
     config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } } } },
-    shots: { type: 'integer' }, screens: { type: 'integer' },
+    shots: { type: 'integer' }, screens: { type: 'integer', description: 'the reviewable screens: those with at least one ok shot' },
+    retired: { type: 'integer', description: `screens the manifest retires (dead code, plugin not installed, feature off): never shot, batched or counted; ${UILOOP_CLI_OWNED}` },
+    coverageGaps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'reason'] }, description: `one {id, reason} per screen that is not retired and has no ok shot (unreachable, recipe-failed, error, blank), every one ([] when none); ${UILOOP_CLI_OWNED}` },
+    notShot: { type: 'array', items: { type: 'string' }, description: `the coverageGaps ids, sorted, every one ([] when none); ${UILOOP_CLI_OWNED}` },
     areas: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, screens: { type: 'integer' } }, required: ['area', 'screens'] } },
     published: { type: 'boolean' }, unpublished: { type: 'array', items: { type: 'string' } },
-    review: { type: 'object', properties: { planned: { type: 'integer' }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, reviewedAreas: { type: 'array', items: { type: 'string' } } } },
+    review: { type: 'object', properties: { planned: { type: 'integer' }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, reviewedAreas: { type: 'array', items: { type: 'string' } }, carried: { type: 'integer', description: `screens carried into this pass, reviewed by carry; ${UILOOP_CLI_OWNED}` }, carriedFrom: { type: ['integer', 'null'], description: `the pass the carried screens came from; ${UILOOP_CLI_OWNED}` }, stalls: { type: 'object', additionalProperties: { type: 'integer' }, description: `batch id → how often its reviewer stalled, nonzero counts only ({} when none); ${UILOOP_CLI_OWNED}` }, blocked: { type: 'array', items: UILOOP_BLOCKED, description: `every batch blocked after its reviewer stalled ([] when none); ${UILOOP_CLI_OWNED}` } } },
     hasBacklog: { type: 'boolean' },
     backlog: { type: ['object', 'null'], properties: { file: { type: 'string' }, findings: { type: 'integer' }, open: { type: 'integer' }, byStatus: { type: 'object' }, bySeverity: { type: 'object' }, reviewed: { type: 'integer' } } },
     previous: { type: ['object', 'null'], properties: { pass: { type: 'integer' }, file: { type: 'string' }, open: { type: 'integer' } } },
     checkpoints: { type: 'object', properties: { total: { type: 'integer' }, byStatus: { type: 'object' } } },
+    rework: { type: 'integer', description: `deferred items no later checkpoint finished: the fix stage's rework phase runs them; ${UILOOP_CLI_OWNED}` },
     boards: { type: 'array', items: { type: 'object', properties: { area: { type: 'string' }, url: { type: 'string' }, slug: { type: 'string' }, section: { type: 'string' } }, required: ['area', 'url'] } },
-    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done'] }, resume: { type: 'boolean' }, reason: { type: 'string' }, only: { type: ['array', 'null'], items: { type: 'string' }, description: `the screen ids a verify or a reshooting capture shoots, every one ([] is a full reshoot), null on other stages; ${UILOOP_CLI_OWNED}` } }, required: ['stage', 'resume', 'reason'] },
+    next: { type: 'object', properties: { stage: { type: 'string', enum: ['capture', 'review', 'fix', 'verify', 'done', 'wait', 'paused'] }, resume: { type: 'boolean' }, reason: { type: 'string' }, only: { type: ['array', 'null'], items: { type: 'string' }, description: `the screen ids a verify or a reshooting capture shoots, every one ([] is a full reshoot), null on other stages; ${UILOOP_CLI_OWNED}` }, parallel: { type: 'integer', description: `review only: how many identical review runs the batches left can use at once; ${UILOOP_CLI_OWNED}` } }, required: ['stage', 'resume', 'reason'] },
   },
   required: ['pass', 'shots', 'screens', 'published', 'hasBacklog', 'next'],
 }
@@ -505,9 +742,51 @@ const UILOOP_DOCTOR = {
   required: ['ok', 'checks'],
 }
 
-const UILOOP_BATCH = { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' }, screens: { type: 'array', items: { type: 'string' } } }, required: ['id', 'area', 'screens'] }
+// A v2 batch (contract 3) also carries `digests`: screen id → the 64-hex
+// digest of what its reviewer judges, which the raw review records verbatim.
+const UILOOP_BATCH = { type: 'object', properties: { id: { type: 'string' }, area: { type: 'string' }, screens: { type: 'array', items: { type: 'string' } }, digests: { type: 'object', additionalProperties: { type: 'string' }, description: `screen id → 64-hex digest, every pair; ${UILOOP_CLI_OWNED}` } }, required: ['id', 'area', 'screens'] }
+
+// The stall relay (stallPlan): each `batches --stall/--split/--block`, as
+// the CLI printed it; a split also claims its parts for this run.
+// An agent at a phase boundary reads `vybava ui-loop state` first: a paused
+// loop (contract 6) starts nothing new, so the agent changes nothing and
+// relays why.
+const UILOOP_PAUSED = { type: 'string', description: `\`vybava ui-loop state --json\`'s data.next.reason, verbatim, when its data.paused is not null (you then changed nothing); omit it while the loop runs; ${UILOOP_CLI_OWNED}` }
+
+const UILOOP_STALL_SCHEMA = {
+  type: 'object',
+  properties: {
+    paused: UILOOP_PAUSED,
+    stalls: { type: 'array', items: { type: 'object', properties: { batch: { type: 'string' }, stalls: { type: 'integer' } }, required: ['batch', 'stalls'] }, description: `each \`--stall\` envelope's data {batch, stalls}; ${UILOOP_CLI_OWNED}` },
+    splits: { type: 'array', items: { type: 'object', properties: { batch: { type: 'string' }, parts: { type: 'array', items: UILOOP_BATCH }, claimed: { type: 'array', items: UILOOP_BATCH } }, required: ['batch', 'parts'] }, description: `each \`--split\` envelope's data {batch, parts, claimed}, every part; ${UILOOP_CLI_OWNED}` },
+    blocked: { type: 'array', items: UILOOP_BLOCKED, description: `each \`--block\` envelope's data {batch, reason}; ${UILOOP_CLI_OWNED}` },
+    problems: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['stalls'],
+}
 
 const UILOOP_LANE = { type: 'object', properties: { lane: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'dirs', 'keys'] }
+
+// `vybava ui-loop check --labels --json`'s data.labels: the literal names a
+// recipe step clicks that no uiLoop.labels.sources file holds (contract 9).
+// Prepare relays it to count the rig lane's work; Settle relays it again
+// after the round's fixes, which may rename a control a recipe names.
+const UILOOP_LABELS = { type: 'object', description: `the \`data.labels\` of \`vybava ui-loop check --labels --json\`, verbatim — only when asked for; ${UILOOP_CLI_OWNED}`, properties: { checked: { type: 'integer' }, missing: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, step: { type: ['integer', 'string'] }, name: { type: 'string' } }, required: ['screen', 'name'] } } }, required: ['checked', 'missing'] }
+
+// `vybava ui-loop triage --pass N --json` data (contract 10), relayed
+// verbatim: the pass's failures grouped by signature (UILOOP_TRIAGE_CLASSES).
+const UILOOP_TRIAGE = {
+  type: 'object',
+  description: 'the `data` of `vybava ui-loop triage --json`, verbatim: every group, every screen id of each, in the order it printed them',
+  properties: {
+    v: { type: 'integer' },
+    pass: { type: 'integer' },
+    groups: { type: 'array', items: { type: 'object', properties: { signature: { type: 'string' }, class: { type: 'string', enum: UILOOP_TRIAGE_CLASSES }, screens: { type: 'array', items: { type: 'string' } }, shots: { type: 'integer' }, evidence: { type: 'string' }, commit: { type: 'string', description: `the commit that removed a recipe-drift group's literal; ${UILOOP_CLI_OWNED}` } }, required: ['signature', 'class', 'screens', 'shots', 'evidence'] } },
+    retake: { type: 'array', items: { type: 'string' }, description: `the infra groups' screens, sorted; ${UILOOP_CLI_OWNED}` },
+    sideEffectRetake: { type: 'object', description: `the retake of the infra screens whose recipe has a side effect, which only someone's choice runs: its screens, reason and command, verbatim; omit it when vybava printed none; ${UILOOP_CLI_OWNED}`, properties: { screens: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' }, command: { type: 'string' } }, required: ['screens', 'reason', 'command'] },
+  },
+  required: ['v', 'pass', 'groups'],
+}
 
 const UILOOP_PREP_SCHEMA = {
   type: 'object',
@@ -517,10 +796,19 @@ const UILOOP_PREP_SCHEMA = {
     repo: { type: 'string', description: 'the absolute path `git rev-parse --show-toplevel` prints where you ran' },
     workspace: { type: 'string', description: 'the devbox workspace name from `devbox url --json`, empty when none' },
     vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim (diagnostic text only); empty when there is no vybava binary' },
+    owner: { type: 'string', description: 'this run\'s lease owner, review-loop-<uuid>, minted once; the same string every --owner took' },
+    paused: { type: 'string', description: 'the detail of a PAUSED diagnostic step 4 or 5 printed (the loop was paused after step 2), verbatim; omit it when none did' },
     state: UILOOP_STATE,
     doctor: UILOOP_DOCTOR,
-    batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } } }, required: ['screens', 'batches', 'done', 'left'] },
-    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
+    batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, claimed: { type: 'array', items: UILOOP_BATCH, description: `the batches --claim leased to this run, every one ([] when other runs hold every batch left); ${UILOOP_CLI_OWNED}` }, carried: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, from: { type: 'integer' } }, required: ['screen', 'from'] }, description: `the screens carried from an earlier pass, which no batch holds, every one; ${UILOOP_CLI_OWNED}` } }, required: ['screens', 'batches', 'done', 'left'] },
+    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, rework: { type: 'array', items: UILOOP_LANE, description: `the rework lanes (rework-<n>), every one: the deferred items, each lane owning their needs' dirs and their own; ${UILOOP_CLI_OWNED}` }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
+    stale: { type: 'array', items: { type: 'string' }, description: 'the detail of every CHECKPOINT_STALE warning a command printed, verbatim (never in problems)' },
+    // The rig lane's work, counted for the fix stage (contract 9); the lane reads the lists itself.
+    labels: UILOOP_LABELS,
+    recipeFailed: { type: 'integer', description: 'the count the recipe-failed jq printed — only when asked for' },
+    recipeDrift: { type: 'integer', description: 'the recipe-drift groups of the pass\'s triage.json — only when asked for; omit it when the file does not exist' },
+    rigCheckpoints: { type: 'array', items: { type: 'object', properties: { key: { type: 'string', description: 'rig/<screen id>' }, status: { type: 'string' } }, required: ['key', 'status'] }, description: `the pass's admitted rig/<screen> checkpoints the jq printed, every one ([] when none) — only when asked for; ${UILOOP_CLI_OWNED}` },
+    triage: { ...UILOOP_TRIAGE, description: `${UILOOP_TRIAGE.description} — only when asked for` },
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['configured', 'branch', 'repo'],
@@ -535,6 +823,9 @@ const UILOOP_CAPTURE_SCHEMA = {
     byStatus: { type: 'object' },
     published: { type: 'boolean' },
     sets: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, area: { type: 'string' }, url: { type: 'string' }, status: { type: 'string' } }, required: ['key', 'status'] } },
+    blocked: { type: 'string', description: 'the CAPTURE_RUNNING or LEASE_HELD diagnostic that stopped you, verbatim (another run holds the pass\'s capture or publish lease); omit it when none did' },
+    paused: UILOOP_PAUSED,
+    triage: UILOOP_TRIAGE,
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['pass', 'shots', 'published'],
@@ -584,6 +875,9 @@ const UILOOP_SYNTH_SCHEMA = {
     judged: { type: 'integer', description: 'merge-review\'s unjudged + problems keys you settled' },
     reviewed: { type: 'integer', description: 'len(reviewed) of the written backlog' },
     unreviewed: { type: 'array', items: { type: 'string' }, description: 'merge-review\'s unreviewed screen ids, verbatim' },
+    triaged: { type: 'array', items: { type: 'string' }, description: 'the key of each triage group\'s item in the written backlog, the one you added or the previous one with that key you kept' },
+    leaseHeld: { type: 'string', description: 'merge-review\'s LEASE_HELD diagnostic, verbatim (another run holds this pass\'s synth lease); omit it when merge-review printed none' },
+    paused: UILOOP_PAUSED,
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['backlogFile', 'findings', 'open'],
@@ -607,16 +901,29 @@ const UILOOP_LANE_SCHEMA = {
     lane: { type: 'string' },
     done: { type: 'array', items: { type: 'string' } },
     skipped: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, why: { type: 'string' } }, required: ['key', 'why'] } },
-    blocked: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, ask: { type: 'string', description: 'the exact change it needs, outside this lane\'s dirs' } }, required: ['key', 'ask'] } },
+    deferred: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, needs: { type: 'array', items: { type: 'object', properties: { file: { type: 'string', description: 'repo-relative, outside this lane\'s dirs' }, change: { type: 'string' } }, required: ['file', 'change'] } } }, required: ['key', 'needs'] }, description: 'items checkpointed deferred, each with its checkpoint\'s needs: the rework phase fixes them' },
+    blocked: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, ask: { type: 'string', description: 'the question for its owner: what the fix waits for outside this repo (seed data, a backend change, another repo, an owner decision)' } }, required: ['key', 'ask'] } },
     remaining: { type: 'array', items: { type: 'string' }, description: 'keys not reached (context or time), for the next run' },
     commits: { type: 'array', items: { type: 'string' } },
     touchedScreens: { type: 'array', items: { type: 'string' } },
     apiChanges: { type: 'array', items: { type: 'string' }, description: 'primitive lanes: every public API addition, additive only' },
     i18n: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }, description: 'strings the fixes need: {key, <locale>: text} — also in each item\'s checkpoint' },
     treeCleanOfMine: { type: 'boolean' },
+    paused: UILOOP_PAUSED,
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['lane', 'done', 'skipped', 'remaining', 'commits', 'treeCleanOfMine'],
+}
+
+// The rig lane is a lane (its done keys are `rig/<screen>` checkpoints) that
+// also returns its last probe: a repair is done only once its screen probed ok.
+const UILOOP_RIG_SCHEMA = {
+  ...UILOOP_LANE_SCHEMA,
+  properties: {
+    ...UILOOP_LANE_SCHEMA.properties,
+    probe: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, ok: { type: 'boolean', description: 'true when it shot the screen ok, or reported a screen you retired as retired' }, failure: { type: 'string' } }, required: ['screen', 'ok'] }, description: 'each screen of your last `vybava ui-loop run --probe`, ok or failed with its failure, as it printed them' },
+  },
+  required: [...UILOOP_LANE_SCHEMA.required, 'probe'],
 }
 
 const UILOOP_SETTLE_SCHEMA = {
@@ -625,9 +932,12 @@ const UILOOP_SETTLE_SCHEMA = {
     green: { type: 'boolean', description: 'typecheck clean of this round\'s errors and the dev server green' },
     i18nAdded: { type: 'integer' },
     checkpointed: { type: 'array', items: { type: 'string' }, description: 'foreign and i18n-only keys you wrote a checkpoint for' },
+    blocked: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, ask: { type: 'string', description: 'the question for its owner: the repo and the change the fix needs there' } }, required: ['key', 'ask'] }, description: 'each foreign key you checkpointed blocked' },
     ran: { type: 'array', items: { type: 'string' } },
     failures: { type: 'array', items: { type: 'string' } },
+    labels: { ...UILOOP_LABELS, description: `the \`data.labels\` of \`vybava ui-loop check --labels --json\` after your last commit, verbatim — only when asked for; ${UILOOP_CLI_OWNED}` },
     commits: { type: 'array', items: { type: 'string' } },
+    paused: UILOOP_PAUSED,
     problems: { type: 'array', items: { type: 'string' } },
   },
   required: ['green', 'ran', 'failures'],
@@ -697,8 +1007,9 @@ async function mapScreens(cfg) {
   const explorer = g => () => run.agent(withRepo(withPreamble(withUiLoop(
     `Extend the ui-loop screen manifest for area${g.length > 1 ? 's' : ''} ${g.join(', ')} (apps: ${cfg.apps.join(', ')}).\n` +
     `The API is \`${cfg.dir}/vendor/manifest.ts\` + \`${cfg.dir}/vendor/project.ts\` (defineScreens, Screen, Step, Recipe) and \`${cfg.dir}/vendor/states.ts\`; the repo's hooks are \`${cfg.dir}/project.ts\`. Your files: ${JSON.stringify(g.map(a => `${cfg.dir}/screens/${a}.ts`))} — a missing one is created in the style of its siblings; never write any other area's file.\n` +
-    `Inventory the area from the app's own route tables, navigators and components: every route × tab × overlay (dialog, drawer, menu, popover, phone sheet, stacked layer) × state — empty / error / loading through the \`states.ts\` request mocks (\`listStates\` for a list), unsaved changes, a validation error, denied and read-only personas (\`as\`). Add a Screen for each one the manifest lacks, with the recipe that reaches it (\`before\` mocks, \`open\` steps ending in a wait, \`ready\`), \`sourceFiles\` that exist, \`parentId\`/\`variantOf\` for overlays and states, \`app\` when there are several apps. One that cannot be reached with the seed data gets \`unreachable: '<why>'\`; one whose recipe writes gets \`destructive: true\`.\n` +
-    `EXTEND ONLY: never delete, rename, reorder or rewrite an existing entry — one you believe wrong is a problems line naming its id. Run \`vybava ui-loop check --json\` and fix what it reports in the entries you added. You are the ONLY writer while this group runs; other groups run sequentially. Never run a capture, never commit.\n` +
+    `Inventory the area from the app's own route tables, navigators and components: every route × tab × overlay (dialog, drawer, menu, popover, phone sheet, stacked layer) × state — empty / error / loading through the \`states.ts\` request mocks (\`listStates\` for a list), unsaved changes, a validation error, denied and read-only personas (\`as\`). Add a Screen for each one the manifest lacks, with the recipe that reaches it (\`before\` mocks, \`open\` steps ending in a wait, \`ready\`), \`sourceFiles\` that exist, \`parentId\`/\`variantOf\` for overlays and states, \`app\` when there are several apps. One that cannot be reached with the seed data gets \`unreachable: '<why>'\` (an environment or seed gap someone owns); one whose code is dead, whose plugin is not installed or whose feature is off gets \`retired: '<why>'\` instead — never both; one whose recipe writes gets \`destructive: true\`.\n` +
+    `${UILOOP_ACTION_STEP}\n` +
+    `EXTEND ONLY: never delete, rename, reorder or rewrite an existing entry — one you believe wrong is a problems line naming its id. Run \`vybava ui-loop check --json\` and fix what it reports in the entries you added (a LABEL_MISSING names a step whose literal name no label source holds). You are the ONLY writer while this group runs; other groups run sequentially. Never run a capture, never commit.\n` +
     `Return your areas, files, the screen count before, how many you added and the unreachable ones with why.`
   )), repo), { label: `screens:${g.join('+')}`, phase: 'Explore', schema: UILOOP_MANIFEST_SCHEMA })
   phase('Explore')
@@ -714,7 +1025,7 @@ async function mapScreens(cfg) {
   const commit = !(args && args.commit === false)
   const result = await run.agent(withRepo(withPreamble(withUiLoop(
     `Validate the ui-loop screen manifest the explorers just extended (${JSON.stringify(reports.map(r => ({ areas: r.areas, files: r.files, added: r.added, problems: r.problems || [] })))}).\n` +
-    `1. \`vybava ui-loop check --json\`: fix every MANIFEST_INVALID problem in the newly added entries (the diff against HEAD shows which); an existing entry's problem is reported, not rewritten.\n` +
+    `1. \`vybava ui-loop check --json\`: fix every MANIFEST_INVALID or LABEL_MISSING problem in the newly added entries (the diff against HEAD shows which); an existing entry's problem is reported, not rewritten.\n` +
     `2. \`vybava ui-loop map\` renders \`${cfg.appMap || 'uiLoop.appMap'}\`; \`vybava ui-loop check --json\` again must report the app map fresh.\n` +
     (commit ? `3. Commit ${cfg.dir}/screens/ and the app map path-limited ("ui-loop: map screens (${areas.join(', ')})").\n` : '3. Do not commit.\n') +
     `Return ok, the screen and capture counts, screens per area, the app map path${commit ? ', the commit' : ''} and every problem left.`
