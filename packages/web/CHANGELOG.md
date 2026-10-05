@@ -12,7 +12,8 @@
   milliseconds, and turn idle when the save ends. Its own tail still
   lands. A stop that keeps the session (server unreachable) hands it back
   to them as it is. Pause and resume are refused on a session another tab
-  is stopping.
+  is stopping, for up to 90 s: a mark left by a tab closed mid-stop then
+  reads as an ordinary pause.
 - **"Open board" appears once the board exists.** The server builds a
   session's board after the stop, rendering stills first (30–60 s), so
   neither the create nor the done answer carried a link. The pill said
@@ -24,6 +25,8 @@
   board. The link then lands on the recent, and the Saved / Sent face
   turns into "Open board". A `HudController` host may return the saved
   `sessionId` from `stop()` / `report()` (`HudSaved`) to get the same.
+  Recents opened after a reload pick up the wait for a board still being
+  projected, and `window.__vitrinkaRecorder.stop()` reads `boardUrl` too.
 
 ## 0.3.2
 
