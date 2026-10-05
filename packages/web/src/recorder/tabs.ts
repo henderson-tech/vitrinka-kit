@@ -1,16 +1,18 @@
 /** Each mounted tab saves its own tail before any tab closes the shared session. */
-import { capturesSettled, drainBuffer, getState, STOPPING_RENEW_MS, STOPPING_TTL_MS } from './queue';
+import { capturesSettled, drainBuffer, flush, getState, persistNow, queuedCount, RECORDER_DOCUMENT_KEY, runBeforeStopHooks, STOPPING_RENEW_MS, STOPPING_TTL_MS, tailIsDurable } from './queue';
 import { getRecorderStorage } from './storage';
 import { subscribe } from './state';
 
 const PREFIX = 'tab.';
 // Document identity, independent of sessionStorage (duplicating a tab copies it).
-const ownKey = `${PREFIX}${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
+const ownKey = `${PREFIX}${RECORDER_DOCUMENT_KEY}`;
 
 interface Participant {
   sessionId: string;
   at: number;
   failed?: boolean;
+  departed?: boolean;
+  recoverable?: boolean;
 }
 
 function readParticipant(raw: string | null | undefined): Participant | null {
@@ -23,7 +25,7 @@ export function recorderPeers(sessionId: string): string[] {
   return storage.keys().filter((key) => {
     if (!key.startsWith(PREFIX) || key === ownKey) return false;
     const peer = readParticipant(storage.getString(key));
-    return peer?.sessionId === sessionId && Date.now() - peer.at < STOPPING_TTL_MS;
+    return peer?.sessionId === sessionId && (peer.failed || Date.now() - peer.at < STOPPING_TTL_MS);
   });
 }
 
@@ -31,7 +33,9 @@ export function registerRecorderTab() {
   const storage = getRecorderStorage();
   if (!storage.watch || !storage.keys) return null;
   let settling = false;
+  let hidden = false;
   const sync = () => {
+    if (hidden) return;
     const rec = getState();
     if (!rec) storage.remove(ownKey);
     else if (!rec.stopping) storage.set(ownKey, JSON.stringify({ sessionId: rec.sessionId, at: Date.now() }));
@@ -39,13 +43,21 @@ export function registerRecorderTab() {
   const heartbeat = setInterval(sync, STOPPING_RENEW_MS);
   const offState = subscribe(sync);
   sync();
-  const dispose = () => {
+  const onPageHide = () => {
+    hidden = true;
     clearInterval(heartbeat);
-    offState();
-    storage.remove(ownKey);
-    globalThis.removeEventListener?.('pagehide', dispose);
+    runBeforeStopHooks();
+    persistNow();
+    const rec = getState();
+    if (rec && queuedCount()) storage.set(ownKey, JSON.stringify({ sessionId: rec.sessionId, at: Date.now(), failed: true, departed: true, recoverable: tailIsDurable() }));
+    else storage.remove(ownKey);
   };
-  globalThis.addEventListener?.('pagehide', dispose);
+  const dispose = () => {
+    onPageHide();
+    offState();
+    globalThis.removeEventListener?.('pagehide', onPageHide);
+  };
+  globalThis.addEventListener?.('pagehide', onPageHide);
   return {
     sync,
     dispose,
@@ -74,6 +86,13 @@ export function registerRecorderTab() {
 export async function waitForRecorderPeers(keys: readonly string[], sessionId: string, timeoutMs = 60_000): Promise<boolean> {
   const storage = getRecorderStorage();
   if (!storage.watch || !keys.length) return true;
+  if (keys.some((key) => {
+    const peer = readParticipant(storage.getString(key));
+    return peer?.departed && peer.recoverable;
+  })) {
+    await flush();
+    await drainBuffer();
+  }
   const results = await Promise.all(keys.map((key) => new Promise<boolean>((resolve) => {
     let off = () => {};
     const finish = (saved: boolean) => { clearTimeout(timer); off(); resolve(saved); };

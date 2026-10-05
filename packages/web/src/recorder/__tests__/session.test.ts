@@ -11,9 +11,22 @@ import { __resetForTests, adoptStoredState, flush, getState, markStopping, pushR
 import { addAnnotation, addNote, followOtherTabs, onBeforeStop, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
+import { registerRecorderTab } from '../tabs';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
+
+function tabEvents() {
+  const events = new EventTarget();
+  const add = globalThis.addEventListener;
+  const remove = globalThis.removeEventListener;
+  Object.defineProperty(globalThis, 'addEventListener', { configurable: true, value: events.addEventListener.bind(events) });
+  Object.defineProperty(globalThis, 'removeEventListener', { configurable: true, value: events.removeEventListener.bind(events) });
+  return { events, restore: () => {
+    Object.defineProperty(globalThis, 'addEventListener', { configurable: true, value: add });
+    Object.defineProperty(globalThis, 'removeEventListener', { configurable: true, value: remove });
+  } };
+}
 
 beforeEach(() => {
   stub = installStub();
@@ -137,6 +150,22 @@ describe('session', () => {
     expect(getState()).toMatchObject({ sessionId: 'sess-1', paused: true });
     expect(stub.calls.some((call) => call.method === 'PATCH' && (call.body as { status?: string })?.status === 'done')).toBe(false);
     expect(shared.getString('buffer')).toContain('local tail');
+  });
+
+  it('leaving a page with captures pending keeps an unsaved participant instead of acknowledging delivery', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {}, withLock: async () => { await new Promise<void>(() => {}); } });
+    __resetForTests();
+    await startSession();
+    const tab = registerRecorderTab()!;
+    try {
+      addNote('tail on leaving');
+      const key = storage.keys!().find((key) => key.startsWith('tab.'))!;
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(JSON.parse(storage.getString(key) ?? 'null')).toMatchObject({ sessionId: 'sess-1', failed: true, departed: true });
+    } finally { tab.dispose(); bus.restore(); }
   });
 
   it('follows another tab through the shared store: joins its recording, applies the policy written after it, ends with its Stop', () => {

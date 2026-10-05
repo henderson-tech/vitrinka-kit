@@ -569,13 +569,14 @@ function addAllocation(item: PendingAllocation): void {
 }
 
 /** Journals survive pagehide and are safe for another document to help drain. */
-function recoverAllocations(): void {
-  if (allocationsRecovered) return;
+function recoverAllocations(refresh = false): void {
+  if (allocationsRecovered && !refresh) return;
   allocationsRecovered = true;
   const storage = kv();
   if (!storage.withLock) return;
+  const queuedKeys = new Set([...pendingAllocations].map((item) => item.key));
   for (const key of storage.keys?.() ?? []) {
-    if (!key.startsWith(ALLOCATION_PREFIX)) continue;
+    if (!key.startsWith(ALLOCATION_PREFIX) || queuedKeys.has(key) || allocatedCaptures.has(key)) continue;
     const item = readJson<StoredAllocation | null>(key, null);
     if (item && item.draft && item.draft.sessionId === getState()?.sessionId) addAllocation({ ...item, key, persisted: true, bytes: utf8Bytes(JSON.stringify(item)) });
   }
@@ -613,8 +614,21 @@ function clearStoredCaptures(sessionId: string, seqs: ReadonlySet<number>): void
     if (item.sessionId === sessionId && seqs.has(item.seq)) {
       kv().remove(key);
       allocatedCaptures.delete(key);
+      const documentKey = key.slice(ALLOCATION_PREFIX.length, key.lastIndexOf('.'));
+      const peerKey = `tab.${documentKey}`;
+      const peer = readJson<{ departed?: boolean; recoverable?: boolean } | null>(peerKey, null);
+      if (peer?.departed && peer.recoverable && !kv().keys?.().some((k) => k.startsWith(`${ALLOCATION_PREFIX}${documentKey}.`))) kv().remove(peerKey);
     }
   }
+}
+
+/** A departing document can be acknowledged by a helper only with a full journal. */
+export function tailIsDurable(): boolean {
+  if (!kv().keys) return false;
+  const durableSeqs = new Set([...allocatedCaptures].filter(([key]) => kv().getString(key)).map(([, item]) => item.seq));
+  return [...pendingAllocations].every((item) => item.persisted && !!kv().getString(item.key))
+    && getBuffer().every((event) => durableSeqs.has(event.seq))
+    && getChunks().every((chunk) => durableSeqs.has(chunk.seq));
 }
 
 /** One worker per document: evicted drafts cannot stay held by queued lock callbacks. */
@@ -924,7 +938,7 @@ export async function flush(opts: { keepalive?: boolean } = {}): Promise<boolean
 
 async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   if (getState()?.dead) return false;
-  recoverAllocations();
+  recoverAllocations(true);
   if (pendingAllocations.size) await allocatePending();
   if (pendingAllocations.size) return false;
   const pendingClear = await drainPending();
