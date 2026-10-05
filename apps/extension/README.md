@@ -109,7 +109,7 @@ manual banner — download, unzip over the folder, ↻.
 - **Start** from the popup on any tab whose host matches a project rule. Other
   tabs on the same project's domains join the session automatically (multi-tab
   journeys: admin + web side by side).
-- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.2.1):
+- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.3.3):
   rec dot · timer · sync chip · pause · note · annotate · ■ stop · ⋯, at one of
   eight spots or tucked into an edge. Shortcuts: `Alt+Shift+A` annotate (click
   an element OR drag any region, note, Enter sends, ⇧Enter newline, Esc / ✕ /
@@ -147,8 +147,10 @@ manual banner — download, unzip over the folder, ↻.
   Reaching the board is a **separate act** (D3): the popup grows an
   `⧉ Open board` row and a notification fires when the server has finished
   building it. Stopping never hijacks a tab. Stopped from the pill, the HUD
-  asks first (Stop & save?), then says **Saving…** and **Saved · Open board**
-  with the server's link; offline, it keeps the session and offers Retry.
+  asks first (Stop & save?), then says **Saving…** and **Saved · in Recents**
+  while the server builds the board (30–60 s), turning into **Saved · Open
+  board** with the server's link once the worker's board wait (D11) names it;
+  offline, it keeps the session and offers Retry.
   Dismissed, it rests as a Start button on that tab until the page goes.
 
 ## What gets captured

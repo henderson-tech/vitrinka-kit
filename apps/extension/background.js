@@ -33,6 +33,8 @@ const RECONCILE_MS = 10_000;
 // Board-readiness poll cadence + ceiling (D11).
 const READY_POLL_MS = 1_500;
 const READY_GIVE_UP_MS = 10 * 60_000;
+// One readiness read's bound: a hung one is a transient miss, retried next tick.
+const READY_READ_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
 // config + state
@@ -1452,7 +1454,8 @@ async function continueSession(sessionId) {
 // drained with visible progress, and the session is closed. The BOARD is not
 // waited for — the server builds it on a worker and the recorder learns it is
 // ready by polling (D11), so Stop and Show-board are separate acts (D3).
-async function stopSession() {
+// `pill` ({tabId, token}) is the HUD instance that asked, told the link later.
+async function stopSession(pill = null) {
   const rec = await withLock(async () => {
     const current = await getState();
     if (current && !current.stopping) {
@@ -1525,7 +1528,7 @@ async function stopSession() {
   });
   // D3: the board is a separate, deliberate act. Watch for it to be ready and
   // tell the tester when it is — never steal focus with a tab.
-  if (done) await watchForBoard(sessionId, title, done, scope);
+  if (done) await watchForBoard(sessionId, title, done, scope, pill);
   return done;
 }
 
@@ -1575,14 +1578,39 @@ async function togglePause() {
 // window, with a chrome.alarm as the resurrection backstop if the worker is
 // killed mid-wait. The web surfaces get the real SSE stream instead.
 
-// The wait carries the session's scope: the rec is gone by now, and the
-// configured base/workspace may change before the board is built.
-async function watchForBoard(sessionId, title, initial, scope) {
-  const state = { sessionId, title, since: Date.now(), scope };
-  await chrome.storage.local.set({ awaiting: state });
+// One wait per stop whose board is not built yet, oldest first, stored as
+// `awaiting` (absent when none, so its readers stay truthiness checks):
+// {sessionId, title, since, scope, pill}. The scope is the session's own —
+// the rec is gone by now, and the configured base/workspace may change
+// before the board is built; the pill ({tabId, token}, null for a popup
+// Stop) is the HUD instance saying "Saved · in Recents" until the announced
+// link reaches it. A later Stop adds a wait and never replaces an earlier
+// one, whose pill would otherwise wait for good.
+// An 0.9.3 worker stored one object: it reads as a list of one.
+const waitsOf = (awaiting) => (Array.isArray(awaiting) ? awaiting : awaiting ? [awaiting] : []);
+const waitKey = (wait) => scopeKey(wait.scope || {}, String(wait.sessionId));
+const withWaits = serialized();
+
+// The waits' one read-modify-write, so a Stop's add never races a poll's drop.
+function editWaits(edit) {
+  return withWaits(async () => {
+    const next = edit(waitsOf((await chrome.storage.local.get("awaiting")).awaiting));
+    if (next.length) {
+      await chrome.storage.local.set({ awaiting: next });
+    } else {
+      await chrome.storage.local.remove("awaiting");
+      chrome.alarms.clear("vt-board-ready");
+    }
+  });
+}
+const dropWait = (wait) => editWaits((waits) => waits.filter((w) => waitKey(w) !== waitKey(wait)));
+
+async function watchForBoard(sessionId, title, initial, scope, pill) {
+  const wait = { sessionId, title, since: Date.now(), scope, pill };
+  await editWaits((waits) => [...waits.filter((w) => waitKey(w) !== waitKey(wait)), wait]);
   chrome.alarms.create("vt-board-ready", { periodInMinutes: 0.5 });
   if (initial && initial.projection && initial.projection.state === "ready") {
-    return announceBoard(initial);
+    return announceBoard(initial, wait);
   }
   pollForBoard();
 }
@@ -1592,41 +1620,39 @@ function pollForBoard() {
   if (boardPollTimer) return;
   boardPollTimer = setTimeout(async () => {
     boardPollTimer = null;
+    // Side by side: a slow read of one wait never holds another's.
     const { awaiting } = await chrome.storage.local.get("awaiting");
-    if (!awaiting) return;
-    if (Date.now() - awaiting.since > READY_GIVE_UP_MS) {
-      await chrome.storage.local.remove("awaiting");
-      chrome.alarms.clear("vt-board-ready");
-      return;
-    }
-    // Asked only of the server the session lives on, in its own workspace;
-    // after a base switch the wait just runs out (the recents refresh, or
-    // switching back, still finds the board).
-    const scope = awaiting.scope;
-    if (scope && scope.base !== (await getConfig()).base) return void pollForBoard();
-    let ses;
-    try {
-      ses = await api("GET", `/api/v1/sessions/${awaiting.sessionId}`, undefined, undefined, scope ? { base: scope.base, workspace: scope.workspace } : {});
-    } catch {
-      pollForBoard(); // transient — keep waiting
-      return;
-    }
-    const p = ses.projection || {};
-    if (p.state === "ready" && ses.boardSlug) return announceBoard(ses);
-    if (p.state === "failed" || p.state === "empty") {
-      await chrome.storage.local.remove("awaiting");
-      chrome.alarms.clear("vt-board-ready");
-      if (p.state === "failed") notify("Session couldn't be projected", p.error || "see the sessions page");
-      return;
-    }
-    pollForBoard();
+    await Promise.all(waitsOf(awaiting).map(checkBoard));
+    if ((await chrome.storage.local.get("awaiting")).awaiting) pollForBoard();
   }, READY_POLL_MS);
 }
 
-async function announceBoard(ses) {
-  const { awaiting } = await chrome.storage.local.get("awaiting");
-  await chrome.storage.local.remove("awaiting");
-  chrome.alarms.clear("vt-board-ready");
+// One wait's read: announce its board, drop it (given up, failed, empty) or
+// keep waiting (still projecting, or a transient failure).
+async function checkBoard(wait) {
+  if (Date.now() - wait.since > READY_GIVE_UP_MS) return dropWait(wait);
+  // Asked only of the server the session lives on, in its own workspace;
+  // after a base switch the wait just runs out (the recents refresh, or
+  // switching back, still finds the board).
+  const scope = wait.scope;
+  if (scope && scope.base !== (await getConfig()).base) return;
+  let ses;
+  try {
+    ses = await api("GET", `/api/v1/sessions/${wait.sessionId}`, undefined, undefined,
+      { ...(scope ? { base: scope.base, workspace: scope.workspace } : {}), timeoutMs: READY_READ_TIMEOUT_MS });
+  } catch {
+    return; // transient (a timeout included) — keep waiting
+  }
+  const p = ses.projection || {};
+  if (p.state === "ready" && ses.boardSlug) return announceBoard(ses, wait);
+  if (p.state === "failed" || p.state === "empty") {
+    await dropWait(wait);
+    if (p.state === "failed") notify("Session couldn't be projected", p.error || "see the sessions page");
+  }
+}
+
+async function announceBoard(ses, wait) {
+  await dropWait(wait);
   // The board's address is the server's (`boardUrl`, workspace-prefixed);
   // composing `${base}/boards/<slug>` here lost the /w/<ws> segment and
   // 404'd on "Open board". No server-minted address (a pre-2026-09-21
@@ -1636,10 +1662,17 @@ async function announceBoard(ses) {
   // Remembered so the popup can offer "Open board" for the last recording
   // even if the notification was missed.
   await chrome.storage.local.set({ lastBoard: {
-    sessionId: ses.id, title: (awaiting && awaiting.title) || ses.title, url, at: Date.now(),
+    sessionId: ses.id, title: wait.title || ses.title, url, at: Date.now(),
   } });
-  if (url && awaiting && awaiting.scope) await updateRecent(awaiting.scope, String(ses.id), { boardUrl: url, status: "saved" });
-  notify("Board ready", `${(awaiting && awaiting.title) || ses.title} — click to open`, url);
+  if (url && wait.scope) await updateRecent(wait.scope, String(ses.id), { boardUrl: url, status: "saved" });
+  // That write repainted only a live recording's tabs. The stopping pill
+  // turns "in Recents" into Open board when told — that instance alone, by
+  // its token: a Start in its tab since injected a new one, whose Saved face
+  // must never take this session's link (#N repeats across workspaces).
+  if (url && wait.pill) {
+    chrome.tabs.sendMessage(wait.pill.tabId, { type: "vt-board", hud: wait.pill.token, sessionId: String(ses.id), boardUrl: url }).catch(() => {});
+  }
+  notify("Board ready", `${wait.title || ses.title} — click to open`, url);
 }
 
 function notify(title, message, url) {
@@ -2315,7 +2348,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try { return sendResponse({ ok: true, session: await startSession(msg.title) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-stop":
-        try { return sendResponse({ ok: true, done: await stopSession() }); }
+        try { return sendResponse({ ok: true, done: await stopSession(sender.tab && msg.hud ? { tabId: sender.tab.id, token: String(msg.hud) } : null) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-pause":
         return sendResponse({ ok: true, paused: await togglePause() });
@@ -2408,7 +2441,7 @@ globalThis.__vt = { startSession, stopSession, togglePause, continueSession, get
 // browser profile (extension-update.spec.ts).
 globalThis.__vtUpdate = { extUpdateStatus, applyUpdate, seedConfig, hostCall, maybeSelfReload, boot: () => boot() };
 // e2e-only handles for the durable-queue paths (harmless in production).
-globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents };
+globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents, watchForBoard };
 
 // Keyboard commands relay to the active tab's HUD.
 chrome.commands.onCommand.addListener(async (command) => {
