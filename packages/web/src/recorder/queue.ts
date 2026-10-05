@@ -4,9 +4,9 @@
  *
  * - A synchronous KV store (./storage — localStorage by default, memory when
  *   that is unavailable) holds the session record and the event buffer:
- *   reads/writes complete in one JS tick, so no async mutex is needed. Only
- *   flush() needs single-flight guarding (its POST is async) and it removes
- *   exactly the sent seqs on return.
+ *   seq allocation is serialized across tabs by the driver's lock, reading
+ *   the shared watermark inside it. flush() is single-flight within each
+ *   document and removes exactly the sent seqs on return.
  * - rrweb batches ride as CHUNKS the way the extension sends them: each batch
  *   is serialized once, split under the server's chunk cap, uploaded to
  *   `/chunk?seq=N` under a pre-allocated seq, and only then does its `rrweb`
@@ -226,6 +226,20 @@ function renewStopping(sessionId: string): void {
 
 export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
 
+const beforeStopHooks = new Set<() => void>();
+
+export function onBeforeStop(fn: () => void): () => void {
+  beforeStopHooks.add(fn);
+  return () => beforeStopHooks.delete(fn);
+}
+
+export function runBeforeStopHooks(): void {
+  for (const fn of beforeStopHooks) {
+    try { fn(); }
+    catch (error) { console.warn('vitrinka: before-stop hook failed', error); }
+  }
+}
+
 /**
  * Another document of this origin (a second tab) wrote the session record.
  * The store is shared, this cache is not — a tab that joined a recording on
@@ -246,6 +260,9 @@ export function adoptStoredState(raw: string | null): StoredChange {
     }
   }
   const cur = getState();
+  // Allocations also read storage before its notification arrives. Ship the
+  // already-captured DOM tail while the local cache still accepts it.
+  if (next?.stopping && next.sessionId === cur?.sessionId && !cur.paused && stoppingHere?.sessionId !== next.sessionId) runBeforeStopHooks();
   if (!next) {
     if (!cur) return 'unchanged';
     recCache = null;
@@ -296,6 +313,9 @@ function getBuffer(): RecorderEvent[] {
 
 /** Write the in-memory buffer (and the pending chunks) to storage NOW. */
 export function persistNow(): void {
+  for (const item of pendingAllocations) {
+    if (!item.persisted) item.persisted = safeSet(item.key, JSON.stringify({ draft: item.draft, seq: item.seq }));
+  }
   persistBuffer();
   persistChunks();
 }
@@ -360,7 +380,9 @@ function setChunks(chunks: PendingChunk[]): void {
 }
 
 export function queuedCount(): number {
-  return getBuffer().length + getChunks().length;
+  recoverAllocations();
+  pruneAcknowledgedCaptures();
+  return getBuffer().length + getChunks().length + pendingAllocations.size;
 }
 
 // -- health + server reconciliation (extension D4/D5/D9) ---------------------
@@ -495,14 +517,191 @@ export function disarmReconcile(): void {
   reconcileTimer = null;
 }
 
-/** Allocate `count` consecutive seqs without emitting events; null when not capturing. */
-export function allocSeq(count = 1): { seq: number; sessionId: string } | null {
+/** Allocate inside the storage driver's lock; lifecycle writes cannot rewind its watermark. */
+function allocSeq(count: number): { seq: number; sessionId: string } | null {
   const rec = getState();
-  if (!rec || rec.paused || rec.dead || count < 1) return null;
-  const first = rec.seq + 1;
-  rec.seq += count;
+  if (!rec || rec.dead || count < 1) return null;
+  const watermark = readJson<{ sessionId: string; seq: number } | null>('seq', null);
+  const first = Math.max(rec.seq, watermark?.sessionId === rec.sessionId ? watermark.seq : 0) + 1;
+  // This write must succeed before a seq can be used in another document.
+  // On failure the capture stays pending and retries rather than colliding.
+  kv().set('seq', JSON.stringify({ sessionId: rec.sessionId, seq: first + count - 1 }));
+  rec.seq = first + count - 1;
   setState(rec);
   return { seq: first, sessionId: rec.sessionId };
+}
+
+/** Document identity is not sessionStorage: duplicated tabs copy that store. */
+export const RECORDER_DOCUMENT_KEY = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
+const ALLOCATION_PREFIX = 'allocation.';
+let captureNo = 0;
+type CaptureDraft = { sessionId: string; ts: string; tabId: string; tabHost: string } & (
+  | { kind: 'event'; event: { kind: string; payload?: Record<string, unknown> } }
+  | { kind: 'chunk'; part: { count: number; body: string } }
+);
+interface StoredAllocation { draft: CaptureDraft; seq?: number }
+interface PendingAllocation extends StoredAllocation { key: string; persisted: boolean; bytes: number }
+const pendingAllocations = new Set<PendingAllocation>();
+const MAX_ALLOCATION_BYTES = 16 * 1024 * 1024;
+let allocationBytes = 0;
+let allocationChunks = 0;
+const allocatedCaptures = new Map<string, { sessionId: string; seq: number; persisted: boolean }>();
+let allocationsRecovered = false;
+let allocationBusy: Promise<void> | null = null;
+
+function removeAllocation(item: PendingAllocation): void {
+  if (!pendingAllocations.delete(item)) return;
+  allocationBytes -= item.bytes;
+  if (item.draft.kind === 'chunk') allocationChunks--;
+}
+
+function addAllocation(item: PendingAllocation): void {
+  pendingAllocations.add(item);
+  allocationBytes += item.bytes;
+  if (item.draft.kind === 'chunk') allocationChunks++;
+  while (pendingAllocations.size > MAX_BUFFER || allocationBytes > MAX_ALLOCATION_BYTES || allocationChunks > MAX_PENDING) {
+    const oldest = pendingAllocations.values().next().value!;
+    removeAllocation(oldest);
+    kv().remove(oldest.key);
+    const error = new Error('vitrinka: pending allocation budget full — oldest capture dropped');
+    noteFailure(error);
+    console.warn(error.message);
+  }
+}
+
+/** Journals survive pagehide and are safe for another document to help drain. */
+function recoverAllocations(refresh = false): void {
+  if (allocationsRecovered && !refresh) return;
+  allocationsRecovered = true;
+  const storage = kv();
+  if (!storage.withLock) return;
+  const queuedKeys = new Set([...pendingAllocations].map((item) => item.key));
+  for (const key of storage.keys?.() ?? []) {
+    if (!key.startsWith(ALLOCATION_PREFIX) || queuedKeys.has(key) || allocatedCaptures.has(key)) continue;
+    const item = readJson<StoredAllocation | null>(key, null);
+    if (item && item.draft && item.draft.sessionId === getState()?.sessionId) addAllocation({ ...item, key, persisted: true, bytes: utf8Bytes(JSON.stringify(item)) });
+  }
+}
+
+function appendCapture(draft: CaptureDraft, seq: number): void {
+  const { ts, tabId, tabHost, sessionId } = draft;
+  if (draft.kind === 'event') {
+    const buffer = getBuffer();
+    if (!buffer.some((event) => event.seq === seq)) buffer.push({ seq, ts, tabId, tabHost, ...draft.event });
+    if (buffer.length > MAX_BUFFER) {
+      const dropped = buffer.splice(0, buffer.length - MAX_BUFFER);
+      clearStoredCaptures(sessionId, new Set(dropped.map((event) => event.seq)));
+      console.warn(`vitrinka: retry buffer full — dropped ${dropped.length} oldest events`);
+    }
+  } else {
+    const chunks = getChunks();
+    if (!chunks.some((chunk) => chunk.seq === seq) && !getBuffer().some((event) => event.seq === seq)) {
+      chunks.push({ seq, ts, tabId, tabHost, sessionId, ...draft.part });
+      chunkBytes += draft.part.body.length;
+    }
+    while (chunks.length > MAX_PENDING) {
+      const dropped = chunks.shift()!;
+      chunkBytes -= dropped.body.length;
+      clearStoredCaptures(sessionId, new Set([dropped.seq]));
+      console.warn(`vitrinka: pending chunk queue full — dropped rrweb chunk seq ${dropped.seq}`);
+    }
+  }
+  schedulePersist();
+  scheduleFlush();
+}
+
+function clearStoredCaptures(sessionId: string, seqs: ReadonlySet<number>): void {
+  for (const [key, item] of allocatedCaptures) {
+    if (item.sessionId === sessionId && seqs.has(item.seq)) {
+      kv().remove(key);
+      allocatedCaptures.delete(key);
+      const documentKey = key.slice(ALLOCATION_PREFIX.length, key.lastIndexOf('.'));
+      const peerKey = `tab.${documentKey}`;
+      const peer = readJson<{ departed?: boolean; recoverable?: boolean } | null>(peerKey, null);
+      if (peer?.departed && peer.recoverable && !kv().keys?.().some((k) => k.startsWith(`${ALLOCATION_PREFIX}${documentKey}.`))) kv().remove(peerKey);
+    }
+  }
+}
+
+/** Helpers remove a journal only after ack; the original tab may still cache its retry. */
+function pruneAcknowledgedCaptures(): void {
+  const delivered = new Set<number>();
+  for (const [key, item] of allocatedCaptures) {
+    if (item.persisted && !kv().getString(key)) {
+      delivered.add(item.seq);
+      allocatedCaptures.delete(key);
+    }
+  }
+  if (!delivered.size) return;
+  setBuffer(getBuffer().filter((event) => !delivered.has(event.seq)));
+  setChunks(getChunks().filter((chunk) => !delivered.has(chunk.seq)));
+}
+
+/** A departing document can be acknowledged by a helper only with a full journal. */
+export function tailIsDurable(): boolean {
+  if (!kv().keys) return false;
+  const durableSeqs = new Set([...allocatedCaptures].filter(([key]) => kv().getString(key)).map(([, item]) => item.seq));
+  for (const item of pendingAllocations) {
+    if (item.persisted && item.seq !== undefined && kv().getString(item.key)) durableSeqs.add(item.seq);
+  }
+  return [...pendingAllocations].every((item) => item.persisted && !!kv().getString(item.key))
+    && getBuffer().every((event) => durableSeqs.has(event.seq))
+    && getChunks().every((chunk) => durableSeqs.has(chunk.seq));
+}
+
+/** One worker per document: evicted drafts cannot stay held by queued lock callbacks. */
+function allocatePending(): Promise<void> {
+  if (allocationBusy) return allocationBusy;
+  const storage = kv();
+  allocationBusy = trackCapture(Promise.resolve().then(async () => {
+    for (const item of pendingAllocations) {
+      await storage.withLock!('seq', () => {
+        if (!pendingAllocations.has(item)) return;
+        if (item.persisted) {
+          const saved = readJson<StoredAllocation | null>(item.key, null);
+          // Another tab already delivered this journal; never allocate it twice.
+          if (!saved) { removeAllocation(item); return; }
+          item.seq = saved.seq;
+        }
+        adoptStoredState(storage.getString(REC_KEY) ?? null);
+        if (getState()?.sessionId !== item.draft.sessionId) { removeAllocation(item); return; }
+        const seq = item.seq ?? allocSeq(1)?.seq;
+        if (seq === undefined) return;
+        item.seq = seq;
+        // Keep the payload AND its identity until the server acknowledges it.
+        // A recovering document reuses this seq even when the old tab is alive.
+        if (item.persisted) storage.set(item.key, JSON.stringify({ draft: item.draft, seq }));
+        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seq, persisted: item.persisted });
+        appendCapture(item.draft, seq);
+        removeAllocation(item);
+      });
+    }
+  }).catch((error: unknown) => {
+    noteFailure(error);
+    console.warn('vitrinka: seq allocation failed — capture kept for retry', error);
+    scheduleFlush();
+    notify();
+    throw error;
+  })).finally(() => { allocationBusy = null; });
+  return allocationBusy;
+}
+
+/** Accept now, persist now, stamp under the shared lock later. */
+function queueCapture(draft: CaptureDraft): boolean {
+  const accepted = getState();
+  if (!accepted || accepted.paused || accepted.dead) return false;
+  recoverAllocations();
+  if (kv().withLock) {
+    const key = `${ALLOCATION_PREFIX}${RECORDER_DOCUMENT_KEY}.${++captureNo}`;
+    const raw = JSON.stringify({ draft });
+    const item: PendingAllocation = { key, draft, persisted: safeSet(key, raw), bytes: utf8Bytes(raw) };
+    addAllocation(item);
+    void allocatePending();
+  } else {
+    const allocation = allocSeq(1);
+    if (allocation) appendCapture(draft, allocation.seq);
+  }
+  return true;
 }
 
 /**
@@ -574,19 +773,10 @@ export function pushEvent(
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
   if (rec.paused || rec.dead) return null;
-  rec.seq++;
   const ts = new Date().toISOString();
-  const buffer = getBuffer();
-  buffer.push({ seq: rec.seq, ts, tabId: route.tabId, tabHost: route.tabHost, kind, payload });
-  if (buffer.length > MAX_BUFFER) {
-    const dropped = buffer.length - MAX_BUFFER;
-    buffer.splice(0, dropped);
-    console.warn(`vitrinka: retry buffer full — dropped ${dropped} oldest events`);
-  }
+  const { tabId, tabHost } = route;
+  queueCapture({ sessionId: rec.sessionId, ts, tabId, tabHost, kind: 'event', event: { kind, payload } });
   noteActivity();
-  schedulePersist();
-  setState(rec);
-  scheduleFlush();
   return ts;
 }
 
@@ -679,30 +869,12 @@ export function pushRRWebBatch(
       route,
     );
   }
-  const alloc = parts.length ? allocSeq(parts.length) : null;
-  if (!alloc) return 0;
-  const chunks = getChunks();
   const ts = new Date().toISOString();
-  parts.forEach((p, i) => {
-    chunks.push({
-      seq: alloc.seq + i,
-      ts,
-      tabId: route.tabId,
-      tabHost: route.tabHost,
-      sessionId: alloc.sessionId,
-      count: p.count,
-      body: p.body,
-    });
-    chunkBytes += p.body.length;
-  });
-  while (chunks.length > MAX_PENDING) {
-    const drop = chunks.shift();
-    if (drop) chunkBytes -= drop.body.length;
-    console.warn(`vitrinka: pending chunk queue full — dropped rrweb chunk seq ${drop?.seq}`);
+  const { tabId, tabHost } = route;
+  for (const part of parts) {
+    if (!queueCapture({ sessionId: rec.sessionId, ts, tabId, tabHost, kind: 'chunk', part })) return 0;
   }
   noteActivity();
-  schedulePersist();
-  scheduleFlush();
   return parts.length;
 }
 
@@ -747,6 +919,7 @@ async function drainPending(limit = 5): Promise<boolean> {
       if (movedOn(rec)) return getChunks().length === 0;
       if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
         console.warn(`vitrinka: rrweb chunk seq ${item.seq} rejected permanently (${e.status}) — dropped`);
+        clearStoredCaptures(item.sessionId, new Set([item.seq]));
         gone.add(item.seq);
         continue;
       }
@@ -784,6 +957,9 @@ export async function flush(opts: { keepalive?: boolean } = {}): Promise<boolean
 
 async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   if (getState()?.dead) return false;
+  recoverAllocations(true);
+  if (pendingAllocations.size) await allocatePending();
+  if (pendingAllocations.size) return false;
   const pendingClear = await drainPending();
   if (!pendingClear) scheduleFlush();
   const rec = getState();
@@ -815,6 +991,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
     batchBytes += b;
   }
   if (oversized.size) {
+    clearStoredCaptures(rec.sessionId, oversized);
     setBuffer(getBuffer().filter((ev) => !oversized.has(ev.seq)));
     if (!batch.length) {
       scheduleFlush();
@@ -841,10 +1018,11 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   // session's now, and its seqs restart — never filter it by these.
   if (movedOn(rec)) return true;
   noteSync();
-  serverMaxSeq = Math.max(serverMaxSeq, batch[batch.length - 1]?.seq ?? serverMaxSeq);
+  serverMaxSeq = Math.max(serverMaxSeq, ...batch.map((event) => event.seq));
   notify();
   // Remove EXACTLY the sent seqs — events pushed during the in-flight POST survive.
   const sent = new Set(batch.map((e) => e.seq));
+  clearStoredCaptures(rec.sessionId, sent);
   const rest = getBuffer().filter((e) => !sent.has(e.seq));
   setBuffer(rest);
   if (rest.length) scheduleFlush();
@@ -855,7 +1033,9 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
 export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
   const t0 = Date.now();
   while (Date.now() - t0 < deadlineMs) {
-    if (getBuffer().length === 0 && getChunks().length === 0) return true;
+    // A peer may journal its departure after an already-running flush scanned storage.
+    recoverAllocations(true);
+    if (queuedCount() === 0) return true;
     const sent = await flush();
     if (getState()?.dead) return false;
     if (!sent) await new Promise<void>((res) => setTimeout(res, 1000));
@@ -866,6 +1046,11 @@ export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
 
 /** Reset buffers for a fresh session. */
 export function resetQueues(): void {
+  for (const key of allocatedCaptures.keys()) kv().remove(key);
+  for (const item of pendingAllocations) kv().remove(item.key);
+  allocatedCaptures.clear();
+  pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
   setBuffer([]);
   setChunks([]);
 }
@@ -882,6 +1067,9 @@ function dropLocalTail(): void {
   bufferCache = [];
   chunkCache = [];
   chunkBytes = 0;
+  pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
+  allocatedCaptures.clear();
   tailDropped = true;
 }
 
@@ -892,6 +1080,8 @@ export function __resetForTests(): void {
   kv().remove('rec');
   kv().remove('buffer');
   kv().remove('chunks');
+  kv().remove('seq');
+  for (const key of kv().keys?.() ?? []) if (key.startsWith(ALLOCATION_PREFIX)) kv().remove(key);
   resetIdle();
 }
 
@@ -907,6 +1097,11 @@ export function __chunksForTests(): { seq: number; count: number; sessionId: str
 
 /** Test-only: drop the in-memory caches while LEAVING storage intact (a reload). */
 export function __dropCachesForTests(): void {
+  pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
+  allocatedCaptures.clear();
+  allocationsRecovered = false;
+  allocationBusy = null;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;

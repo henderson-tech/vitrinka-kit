@@ -14,8 +14,11 @@ apps:
       - .env
       - .env.*
       - "!.env.example"
+      - test-results
+      - playwright-report
+      - .vitrinka
     deps:
-      key: [bun.lock]
+      key: [bun.lock, package.json, "packages/*/package.json"]
       cmd: "bun install --frozen-lockfile"
 
 scripts:
@@ -23,7 +26,11 @@ scripts:
     cmd: "bun run build && bun run typecheck && bun run test"
     up: false
     profile: small
+  e2e:
+    cmd: bun run test:e2e:web
+    up: false
 
 resources:
-  memory: 1G
+  workspace: standard
+  memory: 2G
   test: small

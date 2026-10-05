@@ -7,13 +7,26 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, getState, markStopping, STOPPING_TTL_MS } from '../queue';
-import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
+import { __dropCachesForTests, __resetForTests, adoptStoredState, flush, getState, markStopping, persistNow, pushRRWebBatch, STOPPING_TTL_MS } from '../queue';
+import { addAnnotation, addNote, followOtherTabs, onBeforeStop, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
+import { registerRecorderTab, waitForRecorderPeers } from '../tabs';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
+
+function tabEvents() {
+  const events = new EventTarget();
+  const add = globalThis.addEventListener;
+  const remove = globalThis.removeEventListener;
+  Object.defineProperty(globalThis, 'addEventListener', { configurable: true, value: events.addEventListener.bind(events) });
+  Object.defineProperty(globalThis, 'removeEventListener', { configurable: true, value: events.removeEventListener.bind(events) });
+  return { events, restore: () => {
+    Object.defineProperty(globalThis, 'addEventListener', { configurable: true, value: add });
+    Object.defineProperty(globalThis, 'removeEventListener', { configurable: true, value: remove });
+  } };
+}
 
 beforeEach(() => {
   stub = installStub();
@@ -64,6 +77,34 @@ describe('session', () => {
     });
   });
 
+  it('Stop waits for captures awaiting the cross-tab seq lock before draining and closing', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...memoryRecorderStorage(),
+      withLock: async (_name, run) => { await gate; run(); },
+    });
+    __resetForTests();
+    await startSession();
+    addNote('captured before Stop');
+    let hooks = 0;
+    const off = onBeforeStop(() => { hooks++; });
+    const stopping = stopSession();
+    await Bun.sleep(1);
+    expect(stub.calls.some((call) => call.method === 'PATCH')).toBe(false);
+    release();
+    await stopping;
+    off();
+    expect(hooks).toBe(1);
+    const events = (stub.calls.find((call) => call.path.endsWith('/events'))!.body as {
+      events: { seq: number; payload: { text?: string } }[];
+    }).events;
+    expect(events.map((event) => event.seq)).toEqual([1, 2]);
+    expect(events[1]!.payload.text).toBe('captured before Stop');
+    expect(getState()).toBeNull();
+  });
+
   it('names the configured project on create, and omits it when unset', async () => {
     await startSession();
     const bare = stub.calls.find((c) => c.path === '/api/v1/sessions' && c.method === 'POST')!;
@@ -76,6 +117,22 @@ describe('session', () => {
     expect(named.body).toMatchObject({ host: 'app.example.test', project: 'powerflow' });
   });
 
+  it('ships the rrweb tail when an allocator observes Stop before its storage notification', async () => {
+    const storage = memoryRecorderStorage();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async (_key, run) => { await gate; run(); } });
+    __resetForTests();
+    await startSession();
+    const off = onBeforeStop(() => pushRRWebBatch([{ type: 3, data: { text: 'tail before Stop' } }], { tabId: 'tab-1', tabHost: 'app.example.test' }));
+    storage.set('rec', JSON.stringify({ ...getState(), paused: true, stopping: new Date().toISOString() }));
+    release();
+    await flush();
+    off();
+    expect(stub.calls.some((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes('tail before Stop'))).toBe(true);
+  });
+
   it('pause PATCHes the status and freezes capture', async () => {
     await startSession();
     expect(await togglePause()).toBe(true);
@@ -83,6 +140,144 @@ describe('session', () => {
     addNote('dropped');
     expect(await togglePause()).toBe(false);
     expect(stub.calls.at(-1)?.body).toEqual({ status: 'recording' });
+  });
+
+  it('refuses Stop while a sibling has an unsaved tail and keeps this tab\'s captures', async () => {
+    const shared = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...shared, watch: () => () => {} });
+    __resetForTests();
+    await startSession();
+    addNote('local tail');
+    shared.set('tab.sibling', JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true }));
+    await expect(stopSession()).rejects.toThrow('another tab has undelivered captures');
+    expect(getState()).toMatchObject({ sessionId: 'sess-1', paused: true });
+    expect(stub.calls.some((call) => call.method === 'PATCH' && (call.body as { status?: string })?.status === 'done')).toBe(false);
+    expect(shared.getString('buffer')).toContain('local tail');
+  });
+
+  it('leaving a page with captures pending keeps an unsaved participant instead of acknowledging delivery', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {}, withLock: async () => { await new Promise<void>(() => {}); } });
+    __resetForTests();
+    await startSession();
+    const tab = registerRecorderTab()!;
+    try {
+      addNote('tail on leaving');
+      const key = storage.keys!().find((key) => key.startsWith('tab.'))!;
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(JSON.parse(storage.getString(key) ?? 'null')).toMatchObject({ sessionId: 'sess-1', failed: true, departed: true });
+    } finally { tab.dispose(); bus.restore(); }
+  });
+
+  it('keeps a reloaded assigned journal recoverable when departing under a held lock', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    let held = false;
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {}, withLock: async (_key, run) => {
+      if (held) await new Promise<void>(() => {});
+      run();
+    } });
+    __resetForTests();
+    await startSession();
+    addNote('assigned before reload');
+    stub.script.events.push({ ok: false, status: 503 });
+    expect(await flush()).toBe(false);
+    persistNow();
+    __dropCachesForTests();
+    held = true;
+    const tab = registerRecorderTab()!;
+    try {
+      const key = storage.keys!().find((key) => key.startsWith('tab.'))!;
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(JSON.parse(storage.getString(key) ?? 'null')).toMatchObject({ departed: true, recoverable: true });
+      held = false;
+      expect(await flush()).toBe(true);
+      expect(storage.getString(key)).toBeNull();
+    } finally { tab.dispose(); bus.restore(); }
+  });
+
+  it('recovers a durable peer that departs after the Stop wait has started', async () => {
+    const storage = memoryRecorderStorage();
+    const watchers = new Map<string, (raw: string | null) => void>();
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_key, run) => { run(); },
+      remove: (key) => { storage.remove(key); watchers.get(key)?.(null); },
+      watch: (key, check) => { watchers.set(key, check); return () => void watchers.delete(key); },
+    });
+    __resetForTests();
+    await startSession();
+    await flush();
+    storage.set('tab.sibling', JSON.stringify({ sessionId: 'sess-1', at: Date.now() }));
+    const waiting = waitForRecorderPeers(['tab.sibling'], 'sess-1', 1000);
+    expect(watchers.has('tab.sibling')).toBe(true);
+    storage.set('allocation.sibling.1', JSON.stringify({ draft: {
+      sessionId: 'sess-1', ts: new Date().toISOString(), tabId: 'sibling', tabHost: 'app.example.test',
+      kind: 'event', event: { kind: 'note', payload: { text: 'departed during Stop' } },
+    } }));
+    const departed = JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true, departed: true, recoverable: true });
+    storage.set('tab.sibling', departed);
+    watchers.get('tab.sibling')!(departed);
+    expect(await waiting).toBe(true);
+    expect(storage.getString('tab.sibling')).toBeNull();
+    expect(stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('departed during Stop'))).toBe(true);
+  });
+
+  it('discovers a departed peer journal written after an in-flight flush scanned storage', async () => {
+    const storage = memoryRecorderStorage();
+    const watchers = new Map<string, (raw: string | null) => void>();
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_key, run) => { run(); },
+      remove: (key) => { storage.remove(key); watchers.get(key)?.(null); },
+      watch: (key, check) => { watchers.set(key, check); return () => void watchers.delete(key); },
+    });
+    __resetForTests();
+    await startSession();
+    await flush();
+    addNote('already flushing');
+    let release = () => {};
+    stub.gate = new Promise<void>((resolve) => { release = resolve; });
+    const inFlight = flush();
+    while (!stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('already flushing'))) await Bun.sleep(1);
+    storage.set('tab.late-peer', JSON.stringify({ sessionId: 'sess-1', at: Date.now() }));
+    const waiting = waitForRecorderPeers(['tab.late-peer'], 'sess-1', 3000);
+    storage.set('allocation.late-peer.1', JSON.stringify({ draft: {
+      sessionId: 'sess-1', ts: new Date().toISOString(), tabId: 'late-peer', tabHost: 'app.example.test',
+      kind: 'event', event: { kind: 'note', payload: { text: 'written after scan' } },
+    } }));
+    const departed = JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true, departed: true, recoverable: true });
+    storage.set('tab.late-peer', departed);
+    watchers.get('tab.late-peer')!(departed);
+    stub.gate = null;
+    release();
+    await inFlight;
+    expect(await waiting).toBe(true);
+    expect(storage.getString('tab.late-peer')).toBeNull();
+    expect(stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('written after scan'))).toBe(true);
+  });
+
+  it('registers the restored document again after a back-forward cache pageshow', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {} });
+    __resetForTests();
+    await startSession();
+    await flush();
+    const tab = registerRecorderTab()!;
+    try {
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(storage.keys!().filter((key) => key.startsWith('tab.'))).toHaveLength(0);
+      bus.events.dispatchEvent(new Event('pageshow'));
+      expect(storage.keys!().filter((key) => key.startsWith('tab.'))).toHaveLength(1);
+    } finally { tab.dispose(); bus.restore(); }
   });
 
   it('follows another tab through the shared store: joins its recording, applies the policy written after it, ends with its Stop', () => {

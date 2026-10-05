@@ -282,6 +282,24 @@ a recording joins it, and a Start, pause or Stop in one tab reaches the
 others through the driver's optional `watch(key, onChange)` (the
 `localStorage` driver implements it with the `storage` event).
 
+Event and rrweb-chunk sequence numbers are allocated under a cross-tab
+Web Lock, or an IndexedDB transaction on hosts without Web Locks. Stop
+waits for these allocations before draining. A custom driver shared across
+documents must implement `withLock(name, run)` and run the synchronous
+callback exclusively across them; a document-local driver needs no lock.
+Shared drivers also implement `keys()` to coordinate Stop: each mounted tab
+ships its last rrweb batch and drains its captures before acknowledging.
+An undelivered sibling tail refuses Stop and stays queued for retry.
+Accepted captures are journaled before waiting for a lock, preserving their
+timestamps and allocated seq through a reload. Other tabs can drain the same
+journal safely; it is deleted after the server acknowledges the event.
+Leaving a tab is not a delivery acknowledgement. A fully journaled departed
+tail can be recovered by the remaining tab; a memory-only tail keeps Stop
+blocked. Returning from the browser's back-forward cache re-registers the tab.
+Pending allocations have a 16 MiB byte budget, 20,000-event count limit and
+200-chunk limit; overflow drops the oldest capture with a warning and health
+failure, matching the queue's existing bounded retry behavior.
+
 ## Development
 
 ```bash

@@ -67,6 +67,24 @@ describe('queue', () => {
     expect(health().synced).toBe(true);
   });
 
+  it('recovers a note and rrweb batch still waiting for a seq lock at pagehide', async () => {
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async () => { await new Promise<void>(() => {}); } });
+    setState(liveSession());
+    pushEvent('note', { text: 'before reload' }, ROUTE);
+    pushRRWebBatch([{ type: 3, data: { text: 'final DOM tail' } }], ROUTE);
+    persistNow();
+    __dropCachesForTests();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async (_key, run) => { run(); } });
+    expect(await flush()).toBe(true);
+    const events = (eventsPosts()[0]?.body as { events: { kind: string; payload?: { text?: string } }[] } | undefined)?.events ?? [];
+    expect(events.some((event) => event.payload?.text === 'before reload')).toBe(true);
+    expect(stub.calls.some((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes('final DOM tail'))).toBe(true);
+  });
+
   it('marks the session dead on a permanent verdict and stops flushing', async () => {
     setState(liveSession());
     pushEvent('click', {}, ROUTE);
@@ -78,6 +96,16 @@ describe('queue', () => {
     expect(eventsPosts()).toHaveLength(1);
     // Capture stops too.
     expect(pushEvent('click', {}, ROUTE)).toBeNull();
+  });
+
+  it('bounds payloads awaiting a stuck allocator by bytes', async () => {
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    __resetStorageForTests();
+    configureRecorderStorage({ ...memoryRecorderStorage(), withLock: async () => { await new Promise<void>(() => {}); } });
+    setState(liveSession());
+    for (let i = 0; i < 64; i++) pushEvent('note', { text: 'x'.repeat(512 * 1024) }, ROUTE);
+    expect(health().queued).toBeGreaterThan(0);
+    expect(health().queued).toBeLessThanOrEqual(32);
   });
 
   it('drops events while paused and when no session is live', () => {
@@ -107,6 +135,31 @@ describe('queue', () => {
       .events.find((e) => e.seq === 2);
     expect(row).toMatchObject({ kind: 'rrweb', payload: { count: 2 }, blobKey: 'blob-2' });
     expect(__chunksForTests()).toHaveLength(0);
+    expect(health().synced).toBe(true);
+  });
+
+  it('keeps a capture for retry when the locked seq watermark write fails', async () => {
+    const { __resetForTests } = await import('../queue');
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    const storage = memoryRecorderStorage();
+    let fail = true;
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_name, run) => { run(); },
+      set: (key, value) => {
+        if (key === 'seq' && fail) { fail = false; throw new Error('write refused'); }
+        storage.set(key, value);
+      },
+    });
+    __resetForTests();
+    setState(liveSession());
+    pushEvent('note', { text: 'kept' }, ROUTE);
+    expect(await flush()).toBe(false);
+    expect(health().queued).toBe(1);
+    expect(await flush()).toBe(true);
+    expect(batchSeqs(eventsPosts()[0]!)).toEqual([1]);
+    expect(health().synced).toBe(true);
   });
 
   it('retries a chunk on a transient failure and drops it on a permanent one', async () => {
