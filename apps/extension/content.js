@@ -62,6 +62,18 @@
     return { x: Math.round(r.x * s), y: Math.round(r.y * s), w: Math.round(r.width * s), h: Math.round(r.height * s) };
   };
 
+  // clickText never reads a field's value (rrweb masks every input, so the
+  // click lane must too) and says nothing for an element at, inside or
+  // wrapping .rr-mask/.rr-block — the text the DOM lane hides (t/4769) —
+  // nor any text at all under a maskAllText workspace policy.
+  let maskClickText = false;
+  const clickText = (el) => {
+    if (maskClickText) return "";
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return "";
+    if (el.closest(".rr-mask,.rr-block") || el.querySelector(".rr-mask,.rr-block")) return "";
+    return (el.innerText || "").trim().slice(0, 80);
+  };
+
   const onClick = (e) => {
     if (annotating) return; // annotate mode owns the click
     const el = e.target instanceof Element ? (e.target.closest("a,button,[role=button],input,select,textarea,label") || e.target) : null;
@@ -70,7 +82,7 @@
       type: "vt-click", route: location.pathname,
       payload: {
         selector: shortSelector(el),
-        text: (el.innerText || el.value || "").trim().slice(0, 80),
+        text: clickText(el),
         rect: imageRect(el),
       },
     });
@@ -111,6 +123,7 @@
       Promise.all([send({ type: "vt-policy" }), hudMounted]).then(([r]) => {
         try {
           const pol = (r && r.policy) || null;
+          maskClickText = !!(pol && pol.maskAllText && !pol.fullFidelity);
           // blockSelector: the recorder's own surfaces never enter the
           // replay — rrweb leaves an empty placeholder for the 0×0 hosts.
           const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: false, collectFonts: true, blockSelector: RECORDER_SEL };
