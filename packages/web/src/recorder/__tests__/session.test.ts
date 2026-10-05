@@ -168,6 +168,23 @@ describe('session', () => {
     } finally { tab.dispose(); bus.restore(); }
   });
 
+  it('registers the restored document again after a back-forward cache pageshow', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {} });
+    __resetForTests();
+    await startSession();
+    await flush();
+    const tab = registerRecorderTab()!;
+    try {
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(storage.keys!().filter((key) => key.startsWith('tab.'))).toHaveLength(0);
+      bus.events.dispatchEvent(new Event('pageshow'));
+      expect(storage.keys!().filter((key) => key.startsWith('tab.'))).toHaveLength(1);
+    } finally { tab.dispose(); bus.restore(); }
+  });
+
   it('follows another tab through the shared store: joins its recording, applies the policy written after it, ends with its Stop', () => {
     const shared = memoryRecorderStorage();
     const watchers = new Map<string, (value: string | null) => void>();

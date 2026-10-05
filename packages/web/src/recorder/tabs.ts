@@ -1,7 +1,7 @@
 /** Each mounted tab saves its own tail before any tab closes the shared session. */
-import { capturesSettled, drainBuffer, flush, getState, persistNow, queuedCount, RECORDER_DOCUMENT_KEY, runBeforeStopHooks, STOPPING_RENEW_MS, STOPPING_TTL_MS, tailIsDurable } from './queue';
+import { adoptStoredState, capturesSettled, drainBuffer, flush, getState, persistNow, queuedCount, RECORDER_DOCUMENT_KEY, runBeforeStopHooks, STOPPING_RENEW_MS, STOPPING_TTL_MS, tailIsDurable } from './queue';
 import { getRecorderStorage } from './storage';
-import { subscribe } from './state';
+import { notify, subscribe } from './state';
 
 const PREFIX = 'tab.';
 // Document identity, independent of sessionStorage (duplicating a tab copies it).
@@ -40,7 +40,7 @@ export function registerRecorderTab() {
     if (!rec) storage.remove(ownKey);
     else if (!rec.stopping) storage.set(ownKey, JSON.stringify({ sessionId: rec.sessionId, at: Date.now() }));
   };
-  const heartbeat = setInterval(sync, STOPPING_RENEW_MS);
+  let heartbeat = setInterval(sync, STOPPING_RENEW_MS);
   const offState = subscribe(sync);
   sync();
   const onPageHide = () => {
@@ -52,13 +52,25 @@ export function registerRecorderTab() {
     if (rec && queuedCount()) storage.set(ownKey, JSON.stringify({ sessionId: rec.sessionId, at: Date.now(), failed: true, departed: true, recoverable: tailIsDurable() }));
     else storage.remove(ownKey);
   };
+  const onPageShow = () => {
+    if (!hidden) return;
+    hidden = false;
+    adoptStoredState(storage.getString('rec') ?? null);
+    heartbeat = setInterval(sync, STOPPING_RENEW_MS);
+    sync();
+    notify();
+    // Storage events may not have reached this document while suspended.
+    if (getState()?.stopping) void participant.settle().catch((error: unknown) => console.warn('vitrinka: restored tab remains unsaved', error));
+  };
   const dispose = () => {
     onPageHide();
     offState();
     globalThis.removeEventListener?.('pagehide', onPageHide);
+    globalThis.removeEventListener?.('pageshow', onPageShow);
   };
   globalThis.addEventListener?.('pagehide', onPageHide);
-  return {
+  globalThis.addEventListener?.('pageshow', onPageShow);
+  const participant = {
     sync,
     dispose,
     async settle() {
@@ -80,6 +92,7 @@ export function registerRecorderTab() {
       }
     },
   };
+  return participant;
 }
 
 /** Watch before reading, so an acknowledgement arriving during setup is never missed. */
