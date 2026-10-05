@@ -534,6 +534,12 @@ function decodeJsonKey(key: string): string {
 }
 
 function scrubTruncatedJson(rules: RuleSet, body: string): string {
+  // Scalar matching cannot remove an object/array's whole value without a
+  // parser. On the fallback path, omit the body rather than retain any part
+  // of a sensitive compound value (including escaped or policy-added keys).
+  for (const match of body.matchAll(/"((?:[^"\\\r\n]|\\.)*)"\s*:\s*[{\[]/g)) {
+    if (sensitiveBodyKey(rules, decodeJsonKey(match[1] as string))) return '';
+  }
   // The bare-value alternative stops at JSON STRUCTURE (`{`, `[`, `"` as well
   // as `,}]`): a benign key must consume only its scalar value, never a
   // nested object — `"nested":{"access_token":…}` would otherwise ride inside

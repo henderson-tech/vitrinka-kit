@@ -58,6 +58,23 @@ describe('token matcher precision (beyond the server defaults)', () => {
 });
 
 describe('oversized JSON never bypasses via the parse cap', () => {
+  test('fallback never retains compound values of sensitive keys', () => {
+    const rules = compileRules({ extraBodyKeys: ['privateNote'] });
+    for (const body of [
+      '{"password":{"value":"compound-private"},"padding":"' + 'x'.repeat(257 * 1024) + '"}',
+      '{"token":["compound-private"],"unfinished":',
+      '{"privateNote":{"nested":["compound-private"]},"unfinished":',
+      '{"pass\\u0077ord":[{"value":"compound-private"}],"unfinished":',
+    ]) {
+      expect(redactBody(rules, body, 'application/json').includes('compound-private')).toBe(false);
+      expect(redactAndCap(rules, body, 512, 'application/json')?.includes('compound-private')).toBe(false);
+    }
+    const benign = '{"nested":{"value":"benign"},"password":"scalar-private","unfinished":';
+    const out = redactBody(rules, benign, 'application/json');
+    expect(out).toContain('benign');
+    expect(out).not.toContain('scalar-private');
+  });
+
   test('key fallback runs above the structural limit', () => {
     const body = `{"pad":"${'a'.repeat(257 * 1024)}","password":"hunter2","nested":{"access_token":"AT-BIG"}}`;
     const out = redactBody(DEFAULTS, body, 'application/json');

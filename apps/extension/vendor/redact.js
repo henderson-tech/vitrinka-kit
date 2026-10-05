@@ -469,6 +469,13 @@ function decodeJsonKey(key) {
     return key.replace(/\\u([0-9A-Fa-f]{4})|\\(.)/g, (_m, hex, ch) => hex !== undefined ? String.fromCharCode(Number.parseInt(hex, 16)) : ch);
 }
 function scrubTruncatedJson(rules, body) {
+    // Scalar matching cannot remove an object/array's whole value without a
+    // parser. On the fallback path, omit the body rather than retain any part
+    // of a sensitive compound value (including escaped or policy-added keys).
+    for (const match of body.matchAll(/"((?:[^"\\\r\n]|\\.)*)"\s*:\s*[{\[]/g)) {
+        if (sensitiveBodyKey(rules, decodeJsonKey(match[1])))
+            return '';
+    }
     // The bare-value alternative stops at JSON STRUCTURE (`{`, `[`, `"` as well
     // as `,}]`): a benign key must consume only its scalar value, never a
     // nested object — `"nested":{"access_token":…}` would otherwise ride inside
