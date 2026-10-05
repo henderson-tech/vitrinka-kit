@@ -9,6 +9,7 @@ import {
   __bufferForTests,
   __chunksForTests,
   __dropCachesForTests,
+  adoptStoredState,
   flush,
   getState,
   health,
@@ -116,6 +117,20 @@ describe('queue', () => {
     await flush();
     expect(__chunksForTests()).toHaveLength(0);
     expect(__bufferForTests().some((e) => e.kind === 'rrweb')).toBe(false);
+  });
+
+  it('follows the record another tab wrote: joins its session, keeps the higher seq, ends with its stop', () => {
+    expect(adoptStoredState(JSON.stringify(liveSession()))).toBe('joined');
+    pushEvent('click', {}, ROUTE); // seq 1
+    pushEvent('click', {}, ROUTE); // seq 2
+    // The other tab paused it before this tab's seq 2 reached it: the pause applies, the seq never rolls back.
+    expect(adoptStoredState(JSON.stringify({ ...liveSession(true), seq: 1 }))).toBe('updated');
+    expect(getState()).toMatchObject({ sessionId: 'sess-1', paused: true, seq: 2 });
+    // The other tab stopped it: the session ends here too, and its undelivered tail goes with it.
+    expect(adoptStoredState(null)).toBe('ended');
+    expect(getState()).toBeNull();
+    expect(__bufferForTests()).toHaveLength(0);
+    expect(adoptStoredState(null)).toBe('unchanged');
   });
 
   it('splits rrweb batches under the pack margin and reports the undeliverable', () => {

@@ -1,5 +1,25 @@
 # @vitrinka/web
 
+## 0.3.2
+
+- **A Stop in one tab ends the recording in every tab.** A second tab of
+  the app opened during a recording joins it (it reads the shared
+  `localStorage` record, as a reload does), but nothing told it when
+  another tab stopped: its pill kept a running recording — the clock
+  counting from the original start, Start hidden — and its clicks and
+  navigations kept going to a session the server had closed, until a
+  reload. Each tab now follows the record the others write: a Stop
+  there turns this pill idle and drops this tab's undelivered tail for
+  that session, a Start there is joined, a pause follows. Recents
+  follow too. A custom `RecorderStorage` driver may implement the new
+  optional `watch(key, onChange)` to get the same; the memory driver has
+  nothing to share.
+- **A stopped recording leaves no trace on the pill.** While "Saved"
+  showed (and after it), the pill still said `data-state="rec"` and the
+  folded clock kept counting from the ended session's start. The state
+  now follows the live recording only, and the clock stands where it
+  stopped.
+
 ## 0.3.1
 
 - **A bug report always carries the current screen.** When a checkout

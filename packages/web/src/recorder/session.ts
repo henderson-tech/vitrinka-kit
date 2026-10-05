@@ -18,6 +18,7 @@ import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
 import { redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
 import {
+  adoptStoredState,
   armReconcile,
   capturesSettled,
   disarmReconcile,
@@ -25,20 +26,22 @@ import {
   getState,
   pushEvent,
   queuedCount,
+  REC_KEY,
   resetHealth,
   resetIdle,
   resetQueues,
   type SessionState,
   setState,
 } from './queue';
-import { noteRecent, updateRecent } from './recents';
+import { forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
+import { getRecorderStorage } from './storage';
 
 export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.3.1';
+export const RECORDER_VERSION = '0.3.2';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -76,6 +79,32 @@ export function recoverRedactionPolicy(): void {
     .finally(() => {
       policyRecoveryInFlight = false;
     });
+}
+
+/**
+ * Keep this document on the recording its other tabs share: the session
+ * record and the recents live in storage every tab of the origin reads, but
+ * each document caches them. A Stop in one tab ends the session in the
+ * others (their pills go idle, their lanes stop sending into it), a Start
+ * is joined as a reload joins it, a pause follows. Returns the unsubscribe.
+ */
+export function followOtherTabs(): () => void {
+  const storage = getRecorderStorage();
+  const offRec = storage.watch?.(REC_KEY, (raw) => {
+    const change = adoptStoredState(raw);
+    if (change === 'unchanged') return;
+    if (change === 'ended') setRedactionPolicy(null);
+    if (change === 'joined') {
+      recoverRedactionPolicy();
+      armReconcile();
+    }
+    notify();
+  });
+  const offRecents = storage.watch?.(RECENTS_KEY, forgetRecents);
+  return () => {
+    offRec?.();
+    offRecents?.();
+  };
 }
 
 export function elapsedOf(rec: SessionState | null): number {

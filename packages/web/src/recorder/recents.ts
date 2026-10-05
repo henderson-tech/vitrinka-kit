@@ -96,6 +96,12 @@ export async function refreshRecents(live: string | null): Promise<void> {
   }
 }
 
+/** Another tab wrote the list (its stop saved a recording): read it afresh. */
+export function forgetRecents(): void {
+  cache = undefined;
+  notify();
+}
+
 /** Test-only: forget the in-memory list (storage stays). */
 export function __resetRecentsForTests(): void {
   cache = undefined;

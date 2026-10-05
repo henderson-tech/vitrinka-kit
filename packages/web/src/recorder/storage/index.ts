@@ -19,6 +19,12 @@ export interface RecorderStorage {
   set(key: string, value: string): void;
   /** Delete a key; a no-op when absent. */
   remove(key: string): void;
+  /**
+   * Hear another document (a second tab) write `key` — `null` when it was
+   * removed; returns the unsubscribe. Optional: a driver no other document
+   * shares (memory) has nothing to hear.
+   */
+  watch?(key: string, onChange: (value: string | null) => void): () => void;
 }
 
 // Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · link (the
@@ -61,6 +67,16 @@ export function localRecorderStorage(): RecorderStorage | null {
       getString: (k) => ls.getItem(PREFIX + k),
       set: (k, v) => ls.setItem(PREFIX + k, v),
       remove: (k) => ls.removeItem(PREFIX + k),
+      // localStorage is shared by every tab of the origin; its `storage`
+      // event reaches the OTHER documents only. A clear() (key null) is not
+      // a write of `k` and is ignored.
+      watch: (k, onChange) => {
+        const on = (e: StorageEvent) => {
+          if (e.storageArea === ls && e.key === PREFIX + k) onChange(e.newValue);
+        };
+        globalThis.addEventListener('storage', on);
+        return () => globalThis.removeEventListener('storage', on);
+      },
     };
   } catch {
     console.warn('vitrinka: localStorage unavailable — the recorder queue will not survive a reload');

@@ -277,6 +277,11 @@ of its tab). Where that is unavailable (private mode, a storage-disabled
 profile) the recorder falls back to memory and says so once; plug your own
 synchronous driver with `configureRecorderStorage()` before mounting.
 
+The session record is shared by every tab of the app: a tab opened during
+a recording joins it, and a Start, pause or Stop in one tab reaches the
+others through the driver's optional `watch(key, onChange)` (the
+`localStorage` driver implements it with the `storage` event).
+
 ## Development
 
 ```bash

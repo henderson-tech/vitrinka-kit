@@ -391,10 +391,15 @@ test('stop lives in the pill: confirm inline, then saving, then saved with the b
   const open = saved.getByRole('link', { name: /Open board/ });
   await expect(open).toHaveAttribute('href', `${stubUrl}/acme/b/fixture-session-1`);
   await expect(open).toHaveAttribute('target', '_blank');
+  // The ended recording leaves no trace on the pill: it no longer reads as recording, and its folded clock stands still.
+  await expect(pill).toHaveAttribute('data-state', 'paused');
+  const clock = pill.locator('.clock .time');
+  const stoppedAt = (await clock.textContent()) ?? '';
   // It stays until dismissed.
   await page.mouse.move(600, 400);
   await page.waitForTimeout(3000);
   await expect(saved).toBeVisible();
+  await expect(clock).toHaveText(stoppedAt);
 
   await saved.getByRole('button', { name: 'Dismiss' }).click();
   await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
@@ -408,6 +413,31 @@ test('stop lives in the pill: confirm inline, then saving, then saved with the b
   await expect(recent).toHaveAttribute('href', `${stubUrl}/acme/b/fixture-session-1`);
   await expect(page.getByRole('menuitem', { name: 'Go to vitrinka' })).toHaveAttribute('href', stubUrl);
   expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.recents'))) ?? '[]')).toHaveLength(1);
+});
+
+test('a second tab follows the shared recording: it joins on load and goes idle when the first tab stops it', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const other = await page.context().newPage();
+  await other.goto(`${pageUrl}/`);
+  const otherPill = other.locator('[data-e2e="recorder-pill"]');
+  await expect(otherPill).toHaveAttribute('data-face', 'rec');
+
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.locator('[data-e2e="saved"]')).toBeVisible({ timeout: 30_000 });
+  await expect(otherPill).toHaveAttribute('data-face', 'idle');
+  await expect(other.getByRole('button', { name: 'Start recording' })).toBeVisible();
+
+  // Nothing the second tab does afterwards is sent into the stopped session,
+  // and it never writes the stopped session back for a reload to restore.
+  const posted = seen.filter((s) => s.path.endsWith('/events')).length;
+  await other.locator('#buy').click();
+  await other.waitForTimeout(3000);
+  expect(seen.filter((s) => s.path.endsWith('/events'))).toHaveLength(posted);
+  expect(await other.evaluate(() => localStorage.getItem('vitrinka.recorder.rec'))).toBeNull();
+  await other.close();
 });
 
 test('the ⋯ menu opens from the keyboard with focus on its first item; ↓ walks it, Esc returns to ⋯', async ({ page }) => {
