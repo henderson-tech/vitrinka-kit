@@ -33,6 +33,7 @@ import {
   resetQueues,
   type SessionState,
   setState,
+  stoppingElsewhere,
 } from './queue';
 import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
@@ -236,7 +237,9 @@ async function attachTags(sessionId: string, tags: string[] | undefined): Promis
 
 export async function togglePause(): Promise<boolean> {
   const rec = getState();
-  if (!rec || rec.dead || rec.stopping) return false;
+  if (!rec || rec.dead || stoppingElsewhere(rec)) return false;
+  // A stale mark: the tab that was stopping it is gone, so this is a plain pause.
+  delete rec.stopping;
   rec.paused = !rec.paused;
   if (rec.paused) {
     rec.activeMs = (rec.activeMs || 0) + (rec.resumeAt ? Date.now() - Date.parse(rec.resumeAt) : 0);

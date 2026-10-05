@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, getState } from '../queue';
+import { __resetForTests, adoptStoredState, getState, STOPPING_TTL_MS } from '../queue';
 import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
@@ -130,13 +130,27 @@ describe('session', () => {
     const stored = () => JSON.parse(getRecorderStorage().getString('rec') ?? 'null') as Record<string, unknown> | null;
     stub.script.patch.push({ ok: false, status: 503 });
     const stopping = stopSession();
-    expect(stored()).toMatchObject({ sessionId: 'sess-1', paused: true, resumeAt: null, stopping: true });
-    // This tab keeps capturing: the tail its Stop drains still lands.
-    expect(getState()).toMatchObject({ paused: false });
+    expect(stored()).toMatchObject({ sessionId: 'sess-1', paused: true, resumeAt: null, stopping: expect.any(String) });
+    // Another tab writes its frozen copy back (its policy fetch landed): this tab keeps capturing,
+    // so the tail its Stop drains still lands.
+    adoptStoredState(JSON.stringify({ ...stored(), policy: null }));
+    expect(getState()).toMatchObject({ paused: false, policy: null });
     expect(getState()?.stopping).toBeUndefined();
     await expect(stopping).rejects.toThrow();
     expect(stored()).toMatchObject({ sessionId: 'sess-1', paused: false });
     expect(stored()?.stopping).toBeUndefined();
+  });
+
+  it('a stopping mark refuses pause and resume until it is stale: the tab that wrote it is gone, and it is a plain pause', async () => {
+    await startSession();
+    const frozen = { ...getState()!, paused: true, resumeAt: null };
+    adoptStoredState(JSON.stringify({ ...frozen, stopping: new Date().toISOString() }));
+    expect(await togglePause()).toBe(false);
+    expect(getState()).toMatchObject({ paused: true });
+    adoptStoredState(JSON.stringify({ ...frozen, stopping: new Date(Date.now() - STOPPING_TTL_MS).toISOString() }));
+    expect(await togglePause()).toBe(false); // resumed: no longer paused
+    expect(getState()).toMatchObject({ paused: false });
+    expect(getState()?.stopping).toBeUndefined();
   });
 
   it('refuses to stop while the server is unreachable and keeps the tail', async () => {

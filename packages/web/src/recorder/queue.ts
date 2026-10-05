@@ -103,12 +103,22 @@ export interface SessionState {
    */
   policy?: RedactionPolicy | null;
   /**
-   * Another tab is stopping this session: the copy it stores reads as
-   * paused with its clock frozen at the Stop, so every other tab stops
-   * capturing and painting rec at once, not when the save ends. Pause and
-   * resume are refused on it; Stop still works.
+   * When (ISO) another tab began stopping this session: the copy it stores
+   * reads as paused with its clock frozen at the Stop, so every other tab
+   * stops capturing and painting rec at once, not when the save ends. Pause
+   * and resume are refused on it for `STOPPING_TTL_MS` (`stoppingElsewhere`);
+   * past that the stopping tab is gone and it is an ordinary pause. Stop
+   * always works.
    */
-  stopping?: boolean;
+  stopping?: string;
+}
+
+/** A stop settles captures (≤ 5 s), drains (≤ 60 s), then PATCHes once: a `stopping` mark older than this outlived its tab. */
+export const STOPPING_TTL_MS = 90_000;
+
+/** Is another tab still stopping `rec` (a fresh `stopping` mark)? */
+export function stoppingElsewhere(rec: SessionState): boolean {
+  return rec.stopping !== undefined && Date.now() - Date.parse(rec.stopping) < STOPPING_TTL_MS;
 }
 
 export type { RecorderEvent };
@@ -173,25 +183,28 @@ export function setState(rec: SessionState | null): void {
   else safeSet(REC_KEY, JSON.stringify(stored(rec)));
 }
 
-/** The session this tab is stopping, and its clock at the Stop. */
-let stoppingHere: { sessionId: string; activeMs: number } | null = null;
+/** The session this tab is stopping, its clock at the Stop, and when the Stop began. */
+let stoppingHere: { sessionId: string; activeMs: number; since: string } | null = null;
 
 /** What the other tabs read of `rec`: while this tab stops it, the frozen `stopping` copy. */
 function stored(rec: SessionState): SessionState {
   if (stoppingHere?.sessionId !== rec.sessionId) return rec;
-  return { ...rec, paused: true, activeMs: stoppingHere.activeMs, resumeAt: null, stopping: true };
+  return { ...rec, paused: true, activeMs: stoppingHere.activeMs, resumeAt: null, stopping: stoppingHere.since };
 }
 
 /**
  * This tab started (`sessionId`) or finished (null) stopping a session. Only
  * the STORED record changes: this tab's own cache stays live, so the tail
  * its Stop still drains (rrweb's last events, settled captures) lands.
+ * Finishing writes the record back without the mark.
  */
 export function markStopping(sessionId: string | null, activeMs = 0): void {
   const was = stoppingHere?.sessionId;
-  stoppingHere = sessionId ? { sessionId, activeMs } : null;
+  stoppingHere = sessionId ? { sessionId, activeMs, since: new Date().toISOString() } : null;
   const live = getState();
-  if (live && (live.sessionId === sessionId || live.sessionId === was)) setState(live);
+  if (!live || (live.sessionId !== sessionId && live.sessionId !== was)) return;
+  delete live.stopping;
+  setState(live);
 }
 
 export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
@@ -227,6 +240,14 @@ export function adoptStoredState(raw: string | null): StoredChange {
     next.seq = Math.max(next.seq, cur.seq);
     // A policy this tab already holds outlives a record written before it.
     if (next.policy === undefined && cur.policy !== undefined) next.policy = cur.policy;
+    // A session this tab is stopping comes back as the frozen copy it wrote
+    // (another tab wrote its cache back): this tab's clock and capture stay live.
+    if (stoppingHere?.sessionId === next.sessionId) {
+      next.paused = cur.paused;
+      next.activeMs = cur.activeMs;
+      next.resumeAt = cur.resumeAt;
+      delete next.stopping;
+    }
     recCache = next;
     return 'updated';
   }
