@@ -641,6 +641,9 @@ function pruneAcknowledgedCaptures(): void {
 export function tailIsDurable(): boolean {
   if (!kv().keys) return false;
   const durableSeqs = new Set([...allocatedCaptures].filter(([key]) => kv().getString(key)).map(([, item]) => item.seq));
+  for (const item of pendingAllocations) {
+    if (item.persisted && item.seq !== undefined && kv().getString(item.key)) durableSeqs.add(item.seq);
+  }
   return [...pendingAllocations].every((item) => item.persisted && !!kv().getString(item.key))
     && getBuffer().every((event) => durableSeqs.has(event.seq))
     && getChunks().every((chunk) => durableSeqs.has(chunk.seq));
