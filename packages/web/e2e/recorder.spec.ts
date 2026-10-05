@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
+import type { RecorderControl } from '../src/recorder/control';
 import { type Seen, type Servers, startServers } from './fixture/servers';
 
 let servers: Servers;
@@ -414,6 +415,75 @@ test('stop lives in the pill: confirm inline, then saving, then saved with the b
   await expect(page.getByRole('menuitem', { name: 'Go to vitrinka' })).toHaveAttribute('href', stubUrl);
   expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.recents'))) ?? '[]')).toHaveLength(1);
 });
+
+for (const webLocks of [true, false]) {
+  test(`two tabs keep every event under a unique seq (${webLocks ? 'Web Locks' : 'IndexedDB fallback'})`, async ({ page, context }) => {
+    seen.length = 0;
+    await context.addInitScript((useLocks) => {
+      if (!useLocks) Object.defineProperty(navigator, 'locks', { value: undefined });
+      // Delay seq-only notifications: the narrow real-world window where a
+      // tab has not heard its sibling's allocation yet, made deterministic.
+      window.addEventListener('storage', (event) => {
+        if (event.key !== 'vitrinka.recorder.rec' || !event.oldValue || !event.newValue) return;
+        const { seq: oldSeq, ...oldRecord } = JSON.parse(event.oldValue);
+        const { seq: newSeq, ...newRecord } = JSON.parse(event.newValue);
+        if (oldSeq !== newSeq && JSON.stringify(oldRecord) === JSON.stringify(newRecord)) event.stopImmediatePropagation();
+      }, true);
+    }, webLocks);
+    await page.goto(`${pageUrl}/`);
+    await page.getByRole('button', { name: 'Start recording' }).click();
+    const other = await context.newPage();
+    await other.goto(`${pageUrl}/`);
+    await expect(other.getByRole('button', { name: 'Recorder controls' })).toBeVisible();
+
+    await Promise.all([page, other].map((tab, lane) => tab.evaluate((lane) => {
+      const recorder = (window as Window & { __vitrinkaRecorder?: RecorderControl }).__vitrinkaRecorder!;
+      for (let i = 0; i < 20; i++) recorder.note(`concurrent-${lane}-${i}`);
+    }, lane)));
+    const events = () => seen.filter((s) => s.path.endsWith('/events'))
+      .flatMap((s) => (s.body as { events: { seq: number; kind: string; tabId: string; payload?: { text?: string } }[] }).events);
+    await expect.poll(() => new Set(events().filter((e) => e.payload?.text?.startsWith('concurrent-')).map((e) => e.payload!.text)).size).toBe(40);
+    // Like the server: first row for a seq wins. A collision used to silently
+    // lose one note; legitimate retries of the same row remain harmless.
+    const accepted = new Map<number, ReturnType<typeof events>[number]>();
+    for (const event of events()) if (!accepted.has(event.seq)) accepted.set(event.seq, event);
+    expect([...accepted.values()].filter((e) => e.payload?.text?.startsWith('concurrent-'))).toHaveLength(40);
+    await expect.poll(() => new Set(events().filter((e) => e.kind === 'rrweb').map((e) => e.tabId)).size).toBe(2);
+    const bySeq = new Map<number, string>();
+    for (const event of events()) {
+      const row = JSON.stringify(event);
+      if (bySeq.has(event.seq)) expect(row).toBe(bySeq.get(event.seq));
+      bySeq.set(event.seq, row);
+    }
+    await other.close();
+  });
+}
+
+for (const stopFromSecond of [false, true]) {
+test(`Stop from the ${stopFromSecond ? 'second' : 'first'} tab saves both tails before closing the session`, async ({ page, context }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const other = await context.newPage();
+  await other.goto(`${pageUrl}/`);
+  await other.getByRole('button', { name: 'Recorder controls' }).hover();
+  await other.getByRole('button', { name: 'Note', exact: true }).click();
+  const input = other.getByPlaceholder("what's wrong / what to refine…");
+  await input.fill('the other tab\'s final note');
+  await input.press('Enter');
+  const stoppingTab = stopFromSecond ? other : page;
+  await stoppingTab.getByRole('button', { name: 'Recorder controls' }).hover();
+  await stoppingTab.getByRole('button', { name: 'Stop', exact: true }).click();
+  await stoppingTab.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(stoppingTab.locator('[data-e2e="saved"]')).toBeVisible();
+  const done = seen.findIndex((call) => call.method === 'PATCH' && (call.body as { status?: string })?.status === 'done');
+  const events = seen.slice(0, done).filter((call) => call.path.endsWith('/events'))
+    .flatMap((call) => (call.body as { events: { kind: string; tabId: string; payload?: { text?: string } }[] }).events);
+  expect(events.some((event) => event.payload?.text === 'the other tab\'s final note')).toBe(true);
+  expect(new Set(events.filter((event) => event.kind === 'rrweb').map((event) => event.tabId)).size).toBe(2);
+  await other.close();
+});
+}
 
 test('a second tab follows the shared recording: it joins on load and goes idle when the first tab stops it', async ({ page }) => {
   await page.goto(`${pageUrl}/`);

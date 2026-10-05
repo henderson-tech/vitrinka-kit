@@ -64,6 +64,30 @@ describe('session', () => {
     });
   });
 
+  it('Stop waits for captures awaiting the cross-tab seq lock before draining and closing', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...memoryRecorderStorage(),
+      withLock: async (_name, run) => { await gate; run(); },
+    });
+    __resetForTests();
+    await startSession();
+    addNote('captured before Stop');
+    const stopping = stopSession();
+    await Bun.sleep(1);
+    expect(stub.calls.some((call) => call.method === 'PATCH')).toBe(false);
+    release();
+    await stopping;
+    const events = (stub.calls.find((call) => call.path.endsWith('/events'))!.body as {
+      events: { seq: number; payload: { text?: string } }[];
+    }).events;
+    expect(events.map((event) => event.seq)).toEqual([1, 2]);
+    expect(events[1]!.payload.text).toBe('captured before Stop');
+    expect(getState()).toBeNull();
+  });
+
   it('names the configured project on create, and omits it when unset', async () => {
     await startSession();
     const bare = stub.calls.find((c) => c.path === '/api/v1/sessions' && c.method === 'POST')!;
@@ -83,6 +107,20 @@ describe('session', () => {
     addNote('dropped');
     expect(await togglePause()).toBe(false);
     expect(stub.calls.at(-1)?.body).toEqual({ status: 'recording' });
+  });
+
+  it('refuses Stop while a sibling has an unsaved tail and keeps this tab\'s captures', async () => {
+    const shared = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...shared, watch: () => () => {} });
+    __resetForTests();
+    await startSession();
+    addNote('local tail');
+    shared.set('tab.sibling', JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true }));
+    await expect(stopSession()).rejects.toThrow('another tab has undelivered captures');
+    expect(getState()).toMatchObject({ sessionId: 'sess-1', paused: true });
+    expect(stub.calls.some((call) => call.method === 'PATCH' && (call.body as { status?: string })?.status === 'done')).toBe(false);
+    expect(shared.getString('buffer')).toContain('local tail');
   });
 
   it('follows another tab through the shared store: joins its recording, applies the policy written after it, ends with its Stop', () => {

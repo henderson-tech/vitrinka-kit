@@ -4,9 +4,9 @@
  *
  * - A synchronous KV store (./storage — localStorage by default, memory when
  *   that is unavailable) holds the session record and the event buffer:
- *   reads/writes complete in one JS tick, so no async mutex is needed. Only
- *   flush() needs single-flight guarding (its POST is async) and it removes
- *   exactly the sent seqs on return.
+ *   seq allocation is serialized across tabs by the driver's lock, reading
+ *   the shared watermark inside it. flush() is single-flight within each
+ *   document and removes exactly the sent seqs on return.
  * - rrweb batches ride as CHUNKS the way the extension sends them: each batch
  *   is serialized once, split under the server's chunk cap, uploaded to
  *   `/chunk?seq=N` under a pre-allocated seq, and only then does its `rrweb`
@@ -360,7 +360,7 @@ function setChunks(chunks: PendingChunk[]): void {
 }
 
 export function queuedCount(): number {
-  return getBuffer().length + getChunks().length;
+  return getBuffer().length + getChunks().length + pendingAllocations.size;
 }
 
 // -- health + server reconciliation (extension D4/D5/D9) ---------------------
@@ -495,14 +495,64 @@ export function disarmReconcile(): void {
   reconcileTimer = null;
 }
 
-/** Allocate `count` consecutive seqs without emitting events; null when not capturing. */
-export function allocSeq(count = 1): { seq: number; sessionId: string } | null {
+/** Allocate inside the storage driver's lock; lifecycle writes cannot rewind its watermark. */
+function allocSeq(count: number): { seq: number; sessionId: string } | null {
   const rec = getState();
-  if (!rec || rec.paused || rec.dead || count < 1) return null;
-  const first = rec.seq + 1;
-  rec.seq += count;
+  if (!rec || rec.dead || count < 1) return null;
+  const watermark = readJson<{ sessionId: string; seq: number } | null>('seq', null);
+  const first = Math.max(rec.seq, watermark?.sessionId === rec.sessionId ? watermark.seq : 0) + 1;
+  // This write must succeed before a seq can be used in another document.
+  // On failure the capture stays pending and retries rather than colliding.
+  kv().set('seq', JSON.stringify({ sessionId: rec.sessionId, seq: first + count - 1 }));
+  rec.seq = first + count - 1;
   setState(rec);
   return { seq: first, sessionId: rec.sessionId };
+}
+
+interface PendingAllocation {
+  run: () => void;
+  attempt?: Promise<void>;
+}
+
+const pendingAllocations = new Set<PendingAllocation>();
+
+function attemptAllocation(item: PendingAllocation): Promise<void> {
+  if (item.attempt) return item.attempt;
+  item.attempt = trackCapture(kv().withLock!('seq', item.run)
+    .then(() => { pendingAllocations.delete(item); })
+    .catch((error: unknown) => {
+      noteFailure(error);
+      console.warn('vitrinka: seq allocation failed — capture kept for retry', error);
+      scheduleFlush();
+      notify();
+      throw error;
+    })).finally(() => { item.attempt = undefined; });
+  return item.attempt;
+}
+
+/** Accept now, stamp under the shared lock later; Stop waits for this capture. */
+function queueCapture(count: number, append: (allocation: { seq: number; sessionId: string }) => void): boolean {
+  const accepted = getState();
+  if (!accepted || accepted.paused || accepted.dead || count < 1) return false;
+  const storage = kv();
+  const run = () => {
+    if (getState()?.sessionId !== accepted.sessionId) return;
+    if (storage.withLock) {
+      // Storage events can arrive late; the fresh record is read INSIDE the
+      // lock, preserving another tab's pause/stop/policy rather than undoing it.
+      adoptStoredState(storage.getString(REC_KEY) ?? null);
+      if (getState()?.sessionId !== accepted.sessionId) return;
+    }
+    // A pause after acceptance does not discard the already-captured event.
+    const allocation = allocSeq(count);
+    if (allocation) append(allocation);
+  };
+  if (storage.withLock) {
+    const item: PendingAllocation = { run };
+    pendingAllocations.add(item);
+    void attemptAllocation(item);
+  } else run(); // A document-local driver (memory) needs no async boundary.
+  return true;
 }
 
 /**
@@ -574,19 +624,20 @@ export function pushEvent(
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
   if (rec.paused || rec.dead) return null;
-  rec.seq++;
   const ts = new Date().toISOString();
-  const buffer = getBuffer();
-  buffer.push({ seq: rec.seq, ts, tabId: route.tabId, tabHost: route.tabHost, kind, payload });
-  if (buffer.length > MAX_BUFFER) {
-    const dropped = buffer.length - MAX_BUFFER;
-    buffer.splice(0, dropped);
-    console.warn(`vitrinka: retry buffer full — dropped ${dropped} oldest events`);
-  }
+  const { tabId, tabHost } = route;
+  queueCapture(1, ({ seq }) => {
+    const buffer = getBuffer();
+    buffer.push({ seq, ts, tabId, tabHost, kind, payload });
+    if (buffer.length > MAX_BUFFER) {
+      const dropped = buffer.length - MAX_BUFFER;
+      buffer.splice(0, dropped);
+      console.warn(`vitrinka: retry buffer full — dropped ${dropped} oldest events`);
+    }
+    schedulePersist();
+    scheduleFlush();
+  });
   noteActivity();
-  schedulePersist();
-  setState(rec);
-  scheduleFlush();
   return ts;
 }
 
@@ -679,30 +730,23 @@ export function pushRRWebBatch(
       route,
     );
   }
-  const alloc = parts.length ? allocSeq(parts.length) : null;
-  if (!alloc) return 0;
-  const chunks = getChunks();
   const ts = new Date().toISOString();
-  parts.forEach((p, i) => {
-    chunks.push({
-      seq: alloc.seq + i,
-      ts,
-      tabId: route.tabId,
-      tabHost: route.tabHost,
-      sessionId: alloc.sessionId,
-      count: p.count,
-      body: p.body,
+  const { tabId, tabHost } = route;
+  if (!queueCapture(parts.length, (alloc) => {
+    const chunks = getChunks();
+    parts.forEach((p, i) => {
+      chunks.push({ seq: alloc.seq + i, ts, tabId, tabHost, sessionId: alloc.sessionId, count: p.count, body: p.body });
+      chunkBytes += p.body.length;
     });
-    chunkBytes += p.body.length;
-  });
-  while (chunks.length > MAX_PENDING) {
-    const drop = chunks.shift();
-    if (drop) chunkBytes -= drop.body.length;
-    console.warn(`vitrinka: pending chunk queue full — dropped rrweb chunk seq ${drop?.seq}`);
-  }
+    while (chunks.length > MAX_PENDING) {
+      const drop = chunks.shift();
+      if (drop) chunkBytes -= drop.body.length;
+      console.warn(`vitrinka: pending chunk queue full — dropped rrweb chunk seq ${drop?.seq}`);
+    }
+    schedulePersist();
+    scheduleFlush();
+  })) return 0;
   noteActivity();
-  schedulePersist();
-  scheduleFlush();
   return parts.length;
 }
 
@@ -784,6 +828,8 @@ export async function flush(opts: { keepalive?: boolean } = {}): Promise<boolean
 
 async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   if (getState()?.dead) return false;
+  await Promise.all([...pendingAllocations].map(attemptAllocation));
+  if (pendingAllocations.size) return false;
   const pendingClear = await drainPending();
   if (!pendingClear) scheduleFlush();
   const rec = getState();
@@ -841,7 +887,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   // session's now, and its seqs restart — never filter it by these.
   if (movedOn(rec)) return true;
   noteSync();
-  serverMaxSeq = Math.max(serverMaxSeq, batch[batch.length - 1]?.seq ?? serverMaxSeq);
+  serverMaxSeq = Math.max(serverMaxSeq, ...batch.map((event) => event.seq));
   notify();
   // Remove EXACTLY the sent seqs — events pushed during the in-flight POST survive.
   const sent = new Set(batch.map((e) => e.seq));
@@ -855,7 +901,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
 export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
   const t0 = Date.now();
   while (Date.now() - t0 < deadlineMs) {
-    if (getBuffer().length === 0 && getChunks().length === 0) return true;
+    if (queuedCount() === 0) return true;
     const sent = await flush();
     if (getState()?.dead) return false;
     if (!sent) await new Promise<void>((res) => setTimeout(res, 1000));
@@ -882,6 +928,7 @@ function dropLocalTail(): void {
   bufferCache = [];
   chunkCache = [];
   chunkBytes = 0;
+  pendingAllocations.clear();
   tailDropped = true;
 }
 
@@ -892,6 +939,7 @@ export function __resetForTests(): void {
   kv().remove('rec');
   kv().remove('buffer');
   kv().remove('chunks');
+  kv().remove('seq');
   resetIdle();
 }
 
@@ -907,6 +955,7 @@ export function __chunksForTests(): { seq: number; count: number; sessionId: str
 
 /** Test-only: drop the in-memory caches while LEAVING storage intact (a reload). */
 export function __dropCachesForTests(): void {
+  pendingAllocations.clear();
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;

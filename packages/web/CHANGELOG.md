@@ -1,5 +1,20 @@
 # @vitrinka/web
 
+## 0.3.4
+
+- **Two tabs no longer collide on event sequence numbers.** Events and rrweb
+  chunks share an exclusive allocator using Web Locks, with an IndexedDB
+  transaction fallback for HTTP hosts. A separate watermark prevents pause,
+  policy and Stop writes from rewinding the counter. Stop settles queued
+  allocations before draining; failed allocations stay queued for retry.
+  Shared custom storage drivers implement `withLock(name, run)`.
+- **Stop saves every open tab's tail before closing the session.** Mounted
+  tabs acknowledge only after their last rrweb batch and pending captures
+  have drained. A sibling that cannot save refuses the Stop instead of
+  losing its last notes. Shared drivers expose `keys()` alongside `watch()`.
+- The sync indicator uses the highest acknowledged seq even when an rrweb
+  chunk's delayed event row appears last in the upload batch.
+
 ## 0.3.3
 
 - **The other tabs leave the recording at the Stop, not when the save

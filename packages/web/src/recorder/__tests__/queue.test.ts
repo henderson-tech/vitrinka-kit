@@ -107,6 +107,31 @@ describe('queue', () => {
       .events.find((e) => e.seq === 2);
     expect(row).toMatchObject({ kind: 'rrweb', payload: { count: 2 }, blobKey: 'blob-2' });
     expect(__chunksForTests()).toHaveLength(0);
+    expect(health().synced).toBe(true);
+  });
+
+  it('keeps a capture for retry when the locked seq watermark write fails', async () => {
+    const { __resetForTests } = await import('../queue');
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    const storage = memoryRecorderStorage();
+    let fail = true;
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_name, run) => { run(); },
+      set: (key, value) => {
+        if (key === 'seq' && fail) { fail = false; throw new Error('write refused'); }
+        storage.set(key, value);
+      },
+    });
+    __resetForTests();
+    setState(liveSession());
+    pushEvent('note', { text: 'kept' }, ROUTE);
+    expect(await flush()).toBe(false);
+    expect(health().queued).toBe(1);
+    expect(await flush()).toBe(true);
+    expect(batchSeqs(eventsPosts()[0]!)).toEqual([1]);
+    expect(health().synced).toBe(true);
   });
 
   it('retries a chunk on a transient failure and drops it on a permanent one', async () => {

@@ -282,6 +282,15 @@ a recording joins it, and a Start, pause or Stop in one tab reaches the
 others through the driver's optional `watch(key, onChange)` (the
 `localStorage` driver implements it with the `storage` event).
 
+Event and rrweb-chunk sequence numbers are allocated under a cross-tab
+Web Lock, or an IndexedDB transaction on hosts without Web Locks. Stop
+waits for these allocations before draining. A custom driver shared across
+documents must implement `withLock(name, run)` and run the synchronous
+callback exclusively across them; a document-local driver needs no lock.
+Shared drivers also implement `keys()` to coordinate Stop: each mounted tab
+ships its last rrweb batch and drains its captures before acknowledging.
+An undelivered sibling tail refuses Stop and stays queued for retry.
+
 ## Development
 
 ```bash

@@ -43,11 +43,11 @@ export interface Servers {
   close: () => Promise<void>;
 }
 
-function listen(server: Server): Promise<string> {
+function listen(server: Server, host = '127.0.0.1', port = 0): Promise<string> {
   return new Promise((res) => {
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       const addr = server.address();
-      res(typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '');
+      res(typeof addr === 'object' && addr ? `http://${host}:${addr.port}` : '');
     });
   });
 }
@@ -79,7 +79,7 @@ function bundle(entry: string, tmp: string): string {
   return readFileSync(out, 'utf8');
 }
 
-export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> {
+export async function startServers(entry = 'fixture/app.tsx', options: { host?: string; pagePort?: number; sameOrigin?: boolean } = {}): Promise<Servers> {
   const tmp = mkdtempSync(join(tmpdir(), 'vt-web-e2e-'));
   const script = bundle(entry, tmp);
   const seen: Seen[] = [];
@@ -92,7 +92,7 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
     projecting ? { boardSlug: '' } : { boardSlug: 'fixture-session-1', boardUrl: `${stubUrl}/acme/b/fixture-session-1` };
   const projection = () => ({ state: projecting ? 'running' : 'ready' });
 
-  const stubServer = createServer(async (req, res) => {
+  const handleStub = async (req: IncomingMessage, res: ServerResponse) => {
     cors(res);
     if (req.method === 'OPTIONS') {
       res.writeHead(204).end();
@@ -162,10 +162,21 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
     }
     if (req.method === 'GET') return void res.end(JSON.stringify({ maxSeq: 0, status: 'recording', ...board(), projection: projection() }));
     res.writeHead(404).end();
-  });
+  };
+  const stubServer = createServer(handleStub);
   stubUrl = await listen(stubServer);
 
   const pageServer = createServer((req, res) => {
+    if (options.sameOrigin) {
+      // Advertise the address the browser actually used, never the VM's
+      // private bind address. The hand-test stub shares the page's origin.
+      stubUrl = `http://${req.headers.host}`;
+      if (req.url?.startsWith('/api/')) return void handleStub(req, res);
+    }
+    if (req.url === '/__events') {
+      res.setHeader('content-type', 'application/json');
+      return void res.end(JSON.stringify(seen));
+    }
     if (req.url === '/app.js') {
       res.setHeader('content-type', 'text/javascript');
       return void res.end(script);
@@ -181,7 +192,7 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
         `<script src="/app.js"></script></body></html>`,
     );
   });
-  const pageUrl = await listen(pageServer);
+  const pageUrl = await listen(pageServer, options.host, options.pagePort);
 
   return {
     pageUrl,

@@ -25,6 +25,7 @@ import {
   drainBuffer,
   getState,
   markStopping,
+  persistNow,
   pushEvent,
   queuedCount,
   REC_KEY,
@@ -38,12 +39,13 @@ import {
 import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
 import { getRecorderStorage } from './storage';
+import { recorderPeers, registerRecorderTab, waitForRecorderPeers } from './tabs';
 
 export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.3.3';
+export const RECORDER_VERSION = '0.3.4';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -92,10 +94,18 @@ export function recoverRedactionPolicy(): void {
  */
 export function followOtherTabs(): () => void {
   const storage = getRecorderStorage();
+  const participant = registerRecorderTab();
   const offRec = storage.watch?.(REC_KEY, (raw) => {
     const had = getState()?.policy;
+    // Ship rrweb's sub-2s tail BEFORE adopting the other tab's paused mark.
+    // Everything already captured settles and drains before we acknowledge.
+    if (raw) {
+      const next = JSON.parse(raw) as SessionState;
+      if (next.stopping && next.sessionId === getState()?.sessionId) runBeforeStopHooks();
+    }
     const change = adoptStoredState(raw);
     if (change === 'unchanged') return;
+    participant?.sync();
     if (change === 'ended') setRedactionPolicy(null);
     if (change === 'joined') {
       recoverRedactionPolicy();
@@ -106,11 +116,15 @@ export function followOtherTabs(): () => void {
     const policy = getState()?.policy;
     if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
     notify();
+    if (getState()?.stopping) void participant?.settle().catch((error: unknown) => {
+      console.warn('vitrinka: cross-tab Stop remains unsaved', error);
+    });
   });
   const offRecents = storage.watch?.(RECENTS_KEY, forgetRecents);
   return () => {
     offRec?.();
     offRecents?.();
+    participant?.dispose();
   };
 }
 
@@ -319,6 +333,16 @@ export function onBeforeStop(fn: () => void): () => void {
   return () => beforeStopHooks.delete(fn);
 }
 
+function runBeforeStopHooks(): void {
+  for (const fn of beforeStopHooks) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn('vitrinka: before-stop hook failed', e);
+    }
+  }
+}
+
 /**
  * Stop the session. Throws with the queued-item count when the server is
  * unreachable — the durable tail is NEVER deleted; capture freezes paused and
@@ -329,25 +353,20 @@ export async function stopSession(): Promise<SessionDone | null> {
   if (!rec) return null;
   // The recording's length is what the tester saw at Stop, not Stop + drain.
   const durationMs = elapsedOf(rec);
+  const peers = recorderPeers(rec.sessionId);
   // The other tabs leave rec at the Stop, not when the save ends; a stop
   // that keeps the session hands it back to them as it now is.
   markStopping(rec.sessionId, durationMs);
   try {
-    return await finishStop(rec, durationMs);
+    return await finishStop(rec, durationMs, peers);
   } finally {
     markStopping(null);
   }
 }
 
-async function finishStop(rec: SessionState, durationMs: number): Promise<SessionDone | null> {
+async function finishStop(rec: SessionState, durationMs: number, peers: readonly string[]): Promise<SessionDone | null> {
   disarmReconcile();
-  for (const fn of beforeStopHooks) {
-    try {
-      fn();
-    } catch (e) {
-      console.warn('vitrinka: before-stop hook failed', e);
-    }
-  }
+  runBeforeStopHooks();
   const completeDeadStop = (reason: string | undefined): never => {
     const kept = queuedCount();
     updateRecent(rec.sessionId, { status: 'unsaved', durationMs });
@@ -364,7 +383,8 @@ async function finishStop(rec: SessionState, durationMs: number): Promise<Sessio
   if (!(await capturesSettled())) {
     console.warn('vitrinka: stopping with unsettled captures — a late event may not make this session');
   }
-  if (!(await drainBuffer())) {
+  const peersSaved = await waitForRecorderPeers(peers, rec.sessionId);
+  if (!peersSaved || !(await drainBuffer())) {
     const live = getState();
     // Another tab may have moved on to a session of its own meanwhile — never this stop's to hold.
     const held = live?.sessionId === rec.sessionId ? live : null;
@@ -375,9 +395,10 @@ async function finishStop(rec: SessionState, durationMs: number): Promise<Sessio
       held.resumeAt = null;
       setState(held);
     }
+    persistNow();
     armReconcile();
     notify();
-    throw new Error(`server unreachable — ${queuedCount()} item(s) kept; stop again once online`);
+    throw new Error(`${peersSaved ? 'server unreachable' : 'another tab has undelivered captures'} — ${queuedCount()} local item(s) kept; stop again once online`);
   }
   let done: SessionDone | null = null;
   try {

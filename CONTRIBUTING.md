@@ -6,6 +6,13 @@ note that the project is source-available under the
 
 ## Development setup
 
+Run the workspace gates with `devbox run test` and the browser suite with
+`devbox run e2e` (install Chromium on the box once with
+`devbox run --no-up -- 'bun x playwright install chromium'`).
+`devbox up` leaves the web-recorder fixture running; `devbox url` prints its
+address. Open it in two tabs and start one recording to exercise both lanes.
+The fixture uses a local API stub; `/__events` exposes its received requests.
+
 Prerequisites: [Bun](https://bun.sh) ≥ 1.1 and Node ≥ 18.
 
 ```sh

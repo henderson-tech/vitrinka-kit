@@ -1,16 +1,16 @@
 /**
  * Pluggable durable KV storage for the recorder's queue and session state.
  *
- * The queue's correctness leans on SYNCHRONOUS reads/writes: every
- * read-modify-write completes in one JS tick, so no async mutex is needed and
- * delivery-ack bookkeeping stays race-free. Any driver plugged in here MUST be
- * synchronous — which is why the default is `localStorage` and not IndexedDB.
+ * Reads/writes are synchronous for queue bookkeeping within one document.
+ * A driver shared across documents must also serialize seq allocations:
+ * one JS tick in one tab does not exclude a second tab's read-modify-write.
  *
  * When `localStorage` is unavailable or throws on first touch (Safari private
  * mode, a sandboxed iframe, a storage-disabled profile) the recorder falls
  * back to the in-memory driver: capture still works for the life of the
  * document, only the reload-survival guarantee is lost — and it says so once.
  */
+import { withRecorderLock } from './lock';
 
 export interface RecorderStorage {
   /** Read a value; null/undefined when the key was never written. */
@@ -25,6 +25,10 @@ export interface RecorderStorage {
    * shares (memory) has nothing to hear.
    */
   watch?(key: string, onChange: (value: string | null) => void): () => void;
+  /** Run synchronously inside an exclusive cross-document lock. Required when shared across tabs. */
+  withLock?(name: string, run: () => void): Promise<void>;
+  /** Enumerate this driver's namespaced keys (cross-tab Stop participants). */
+  keys?(): string[];
 }
 
 // Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · link (the
@@ -67,6 +71,10 @@ export function localRecorderStorage(): RecorderStorage | null {
       getString: (k) => ls.getItem(PREFIX + k),
       set: (k, v) => ls.setItem(PREFIX + k, v),
       remove: (k) => ls.removeItem(PREFIX + k),
+      withLock: withRecorderLock,
+      keys: () => Array.from({ length: ls.length }, (_, i) => ls.key(i))
+        .filter((key): key is string => key !== null && key.startsWith(PREFIX))
+        .map((key) => key.slice(PREFIX.length)),
       // localStorage is shared by every tab of the origin; its `storage`
       // event reaches the OTHER documents only. A clear() (key null) is not
       // a write of `k` and is ignored.
@@ -91,6 +99,7 @@ export function memoryRecorderStorage(): RecorderStorage {
     getString: (k) => m.get(k) ?? null,
     set: (k, v) => void m.set(k, v),
     remove: (k) => void m.delete(k),
+    keys: () => [...m.keys()],
   };
 }
 
