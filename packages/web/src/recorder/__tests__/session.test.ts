@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, getState, STOPPING_TTL_MS } from '../queue';
+import { __resetForTests, adoptStoredState, getState, markStopping, STOPPING_TTL_MS } from '../queue';
 import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
@@ -151,6 +151,18 @@ describe('session', () => {
     expect(await togglePause()).toBe(false); // resumed: no longer paused
     expect(getState()).toMatchObject({ paused: false });
     expect(getState()?.stopping).toBeUndefined();
+  });
+
+  it('the stopping mark is a lease renewed while the Stop is out, so a hung request is never taken for a gone tab', async () => {
+    await startSession();
+    const mark = () => (JSON.parse(getRecorderStorage().getString('rec') ?? 'null') as { stopping?: string } | null)?.stopping;
+    markStopping('sess-1', 0, 5);
+    const first = Date.parse(mark() ?? '');
+    await new Promise((res) => setTimeout(res, 30));
+    expect(Date.parse(mark() ?? '')).toBeGreaterThan(first);
+    markStopping(null);
+    await new Promise((res) => setTimeout(res, 30));
+    expect(mark()).toBeUndefined();
   });
 
   it('refuses to stop while the server is unreachable and keeps the tail', async () => {

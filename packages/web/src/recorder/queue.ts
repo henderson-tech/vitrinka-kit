@@ -103,17 +103,21 @@ export interface SessionState {
    */
   policy?: RedactionPolicy | null;
   /**
-   * When (ISO) another tab began stopping this session: the copy it stores
-   * reads as paused with its clock frozen at the Stop, so every other tab
-   * stops capturing and painting rec at once, not when the save ends. Pause
-   * and resume are refused on it for `STOPPING_TTL_MS` (`stoppingElsewhere`);
-   * past that the stopping tab is gone and it is an ordinary pause. Stop
-   * always works.
+   * When (ISO) another tab last renewed its claim to be stopping this
+   * session: the copy it stores reads as paused with its clock frozen at the
+   * Stop, so every other tab stops capturing and painting rec at once, not
+   * when the save ends. The stopping tab renews the mark every
+   * `STOPPING_RENEW_MS` for as long as its Stop is out (however long a
+   * request hangs); pause and resume are refused on a mark younger than
+   * `STOPPING_TTL_MS` (`stoppingElsewhere`). An older one outlived its tab
+   * and is an ordinary pause. Stop always works.
    */
   stopping?: string;
 }
 
-/** A stop settles captures (≤ 5 s), drains (≤ 60 s), then PATCHes once: a `stopping` mark older than this outlived its tab. */
+/** How often a tab renews its `stopping` mark while its Stop is out. */
+export const STOPPING_RENEW_MS = 20_000;
+/** A mark not renewed for this long outlived its tab: several missed renewals, and past the one wake a minute Chrome allows a long-hidden tab. */
 export const STOPPING_TTL_MS = 90_000;
 
 /** Is another tab still stopping `rec` (a fresh `stopping` mark)? */
@@ -183,13 +187,14 @@ export function setState(rec: SessionState | null): void {
   else safeSet(REC_KEY, JSON.stringify(stored(rec)));
 }
 
-/** The session this tab is stopping, its clock at the Stop, and when the Stop began. */
-let stoppingHere: { sessionId: string; activeMs: number; since: string } | null = null;
+/** The session this tab is stopping, its clock at the Stop, and when its mark was last renewed. */
+let stoppingHere: { sessionId: string; activeMs: number; at: string } | null = null;
+let stoppingLease: ReturnType<typeof setInterval> | null = null;
 
 /** What the other tabs read of `rec`: while this tab stops it, the frozen `stopping` copy. */
 function stored(rec: SessionState): SessionState {
   if (stoppingHere?.sessionId !== rec.sessionId) return rec;
-  return { ...rec, paused: true, activeMs: stoppingHere.activeMs, resumeAt: null, stopping: stoppingHere.since };
+  return { ...rec, paused: true, activeMs: stoppingHere.activeMs, resumeAt: null, stopping: stoppingHere.at };
 }
 
 /**
@@ -198,13 +203,25 @@ function stored(rec: SessionState): SessionState {
  * its Stop still drains (rrweb's last events, settled captures) lands.
  * Finishing writes the record back without the mark.
  */
-export function markStopping(sessionId: string | null, activeMs = 0): void {
+export function markStopping(sessionId: string | null, activeMs = 0, renewMs = STOPPING_RENEW_MS): void {
   const was = stoppingHere?.sessionId;
-  stoppingHere = sessionId ? { sessionId, activeMs, since: new Date().toISOString() } : null;
+  if (stoppingLease) clearInterval(stoppingLease);
+  stoppingLease = null;
+  stoppingHere = sessionId ? { sessionId, activeMs, at: new Date().toISOString() } : null;
+  // The lease: a Stop whose request hangs is still this tab's, never mistaken for a gone tab's.
+  if (sessionId) stoppingLease = setInterval(() => renewStopping(sessionId), renewMs);
   const live = getState();
   if (!live || (live.sessionId !== sessionId && live.sessionId !== was)) return;
   delete live.stopping;
   setState(live);
+}
+
+/** Re-stamp this tab's `stopping` mark while its Stop is still out. */
+function renewStopping(sessionId: string): void {
+  if (stoppingHere?.sessionId !== sessionId) return;
+  stoppingHere.at = new Date().toISOString();
+  const live = getState();
+  if (live?.sessionId === sessionId) setState(live);
 }
 
 export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
@@ -901,6 +918,8 @@ export function __dropCachesForTests(): void {
   flushBusy = false;
   tailDropped = false;
   stoppingHere = null;
+  if (stoppingLease) clearInterval(stoppingLease);
+  stoppingLease = null;
   recCache = undefined;
   bufferCache = undefined;
   chunkCache = undefined;

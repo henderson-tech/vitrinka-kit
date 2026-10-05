@@ -12,8 +12,9 @@
   milliseconds, and turn idle when the save ends. Its own tail still
   lands. A stop that keeps the session (server unreachable) hands it back
   to them as it is. Pause and resume are refused on a session another tab
-  is stopping, for up to 90 s: a mark left by a tab closed mid-stop then
-  reads as an ordinary pause.
+  is stopping. That tab renews its mark every 20 s while its Stop is out,
+  and a mark left by a tab closed mid-stop expires after 90 s into an
+  ordinary pause.
 - **"Open board" appears once the board exists.** The server builds a
   session's board after the stop, rendering stills first (30–60 s), so
   neither the create nor the done answer carried a link. The pill said
