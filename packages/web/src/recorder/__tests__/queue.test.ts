@@ -67,6 +67,24 @@ describe('queue', () => {
     expect(health().synced).toBe(true);
   });
 
+  it('recovers a note and rrweb batch still waiting for a seq lock at pagehide', async () => {
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    const storage = memoryRecorderStorage();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async () => { await new Promise<void>(() => {}); } });
+    setState(liveSession());
+    pushEvent('note', { text: 'before reload' }, ROUTE);
+    pushRRWebBatch([{ type: 3, data: { text: 'final DOM tail' } }], ROUTE);
+    persistNow();
+    __dropCachesForTests();
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async (_key, run) => { run(); } });
+    expect(await flush()).toBe(true);
+    const events = (eventsPosts()[0]?.body as { events: { kind: string; payload?: { text?: string } }[] } | undefined)?.events ?? [];
+    expect(events.some((event) => event.payload?.text === 'before reload')).toBe(true);
+    expect(stub.calls.some((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes('final DOM tail'))).toBe(true);
+  });
+
   it('marks the session dead on a permanent verdict and stops flushing', async () => {
     setState(liveSession());
     pushEvent('click', {}, ROUTE);
