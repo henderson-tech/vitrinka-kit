@@ -32,6 +32,7 @@ import {
   resetHealth,
   resetIdle,
   resetQueues,
+  runBeforeStopHooks,
   type SessionState,
   setState,
   stoppingElsewhere,
@@ -42,6 +43,7 @@ import { getRecorderStorage } from './storage';
 import { recorderPeers, registerRecorderTab, waitForRecorderPeers } from './tabs';
 
 export { currentRoute, notify, subscribe } from './state';
+export { onBeforeStop } from './queue';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
@@ -97,12 +99,6 @@ export function followOtherTabs(): () => void {
   const participant = registerRecorderTab();
   const offRec = storage.watch?.(REC_KEY, (raw) => {
     const had = getState()?.policy;
-    // Ship rrweb's sub-2s tail BEFORE adopting the other tab's paused mark.
-    // Everything already captured settles and drains before we acknowledge.
-    if (raw) {
-      const next = JSON.parse(raw) as SessionState;
-      if (next.stopping && next.sessionId === getState()?.sessionId) runBeforeStopHooks();
-    }
     const change = adoptStoredState(raw);
     if (change === 'unchanged') return;
     participant?.sync();
@@ -326,23 +322,6 @@ export function addAnnotation(
  * Hooks that run at the top of Stop, before the drain snapshot — the rrweb
  * lane ships its sub-2s tail here so the last DOM events make the session.
  */
-const beforeStopHooks = new Set<() => void>();
-
-export function onBeforeStop(fn: () => void): () => void {
-  beforeStopHooks.add(fn);
-  return () => beforeStopHooks.delete(fn);
-}
-
-function runBeforeStopHooks(): void {
-  for (const fn of beforeStopHooks) {
-    try {
-      fn();
-    } catch (e) {
-      console.warn('vitrinka: before-stop hook failed', e);
-    }
-  }
-}
-
 /**
  * Stop the session. Throws with the queued-item count when the server is
  * unreachable — the durable tail is NEVER deleted; capture freezes paused and

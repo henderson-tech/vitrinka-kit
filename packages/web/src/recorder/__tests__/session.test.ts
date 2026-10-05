@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, getState, markStopping, STOPPING_TTL_MS } from '../queue';
-import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
+import { __resetForTests, adoptStoredState, flush, getState, markStopping, pushRRWebBatch, STOPPING_TTL_MS } from '../queue';
+import { addAnnotation, addNote, followOtherTabs, onBeforeStop, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
@@ -98,6 +98,22 @@ describe('session', () => {
     await startSession();
     const named = stub.calls.filter((c) => c.path === '/api/v1/sessions' && c.method === 'POST').at(-1)!;
     expect(named.body).toMatchObject({ host: 'app.example.test', project: 'powerflow' });
+  });
+
+  it('ships the rrweb tail when an allocator observes Stop before its storage notification', async () => {
+    const storage = memoryRecorderStorage();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, withLock: async (_key, run) => { await gate; run(); } });
+    __resetForTests();
+    await startSession();
+    const off = onBeforeStop(() => pushRRWebBatch([{ type: 3, data: { text: 'tail before Stop' } }], { tabId: 'tab-1', tabHost: 'app.example.test' }));
+    storage.set('rec', JSON.stringify({ ...getState(), paused: true, stopping: new Date().toISOString() }));
+    release();
+    await flush();
+    off();
+    expect(stub.calls.some((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes('tail before Stop'))).toBe(true);
   });
 
   it('pause PATCHes the status and freezes capture', async () => {

@@ -226,6 +226,20 @@ function renewStopping(sessionId: string): void {
 
 export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
 
+const beforeStopHooks = new Set<() => void>();
+
+export function onBeforeStop(fn: () => void): () => void {
+  beforeStopHooks.add(fn);
+  return () => beforeStopHooks.delete(fn);
+}
+
+export function runBeforeStopHooks(): void {
+  for (const fn of beforeStopHooks) {
+    try { fn(); }
+    catch (error) { console.warn('vitrinka: before-stop hook failed', error); }
+  }
+}
+
 /**
  * Another document of this origin (a second tab) wrote the session record.
  * The store is shared, this cache is not — a tab that joined a recording on
@@ -246,6 +260,9 @@ export function adoptStoredState(raw: string | null): StoredChange {
     }
   }
   const cur = getState();
+  // Allocations also read storage before its notification arrives. Ship the
+  // already-captured DOM tail while the local cache still accepts it.
+  if (next?.stopping && next.sessionId === cur?.sessionId && !cur.paused) runBeforeStopHooks();
   if (!next) {
     if (!cur) return 'unchanged';
     recCache = null;
