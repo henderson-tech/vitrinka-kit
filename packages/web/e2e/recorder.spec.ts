@@ -471,6 +471,12 @@ test(`Stop from the ${stopFromSecond ? 'second' : 'first'} tab saves both tails 
   const input = other.getByPlaceholder("what's wrong / what to refine…");
   await input.fill('the other tab\'s final note');
   await input.press('Enter');
+  const markers = ['final DOM mutation in A', 'final DOM mutation in B'];
+  await Promise.all([page, other].map((tab, lane) => tab.evaluate((marker) => {
+    const text = document.createElement('span');
+    text.textContent = marker;
+    document.body.append(text);
+  }, markers[lane]!)));
   const stoppingTab = stopFromSecond ? other : page;
   await stoppingTab.getByRole('button', { name: 'Recorder controls' }).hover();
   await stoppingTab.getByRole('button', { name: 'Stop', exact: true }).click();
@@ -481,6 +487,12 @@ test(`Stop from the ${stopFromSecond ? 'second' : 'first'} tab saves both tails 
     .flatMap((call) => (call.body as { events: { kind: string; tabId: string; payload?: { text?: string } }[] }).events);
   expect(events.some((event) => event.payload?.text === 'the other tab\'s final note')).toBe(true);
   expect(new Set(events.filter((event) => event.kind === 'rrweb').map((event) => event.tabId)).size).toBe(2);
+  for (const marker of markers) {
+    const chunk = seen.slice(0, done).find((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes(marker));
+    expect(chunk, `final mutation ${marker} uploaded before done`).toBeDefined();
+    const seq = Number(new URL(chunk!.path, pageUrl).searchParams.get('seq'));
+    expect(events.some((event) => event.kind === 'rrweb' && (event as { seq?: number }).seq === seq)).toBe(true);
+  }
   await other.close();
 });
 }
