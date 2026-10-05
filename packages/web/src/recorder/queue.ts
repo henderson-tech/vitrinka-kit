@@ -262,7 +262,7 @@ export function adoptStoredState(raw: string | null): StoredChange {
   const cur = getState();
   // Allocations also read storage before its notification arrives. Ship the
   // already-captured DOM tail while the local cache still accepts it.
-  if (next?.stopping && next.sessionId === cur?.sessionId && !cur.paused) runBeforeStopHooks();
+  if (next?.stopping && next.sessionId === cur?.sessionId && !cur.paused && stoppingHere?.sessionId !== next.sessionId) runBeforeStopHooks();
   if (!next) {
     if (!cur) return 'unchanged';
     recCache = null;

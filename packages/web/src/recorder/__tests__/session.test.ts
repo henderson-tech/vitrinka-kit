@@ -88,11 +88,15 @@ describe('session', () => {
     __resetForTests();
     await startSession();
     addNote('captured before Stop');
+    let hooks = 0;
+    const off = onBeforeStop(() => { hooks++; });
     const stopping = stopSession();
     await Bun.sleep(1);
     expect(stub.calls.some((call) => call.method === 'PATCH')).toBe(false);
     release();
     await stopping;
+    off();
+    expect(hooks).toBe(1);
     const events = (stub.calls.find((call) => call.path.endsWith('/events'))!.body as {
       events: { seq: number; payload: { text?: string } }[];
     }).events;
