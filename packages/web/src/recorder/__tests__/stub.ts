@@ -27,7 +27,7 @@ export interface Stub {
   calls: Call[];
   /** Scripted outcomes per route family; consumed in order, then ok. */
   script: { events: Outcome[]; chunks: Outcome[]; sessions: Outcome[]; patch: Outcome[] };
-  /** When set, events POSTs park here until released. */
+  /** When set, events POSTs and chunk uploads park here until released. */
   gate: Promise<void> | null;
   restore: () => void;
 }
@@ -85,6 +85,7 @@ export function installStub(): Stub {
       return answer(stub.script.events.shift(), {});
     }
     if (path.includes('/chunk?seq=')) {
+      if (stub.gate) await stub.gate;
       const seq = path.split('seq=')[1];
       return answer(stub.script.chunks.shift(), { blobKey: `blob-${seq}` });
     }

@@ -13,11 +13,13 @@ import {
   flush,
   getState,
   health,
+  persistNow,
   pushEvent,
   pushRRWebBatch,
   setState,
   splitRRWebEvents,
 } from '../queue';
+import { getRecorderStorage } from '../storage';
 import { freshRecorder, installStub, liveSession, ROUTE, type Stub } from './stub';
 
 let stub: Stub;
@@ -130,7 +132,49 @@ describe('queue', () => {
     expect(adoptStoredState(null)).toBe('ended');
     expect(getState()).toBeNull();
     expect(__bufferForTests()).toHaveLength(0);
+    // What the other tab still stores is its own: this tab's pagehide never overwrites it.
+    getRecorderStorage().set('buffer', '[{"seq":9}]');
+    persistNow();
+    expect(getRecorderStorage().getString('buffer')).toBe('[{"seq":9}]');
     expect(adoptStoredState(null)).toBe('unchanged');
+  });
+
+  it('an upload out when another tab ends or replaces the session brings none of it back', async () => {
+    let release = () => {};
+    const hold = () => {
+      stub.gate = new Promise<void>((r) => {
+        release = r;
+      });
+    };
+    const until = async (seen: () => boolean) => {
+      while (!seen()) await Bun.sleep(1);
+    };
+    // A chunk upload is out when another tab stops sess-1 and starts sess-2, which this tab follows.
+    setState(liveSession());
+    pushRRWebBatch([{ type: 4 }], ROUTE);
+    hold();
+    const first = flush();
+    await until(() => stub.calls.some((c) => c.path.includes('/sess-1/chunk')));
+    adoptStoredState(null);
+    adoptStoredState(JSON.stringify({ ...liveSession(), sessionId: 'sess-2' }));
+    pushEvent('click', {}, ROUTE); // sess-2 seq 1
+    stub.gate = null;
+    release();
+    await first;
+    expect(eventsPosts().map((c) => c.path)).toEqual(['/api/v1/sessions/sess-2/events']);
+    expect(batchSeqs(eventsPosts()[0]!)).toEqual([1]);
+    // An events POST is out when another tab replaces sess-2 with sess-3, whose seqs reach the same numbers.
+    pushEvent('click', {}, ROUTE); // sess-2 seq 2
+    hold();
+    const second = flush();
+    await until(() => eventsPosts().length === 2);
+    adoptStoredState(JSON.stringify({ ...liveSession(), sessionId: 'sess-3', seq: 1 }));
+    pushEvent('click', {}, ROUTE); // sess-3 seq 2
+    stub.gate = null;
+    release();
+    await second;
+    expect(__bufferForTests()).toEqual([expect.objectContaining({ seq: 2, kind: 'click' })]);
+    expect(getState()).toMatchObject({ sessionId: 'sess-3' });
   });
 
   it('splits rrweb batches under the pack margin and reports the undeliverable', () => {

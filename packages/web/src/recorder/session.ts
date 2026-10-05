@@ -91,6 +91,7 @@ export function recoverRedactionPolicy(): void {
 export function followOtherTabs(): () => void {
   const storage = getRecorderStorage();
   const offRec = storage.watch?.(REC_KEY, (raw) => {
+    const had = getState()?.policy;
     const change = adoptStoredState(raw);
     if (change === 'unchanged') return;
     if (change === 'ended') setRedactionPolicy(null);
@@ -98,6 +99,10 @@ export function followOtherTabs(): () => void {
       recoverRedactionPolicy();
       armReconcile();
     }
+    // The starting tab writes the workspace policy after its first record:
+    // its rules apply here the moment they arrive.
+    const policy = getState()?.policy;
+    if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
     notify();
   });
   const offRecents = storage.watch?.(RECENTS_KEY, forgetRecents);
@@ -345,7 +350,9 @@ export async function stopSession(): Promise<SessionDone | null> {
     console.warn('vitrinka: stopping with unsettled captures — a late event may not make this session');
   }
   if (!(await drainBuffer())) {
-    const held = getState();
+    const live = getState();
+    // Another tab may have moved on to a session of its own meanwhile — never this stop's to hold.
+    const held = live?.sessionId === rec.sessionId ? live : null;
     if (held?.dead) completeDeadStop(held.deadReason);
     if (held && !held.paused) {
       held.activeMs = elapsedOf(held);
@@ -372,9 +379,13 @@ export async function stopSession(): Promise<SessionDone | null> {
   // A permanent refusal still ends the recording locally, but it was not saved.
   const boardUrl = done?.board?.url ?? rec.boardUrl;
   updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
-  setState(null);
-  setRedactionPolicy(null);
-  resetQueues();
+  // Another tab may have ended this session or started the next one while
+  // the stop was out: the state and the queues are then not this stop's to clear.
+  if (getState()?.sessionId === rec.sessionId) {
+    setState(null);
+    setRedactionPolicy(null);
+    resetQueues();
+  }
   notify();
   return done;
 }

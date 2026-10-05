@@ -5,11 +5,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { getState } from '../queue';
-import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
+import { __resetForTests, adoptStoredState, getState } from '../queue';
+import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
-import { BASE, fakeLocation, freshRecorder, installStub, type Stub } from './stub';
+import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../storage';
+import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
 
@@ -81,6 +83,46 @@ describe('session', () => {
     addNote('dropped');
     expect(await togglePause()).toBe(false);
     expect(stub.calls.at(-1)?.body).toEqual({ status: 'recording' });
+  });
+
+  it('follows another tab through the shared store: joins its recording, applies the policy written after it, ends with its Stop', () => {
+    const shared = memoryRecorderStorage();
+    const watchers = new Map<string, (value: string | null) => void>();
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...shared,
+      watch: (key, onChange) => {
+        watchers.set(key, onChange);
+        return () => void watchers.delete(key);
+      },
+    });
+    __resetForTests();
+    const otherTab = (key: string, value: string | null) => {
+      if (value === null) shared.remove(key);
+      else shared.set(key, value);
+      watchers.get(key)?.(value);
+    };
+    const unfollow = followOtherTabs();
+    const started = { ...liveSession(), sessionId: 'sess-9', seq: 1 };
+    otherTab('rec', JSON.stringify(started));
+    expect(getState()?.sessionId).toBe('sess-9');
+    // The starting tab writes the workspace policy only after its first record.
+    otherTab('rec', JSON.stringify({ ...started, seq: 2, policy: { patterns: ['acme_[0-9]+'] } }));
+    expect(currentRules().patterns.map(String)).toContain('/acme_[0-9]+/g');
+    otherTab('rec', null);
+    expect(getState()).toBeNull();
+    expect(currentRules().patterns.map(String)).not.toContain('/acme_[0-9]+/g');
+    unfollow();
+  });
+
+  it('a Stop that finishes after another tab moved on to a new session leaves that session running', async () => {
+    await startSession();
+    const stopping = stopSession();
+    // While the stop drains, another tab starts sess-2 and this tab follows it.
+    adoptStoredState(JSON.stringify({ ...liveSession(), sessionId: 'sess-2' }));
+    await stopping;
+    expect(stub.calls.find((c) => c.method === 'PATCH')?.path).toBe('/api/v1/sessions/sess-1');
+    expect(getState()?.sessionId).toBe('sess-2');
   });
 
   it('refuses to stop while the server is unreachable and keeps the tail', async () => {
