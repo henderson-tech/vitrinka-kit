@@ -106,11 +106,13 @@ function renderWrapping(h) {
 
 async function renderBoard() {
   const { awaiting, lastBoard } = await chrome.storage.local.get(["awaiting", "lastBoard"]);
-  if (awaiting) {
+  // The newest of the boards still being built (an 0.9.3 worker stored one object).
+  const wait = [].concat(awaiting || []).pop();
+  if (wait) {
     show("boardPanel", true);
     show("boardOpen", false);
     $("boardState").textContent = "Board building…";
-    $("boardMeta").textContent = `${Math.round((Date.now() - awaiting.since) / 1000)}s`;
+    $("boardMeta").textContent = `${Math.round((Date.now() - wait.since) / 1000)}s`;
     return true; // still building — keep polling
   }
   if (lastBoard) {

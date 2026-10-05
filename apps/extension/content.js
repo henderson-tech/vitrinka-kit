@@ -706,18 +706,11 @@
       adoptHud(await send({ type: "vt-hud" }));
       const done = r.done;
       if (!done) throw new Error("the server refused to close this session — it ended locally, not saved");
-      let boardUrl = done.boardUrl || (done.board && done.board.url) || boardBefore;
-      // A session closed before its first live tick has no board yet: the
-      // worker learns the link once it is built (announceBoard → recents).
-      // Saving… waits a few seconds for it, so Saved can open the board.
-      for (let i = 0; !boardUrl && i < 8; i++) {
-        await new Promise((res) => setTimeout(res, 500));
-        const h = await send({ type: "vt-hud" });
-        adoptHud(h);
-        const mine = h && Array.isArray(h.recents) && h.recents.find((x) => x.sessionId === sessionId);
-        boardUrl = (mine && mine.boardUrl) || "";
-      }
-      return boardUrl ? { boardUrl } : {};
+      const boardUrl = done.boardUrl || (done.board && done.board.url) || boardBefore;
+      // The server builds the board after the stop (stills first, 30–60 s),
+      // so Saved rarely has it yet: `sessionId` names the recent whose link
+      // the face takes once the worker's board wait (D11) announces it.
+      return { ...(boardUrl ? { boardUrl } : {}), ...(sessionId ? { sessionId } : {}) };
     },
     note(text) { send({ type: "vt-note", payload: { text, route: location.pathname } }); },
     annotate({ text, rect, selector, task }) {
