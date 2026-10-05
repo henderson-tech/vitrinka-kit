@@ -497,6 +497,36 @@ test(`Stop from the ${stopFromSecond ? 'second' : 'first'} tab saves both tails 
 });
 }
 
+test('a departing tab leaves a recoverable note and DOM tail while the seq lock is held', async ({ page, context }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const other = await context.newPage();
+  await other.goto(`${pageUrl}/`);
+  await page.evaluate(() => {
+    const state = window as Window & { __held?: boolean; __release?: () => void };
+    void navigator.locks.request('vitrinka.recorder.seq', () => new Promise<void>((resolve) => { state.__held = true; state.__release = resolve; }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as Window & { __held?: boolean }).__held)).toBe(true);
+  await other.evaluate(() => {
+    const recorder = (window as Window & { __vitrinkaRecorder?: RecorderControl }).__vitrinkaRecorder!;
+    recorder.note('departed tab final note');
+    const tail = document.createElement('span');
+    tail.textContent = 'departed tab final DOM';
+    document.body.append(tail);
+  });
+  await other.goto('about:blank');
+  await page.evaluate(() => (window as Window & { __release?: () => void }).__release!());
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.locator('[data-e2e="saved"]')).toBeVisible();
+  const done = seen.findIndex((call) => call.method === 'PATCH' && (call.body as { status?: string })?.status === 'done');
+  expect(seen.slice(0, done).some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('departed tab final note'))).toBe(true);
+  expect(seen.slice(0, done).some((call) => call.path.includes('/chunk?seq=') && JSON.stringify(call.body).includes('departed tab final DOM'))).toBe(true);
+  await other.close();
+});
+
 test('a second tab follows the shared recording: it joins on load and goes idle when the first tab stops it', async ({ page }) => {
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();

@@ -381,6 +381,7 @@ function setChunks(chunks: PendingChunk[]): void {
 
 export function queuedCount(): number {
   recoverAllocations();
+  pruneAcknowledgedCaptures();
   return getBuffer().length + getChunks().length + pendingAllocations.size;
 }
 
@@ -544,7 +545,7 @@ const pendingAllocations = new Set<PendingAllocation>();
 const MAX_ALLOCATION_BYTES = 16 * 1024 * 1024;
 let allocationBytes = 0;
 let allocationChunks = 0;
-const allocatedCaptures = new Map<string, { sessionId: string; seq: number }>();
+const allocatedCaptures = new Map<string, { sessionId: string; seq: number; persisted: boolean }>();
 let allocationsRecovered = false;
 let allocationBusy: Promise<void> | null = null;
 
@@ -622,6 +623,20 @@ function clearStoredCaptures(sessionId: string, seqs: ReadonlySet<number>): void
   }
 }
 
+/** Helpers remove a journal only after ack; the original tab may still cache its retry. */
+function pruneAcknowledgedCaptures(): void {
+  const delivered = new Set<number>();
+  for (const [key, item] of allocatedCaptures) {
+    if (item.persisted && !kv().getString(key)) {
+      delivered.add(item.seq);
+      allocatedCaptures.delete(key);
+    }
+  }
+  if (!delivered.size) return;
+  setBuffer(getBuffer().filter((event) => !delivered.has(event.seq)));
+  setChunks(getChunks().filter((chunk) => !delivered.has(chunk.seq)));
+}
+
 /** A departing document can be acknowledged by a helper only with a full journal. */
 export function tailIsDurable(): boolean {
   if (!kv().keys) return false;
@@ -653,7 +668,7 @@ function allocatePending(): Promise<void> {
         // Keep the payload AND its identity until the server acknowledges it.
         // A recovering document reuses this seq even when the old tab is alive.
         if (item.persisted) storage.set(item.key, JSON.stringify({ draft: item.draft, seq }));
-        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seq });
+        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seq, persisted: item.persisted });
         appendCapture(item.draft, seq);
         removeAllocation(item);
       });
@@ -901,6 +916,7 @@ async function drainPending(limit = 5): Promise<boolean> {
       if (movedOn(rec)) return getChunks().length === 0;
       if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
         console.warn(`vitrinka: rrweb chunk seq ${item.seq} rejected permanently (${e.status}) — dropped`);
+        clearStoredCaptures(item.sessionId, new Set([item.seq]));
         gone.add(item.seq);
         continue;
       }
@@ -972,6 +988,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
     batchBytes += b;
   }
   if (oversized.size) {
+    clearStoredCaptures(rec.sessionId, oversized);
     setBuffer(getBuffer().filter((ev) => !oversized.has(ev.seq)));
     if (!batch.length) {
       scheduleFlush();

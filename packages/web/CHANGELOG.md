@@ -8,10 +8,17 @@
   policy and Stop writes from rewinding the counter. Stop settles queued
   allocations before draining; failed allocations stay queued for retry.
   Shared custom storage drivers implement `withLock(name, run)`.
+  Accepted payloads are journaled before the async lock and retain the same
+  identity until server acknowledgement; reloads and surviving tabs can
+  recover them. Pending allocation memory is bounded to 16 MiB.
 - **Stop saves every open tab's tail before closing the session.** Mounted
   tabs acknowledge only after their last rrweb batch and pending captures
   have drained. A sibling that cannot save refuses the Stop instead of
   losing its last notes. Shared drivers expose `keys()` alongside `watch()`.
+  A departing tab leaves an unsaved marker instead of falsely acknowledging
+  delivery; a surviving tab can recover a durable tail. Back-forward cache
+  returns restore participant registration. Every path observing Stop ships
+  the last DOM batch before pausing its local cache.
 - The sync indicator uses the highest acknowledged seq even when an rrweb
   chunk's delayed event row appears last in the upload batch.
 
