@@ -539,11 +539,34 @@ type CaptureDraft = { sessionId: string; ts: string; tabId: string; tabHost: str
   | { kind: 'chunk'; part: { count: number; body: string } }
 );
 interface StoredAllocation { draft: CaptureDraft; seq?: number }
-interface PendingAllocation extends StoredAllocation { key: string; persisted: boolean }
+interface PendingAllocation extends StoredAllocation { key: string; persisted: boolean; bytes: number }
 const pendingAllocations = new Set<PendingAllocation>();
+const MAX_ALLOCATION_BYTES = 16 * 1024 * 1024;
+let allocationBytes = 0;
+let allocationChunks = 0;
 const allocatedCaptures = new Map<string, { sessionId: string; seq: number }>();
 let allocationsRecovered = false;
 let allocationBusy: Promise<void> | null = null;
+
+function removeAllocation(item: PendingAllocation): void {
+  if (!pendingAllocations.delete(item)) return;
+  allocationBytes -= item.bytes;
+  if (item.draft.kind === 'chunk') allocationChunks--;
+}
+
+function addAllocation(item: PendingAllocation): void {
+  pendingAllocations.add(item);
+  allocationBytes += item.bytes;
+  if (item.draft.kind === 'chunk') allocationChunks++;
+  while (pendingAllocations.size > MAX_BUFFER || allocationBytes > MAX_ALLOCATION_BYTES || allocationChunks > MAX_PENDING) {
+    const oldest = pendingAllocations.values().next().value!;
+    removeAllocation(oldest);
+    kv().remove(oldest.key);
+    const error = new Error('vitrinka: pending allocation budget full — oldest capture dropped');
+    noteFailure(error);
+    console.warn(error.message);
+  }
+}
 
 /** Journals survive pagehide and are safe for another document to help drain. */
 function recoverAllocations(): void {
@@ -554,7 +577,7 @@ function recoverAllocations(): void {
   for (const key of storage.keys?.() ?? []) {
     if (!key.startsWith(ALLOCATION_PREFIX)) continue;
     const item = readJson<StoredAllocation | null>(key, null);
-    if (item?.draft?.sessionId === getState()?.sessionId) pendingAllocations.add({ ...item, key, persisted: true });
+    if (item && item.draft && item.draft.sessionId === getState()?.sessionId) addAllocation({ ...item, key, persisted: true, bytes: utf8Bytes(JSON.stringify(item)) });
   }
 }
 
@@ -605,11 +628,11 @@ function allocatePending(): Promise<void> {
         if (item.persisted) {
           const saved = readJson<StoredAllocation | null>(item.key, null);
           // Another tab already delivered this journal; never allocate it twice.
-          if (!saved) { pendingAllocations.delete(item); return; }
+          if (!saved) { removeAllocation(item); return; }
           item.seq = saved.seq;
         }
         adoptStoredState(storage.getString(REC_KEY) ?? null);
-        if (getState()?.sessionId !== item.draft.sessionId) { pendingAllocations.delete(item); return; }
+        if (getState()?.sessionId !== item.draft.sessionId) { removeAllocation(item); return; }
         const seq = item.seq ?? allocSeq(1)?.seq;
         if (seq === undefined) return;
         item.seq = seq;
@@ -618,7 +641,7 @@ function allocatePending(): Promise<void> {
         if (item.persisted) storage.set(item.key, JSON.stringify({ draft: item.draft, seq }));
         allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seq });
         appendCapture(item.draft, seq);
-        pendingAllocations.delete(item);
+        removeAllocation(item);
       });
     }
   }).catch((error: unknown) => {
@@ -638,8 +661,9 @@ function queueCapture(draft: CaptureDraft): boolean {
   recoverAllocations();
   if (kv().withLock) {
     const key = `${ALLOCATION_PREFIX}${RECORDER_DOCUMENT_KEY}.${++captureNo}`;
-    const item: PendingAllocation = { key, draft, persisted: safeSet(key, JSON.stringify({ draft })) };
-    pendingAllocations.add(item);
+    const raw = JSON.stringify({ draft });
+    const item: PendingAllocation = { key, draft, persisted: safeSet(key, raw), bytes: utf8Bytes(raw) };
+    addAllocation(item);
     void allocatePending();
   } else {
     const allocation = allocSeq(1);
@@ -990,6 +1014,7 @@ export function resetQueues(): void {
   for (const item of pendingAllocations) kv().remove(item.key);
   allocatedCaptures.clear();
   pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
   setBuffer([]);
   setChunks([]);
 }
@@ -1007,6 +1032,7 @@ function dropLocalTail(): void {
   chunkCache = [];
   chunkBytes = 0;
   pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
   allocatedCaptures.clear();
   tailDropped = true;
 }
@@ -1036,6 +1062,7 @@ export function __chunksForTests(): { seq: number; count: number; sessionId: str
 /** Test-only: drop the in-memory caches while LEAVING storage intact (a reload). */
 export function __dropCachesForTests(): void {
   pendingAllocations.clear();
+  allocationBytes = allocationChunks = 0;
   allocatedCaptures.clear();
   allocationsRecovered = false;
   allocationBusy = null;

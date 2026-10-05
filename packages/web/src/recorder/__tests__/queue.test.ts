@@ -98,6 +98,16 @@ describe('queue', () => {
     expect(pushEvent('click', {}, ROUTE)).toBeNull();
   });
 
+  it('bounds payloads awaiting a stuck allocator by bytes', async () => {
+    const { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } = await import('../storage');
+    __resetStorageForTests();
+    configureRecorderStorage({ ...memoryRecorderStorage(), withLock: async () => { await new Promise<void>(() => {}); } });
+    setState(liveSession());
+    for (let i = 0; i < 64; i++) pushEvent('note', { text: 'x'.repeat(512 * 1024) }, ROUTE);
+    expect(health().queued).toBeGreaterThan(0);
+    expect(health().queued).toBeLessThanOrEqual(32);
+  });
+
   it('drops events while paused and when no session is live', () => {
     expect(pushEvent('click', {}, ROUTE)).toBeNull();
     setState(liveSession(true));
