@@ -1454,7 +1454,8 @@ async function continueSession(sessionId) {
 // drained with visible progress, and the session is closed. The BOARD is not
 // waited for — the server builds it on a worker and the recorder learns it is
 // ready by polling (D11), so Stop and Show-board are separate acts (D3).
-async function stopSession() {
+// `pill` ({tabId, token}) is the HUD instance that asked, told the link later.
+async function stopSession(pill = null) {
   const rec = await withLock(async () => {
     const current = await getState();
     if (current && !current.stopping) {
@@ -1527,7 +1528,7 @@ async function stopSession() {
   });
   // D3: the board is a separate, deliberate act. Watch for it to be ready and
   // tell the tester when it is — never steal focus with a tab.
-  if (done) await watchForBoard(sessionId, title, done, scope, Object.keys(rec.tabs || {}));
+  if (done) await watchForBoard(sessionId, title, done, scope, pill);
   return done;
 }
 
@@ -1579,11 +1580,12 @@ async function togglePause() {
 
 // One wait per stop whose board is not built yet, oldest first, stored as
 // `awaiting` (absent when none, so its readers stay truthiness checks):
-// {sessionId, title, since, scope, tabs}. The scope is the session's own —
+// {sessionId, title, since, scope, pill}. The scope is the session's own —
 // the rec is gone by now, and the configured base/workspace may change
-// before the board is built; the tabs are where its pill says "Saved · in
-// Recents" until the announced link reaches it. A later Stop adds a wait and
-// never replaces an earlier one, whose pill would otherwise wait for good.
+// before the board is built; the pill ({tabId, token}, null for a popup
+// Stop) is the HUD instance saying "Saved · in Recents" until the announced
+// link reaches it. A later Stop adds a wait and never replaces an earlier
+// one, whose pill would otherwise wait for good.
 // An 0.9.3 worker stored one object: it reads as a list of one.
 const waitsOf = (awaiting) => (Array.isArray(awaiting) ? awaiting : awaiting ? [awaiting] : []);
 const waitKey = (wait) => scopeKey(wait.scope || {}, String(wait.sessionId));
@@ -1603,8 +1605,8 @@ function editWaits(edit) {
 }
 const dropWait = (wait) => editWaits((waits) => waits.filter((w) => waitKey(w) !== waitKey(wait)));
 
-async function watchForBoard(sessionId, title, initial, scope, tabs) {
-  const wait = { sessionId, title, since: Date.now(), scope, tabs };
+async function watchForBoard(sessionId, title, initial, scope, pill) {
+  const wait = { sessionId, title, since: Date.now(), scope, pill };
   await editWaits((waits) => [...waits.filter((w) => waitKey(w) !== waitKey(wait)), wait]);
   chrome.alarms.create("vt-board-ready", { periodInMinutes: 0.5 });
   if (initial && initial.projection && initial.projection.state === "ready") {
@@ -1663,10 +1665,13 @@ async function announceBoard(ses, wait) {
     sessionId: ses.id, title: wait.title || ses.title, url, at: Date.now(),
   } });
   if (url && wait.scope) await updateRecent(wait.scope, String(ses.id), { boardUrl: url, status: "saved" });
-  // That write repainted only a live recording's tabs: the stopping pill turns
-  // "in Recents" into Open board when it hears the recent's link, listed in
-  // the session's own workspace whatever the HUD's scope is by now.
-  if (url && wait.tabs) await broadcastHud(wait.tabs, wait.scope);
+  // That write repainted only a live recording's tabs. The stopping pill
+  // turns "in Recents" into Open board when told — that instance alone, by
+  // its token: a Start in its tab since injected a new one, whose Saved face
+  // must never take this session's link (#N repeats across workspaces).
+  if (url && wait.pill) {
+    chrome.tabs.sendMessage(wait.pill.tabId, { type: "vt-board", hud: wait.pill.token, sessionId: String(ses.id), boardUrl: url }).catch(() => {});
+  }
   notify("Board ready", `${wait.title || ses.title} — click to open`, url);
 }
 
@@ -2000,12 +2005,11 @@ async function hudScope(recents, hudMe) {
   };
 }
 
-// `pinned` answers for one base + workspace instead (a board wait's own scope).
-async function hudState(pinned) {
+async function hudState() {
   const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
   const recents = await storedRecents();
   const hudMe = await currentMe();
-  const scope = pinned || await hudScope(recents, hudMe);
+  const scope = await hudScope(recents, hudMe);
   const rec = await getState();
   return {
     base: scope.base,
@@ -2018,14 +2022,12 @@ async function hudState(pinned) {
 }
 
 // Every recorded tab repaints from the new state; a tab whose session just
-// ended asks again itself (its menu refreshes on open), unless named in
-// `tabIds` (a board wait's own tabs, answered in its `scope`).
-async function broadcastHud(tabIds, scope) {
+// ended asks again itself (its menu refreshes on open).
+async function broadcastHud() {
   const rec = await getState();
-  const tabs = tabIds || Object.keys((rec && rec.tabs) || {});
-  if (!tabs.length) return;
-  const hud = await hudState(scope);
-  for (const tabId of tabs) {
+  if (!rec) return;
+  const hud = await hudState();
+  for (const tabId of Object.keys(rec.tabs || {})) {
     chrome.tabs.sendMessage(Number(tabId), { type: "vt-hud", hud }).catch(() => {});
   }
 }
@@ -2346,7 +2348,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try { return sendResponse({ ok: true, session: await startSession(msg.title) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-stop":
-        try { return sendResponse({ ok: true, done: await stopSession() }); }
+        try { return sendResponse({ ok: true, done: await stopSession(sender.tab && msg.hud ? { tabId: sender.tab.id, token: String(msg.hud) } : null) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-pause":
         return sendResponse({ ok: true, paused: await togglePause() });

@@ -608,6 +608,12 @@
   // True while THIS tab's HUD stops the session: the vt-stop the worker sends
   // every recorded tab then ends capture here but keeps the HUD for "Saved".
   let stoppingHere = false;
+  // This instance, to the worker: a board named after its Stop is told to it
+  // alone (vt-board), never to a later instance a new Start put in this tab.
+  const hudToken = crypto.randomUUID();
+  // The session this pill stopped ({recent, boardUrl}), whose board link the
+  // Saved face takes from its recent once vt-board names it.
+  let saved = null;
 
   const adoptRec = (rec, elapsedMs) => {
     live = rec ? {
@@ -644,6 +650,16 @@
       };
     }
     const ws = hud.workspace;
+    let recents = hud.recents.slice(0, 5);
+    // The board named after this pill's Stop rides on that session's recent,
+    // leading the list when the HUD's scope has moved on: the Saved face finds
+    // its recent by id alone, and #N repeats across workspaces.
+    if (saved && saved.boardUrl) {
+      const own = (r) => r.sessionId === saved.recent.sessionId && r.base === saved.recent.base && r.workspace === saved.recent.workspace;
+      recents = recents.some(own)
+        ? recents.map((r) => (own(r) ? { ...r, boardUrl: saved.boardUrl } : r))
+        : [{ ...saved.recent, status: "saved", boardUrl: saved.boardUrl }, ...recents].slice(0, 5);
+    }
     return {
       linked: !!hud.base,
       canUnlink: false,
@@ -652,7 +668,7 @@
       account: hud.account,
       prefs: hud.prefs,
       // A "recording" that is not the live session was never stopped.
-      recents: hud.recents.slice(0, 5).map(({ base: _base, workspace: _ws, ...r }) =>
+      recents: recents.map(({ base: _base, workspace: _ws, ...r }) =>
         r.status === "recording" && r.sessionId !== hud.live ? { ...r, status: "unsaved" } : r),
       workspaceUrl: hud.base ? (ws ? `${hud.base}/w/${encodeURIComponent(ws)}` : hud.base) : "",
       version: VERSION,
@@ -697,19 +713,31 @@
       stoppingHere = true;
       const boardBefore = snap.recording && snap.recording.boardUrl;
       const sessionId = snap.recording && snap.recording.sessionId;
+      // Its recent as the live HUD lists it (the session's own base + workspace).
+      const recent = hud.recents.find((x) => x.sessionId === sessionId)
+        || { base: hud.base, workspace: hud.workspace, sessionId, title: (snap.recording && snap.recording.title) || "", startedAt: Date.now() };
+      // Expected before the stop goes out: the worker may announce the board
+      // while the stop's answer is still on its way.
+      saved = sessionId ? { recent, boardUrl: "" } : null;
       let r;
-      try { r = await send({ type: "vt-stop" }); } finally { stoppingHere = false; }
-      if (!r || !r.ok) throw fail(r, "the recorder did not answer — try again"); // the session is kept
+      try { r = await send({ type: "vt-stop", hud: hudToken }); } finally { stoppingHere = false; }
+      if (!r || !r.ok) {
+        saved = null;
+        throw fail(r, "the recorder did not answer — try again"); // the session is kept
+      }
       live = null; health = null;
       self.live = false;
       changed();
       adoptHud(await send({ type: "vt-hud" }));
       const done = r.done;
-      if (!done) throw new Error("the server refused to close this session — it ended locally, not saved");
+      if (!done) {
+        saved = null;
+        throw new Error("the server refused to close this session — it ended locally, not saved");
+      }
       const boardUrl = done.boardUrl || (done.board && done.board.url) || boardBefore;
       // The server builds the board after the stop (stills first, 30–60 s),
       // so Saved rarely has it yet: `sessionId` names the recent whose link
-      // the face takes once the worker's board wait (D11) announces it.
+      // the face takes once the worker's board wait (D11) tells this pill.
       return { ...(boardUrl ? { boardUrl } : {}), ...(sessionId ? { sessionId } : {}) };
     },
     note(text) { send({ type: "vt-note", payload: { text, route: location.pathname } }); },
@@ -777,6 +805,12 @@
     }
     else if (msg.type === "vt-health") adoptHealth(msg.health);
     else if (msg.type === "vt-hud") adoptHud(msg.hud);
+    else if (msg.type === "vt-board") {
+      // Only for the session this very instance stopped.
+      if (!saved || msg.hud !== hudToken || msg.sessionId !== saved.recent.sessionId || !msg.boardUrl) return;
+      saved = { ...saved, boardUrl: String(msg.boardUrl) };
+      changed();
+    }
     else if (msg.type === "vt-pair") renderPair(msg.pair);
     else if (msg.type === "vt-pair-frame") applyPairFrame(msg.frame);
     else if (msg.type === "vt-stop") {
