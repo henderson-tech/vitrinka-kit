@@ -186,8 +186,8 @@ manual banner — download, unzip over the folder, ↻.
 | notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation, and an intake draft too when the tester picks `task` |
 
 Capture is **redacted by default** via the shared
-[`@vitrinka/redact`](../../packages/redact) engine (`vendor/redact.js`, a
-generated copy CI keeps in sync): auth-bearing header values, sensitive
+[`@vitrinka/redact`](https://github.com/henderson-tech/vitrinka-kit/tree/main/packages/redact)
+engine (`vendor/redact.js`, generated from Kit's `packages/redact/src/index.ts`): auth-bearing header values, sensitive
 JSON/form/multipart body keys, URL query/fragment secrets, and console text
 are scrubbed before storage, and rrweb records with input values masked.
 Click labels respect that masking and `.rr-mask` / `.rr-block` regions.
@@ -201,6 +201,21 @@ Under `maskAllText`, screenshots are reduced to 96px wide (layout visible,
 text unreadable); a frame that cannot be downscaled is dropped, never stored
 raw. The vitrinka server re-applies the same redaction at ingest as a backstop.
 Even so: record only against environments you own.
+
+### Source and generation
+
+The product repo `vitrinka` owns canonical `apps/extension`; its
+`tools/export-kit` exports every tracked extension file into `vitrinka-kit`,
+including the vendor and focused tests. The shared engine is authored in Kit,
+never in the vendored file: in a Kit worktree run
+`bun run --filter @vitrinka/redact build:vendor`, then copy
+`packages/redact/dist/redact.vendor.js` to the product worktree's
+`apps/extension/vendor/redact.js`. Kit's generation gate checks those bytes.
+Stage new extension files in the product worktree before exporting (the
+exporter reads `git ls-files`), then from that worktree run
+`go run ./tools/export-kit -kit <kit-worktree> -only extension`;
+add `-check` to check extension-only drift without touching plugin output.
+`bun run test:extension` runs the content and worker policy/capture tests.
 
 ## Known limits
 
