@@ -187,7 +187,7 @@ to omit a blocked node, so the replay keeps a placeholder of the host's size.
 The host is 0×0, so that placeholder is empty. rrweb skips mouse interactions
 on blocked nodes. The click lane ignores the HUD. The network lane skips the
 recorder's own requests to the configured server (session doors,
-`/recorder/me`, the recents' session reads). The console lane skips the
+`/recorder/me`, the session reads that fill the recents' and the Saved face's board link). The console lane skips the
 recorder's `vitrinka:`-prefixed logs.
 
 The HUD sends nothing beyond the routes above. `/recorder/me` carries the

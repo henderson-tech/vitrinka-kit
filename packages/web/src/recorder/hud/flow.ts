@@ -21,7 +21,8 @@ export type Flow =
   | { face: 'confirm'; action: ConfirmAction }
   /** `total` = items queued when the save began (0 = nothing to drain). */
   | { face: 'saving'; total: number; report?: true }
-  | { face: 'saved'; boardUrl?: string; report?: true }
+  /** `sessionId` lets a face saved before its board existed take the link from recents. */
+  | { face: 'saved'; boardUrl?: string; sessionId?: string; report?: true }
   | { face: 'failed'; message: string; report?: true };
 
 export type FlowEvent =
@@ -31,7 +32,7 @@ export type FlowEvent =
   /** A bug report went out (idle: its own short session). */
   | { type: 'send' }
   | { type: 'retry'; queued: number }
-  | { type: 'saved'; boardUrl?: string }
+  | { type: 'saved'; boardUrl?: string; sessionId?: string }
   | { type: 'failed'; message: string }
   | { type: 'dismiss' };
 
@@ -57,7 +58,12 @@ export function flowReducer(flow: Flow, ev: FlowEvent): Flow {
       return flow.face === 'failed' ? { face: 'saving', total: ev.queued, ...reportOf(flow) } : flow;
     case 'saved':
       return flow.face === 'saving'
-        ? { face: 'saved', ...(ev.boardUrl ? { boardUrl: ev.boardUrl } : {}), ...reportOf(flow) }
+        ? {
+            face: 'saved',
+            ...(ev.boardUrl ? { boardUrl: ev.boardUrl } : {}),
+            ...(ev.sessionId ? { sessionId: ev.sessionId } : {}),
+            ...reportOf(flow),
+          }
         : flow;
     case 'failed':
       return flow.face === 'saving' ? { face: 'failed', message: ev.message, ...reportOf(flow) } : flow;

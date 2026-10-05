@@ -71,8 +71,16 @@ export interface SessionReconcileResponse {
   deletedAt?: string | null;
 }
 
-/** PATCH response when a session completes (board projection). */
+/**
+ * PATCH response when a session completes. The board is projected AFTER the
+ * stop, so `boardUrl` is usually absent here: `projection` says how far it
+ * got, and the session read names the board once it exists.
+ */
 export interface SessionDone {
   boardSlug?: string;
+  /** The board's address, minted by the server; only once the board exists. */
+  boardUrl?: string;
+  /** An older server's spelling of `boardUrl`. */
   board?: { url?: string };
+  projection?: { state?: string };
 }

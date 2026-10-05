@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, getState } from '../queue';
+import { __resetForTests, adoptStoredState, getState, markStopping, STOPPING_TTL_MS } from '../queue';
 import { addAnnotation, addNote, followOtherTabs, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
-import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../storage';
+import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
@@ -123,6 +123,46 @@ describe('session', () => {
     await stopping;
     expect(stub.calls.find((c) => c.method === 'PATCH')?.path).toBe('/api/v1/sessions/sess-1');
     expect(getState()?.sessionId).toBe('sess-2');
+  });
+
+  it('while a Stop is out, the other tabs read the session paused at the Stop; a stop that keeps it hands it back', async () => {
+    await startSession();
+    const stored = () => JSON.parse(getRecorderStorage().getString('rec') ?? 'null') as Record<string, unknown> | null;
+    stub.script.patch.push({ ok: false, status: 503 });
+    const stopping = stopSession();
+    expect(stored()).toMatchObject({ sessionId: 'sess-1', paused: true, resumeAt: null, stopping: expect.any(String) });
+    // Another tab writes its frozen copy back (its policy fetch landed): this tab keeps capturing,
+    // so the tail its Stop drains still lands.
+    adoptStoredState(JSON.stringify({ ...stored(), policy: null }));
+    expect(getState()).toMatchObject({ paused: false, policy: null });
+    expect(getState()?.stopping).toBeUndefined();
+    await expect(stopping).rejects.toThrow();
+    expect(stored()).toMatchObject({ sessionId: 'sess-1', paused: false });
+    expect(stored()?.stopping).toBeUndefined();
+  });
+
+  it('a stopping mark refuses pause and resume until it is stale: the tab that wrote it is gone, and it is a plain pause', async () => {
+    await startSession();
+    const frozen = { ...getState()!, paused: true, resumeAt: null };
+    adoptStoredState(JSON.stringify({ ...frozen, stopping: new Date().toISOString() }));
+    expect(await togglePause()).toBe(false);
+    expect(getState()).toMatchObject({ paused: true });
+    adoptStoredState(JSON.stringify({ ...frozen, stopping: new Date(Date.now() - STOPPING_TTL_MS).toISOString() }));
+    expect(await togglePause()).toBe(false); // resumed: no longer paused
+    expect(getState()).toMatchObject({ paused: false });
+    expect(getState()?.stopping).toBeUndefined();
+  });
+
+  it('the stopping mark is a lease renewed while the Stop is out, so a hung request is never taken for a gone tab', async () => {
+    await startSession();
+    const mark = () => (JSON.parse(getRecorderStorage().getString('rec') ?? 'null') as { stopping?: string } | null)?.stopping;
+    markStopping('sess-1', 0, 5);
+    const first = Date.parse(mark() ?? '');
+    await new Promise((res) => setTimeout(res, 30));
+    expect(Date.parse(mark() ?? '')).toBeGreaterThan(first);
+    markStopping(null);
+    await new Promise((res) => setTimeout(res, 30));
+    expect(mark()).toBeUndefined();
   });
 
   it('refuses to stop while the server is unreachable and keeps the tail', async () => {

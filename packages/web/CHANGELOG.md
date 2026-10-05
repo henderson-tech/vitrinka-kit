@@ -1,5 +1,34 @@
 # @vitrinka/web
 
+## 0.3.3
+
+- **The other tabs leave the recording at the Stop, not when the save
+  ends.** 0.3.2 told them only once the stopping tab had drained its
+  queue and the server had closed the session, so for as long as that
+  took (seconds on a busy page) their pills still said rec with a running
+  clock, and their lanes kept capturing. The stopping tab now writes the
+  shared record as paused, with its clock frozen at the Stop, and marked
+  `stopping`. The other tabs stop capturing and painting rec within
+  milliseconds, and turn idle when the save ends. Its own tail still
+  lands. A stop that keeps the session (server unreachable) hands it back
+  to them as it is. Pause and resume are refused on a session another tab
+  is stopping. That tab renews its mark every 20 s while its Stop is out,
+  and a mark left by a tab closed mid-stop expires after 90 s into an
+  ordinary pause.
+- **"Open board" appears once the board exists.** The server builds a
+  session's board after the stop, rendering stills first (30–60 s), so
+  neither the create nor the done answer carried a link. The pill said
+  "Saved · in Recents" (or "Sent · in Recents" for a bug report) and
+  never offered the board. The recorder also read only `board.url`,
+  while the server answers `boardUrl`. Both are read now. A stop or
+  report saved before its board exists reads the session every 1.5 s, for
+  up to 10 minutes (the extension's numbers), until the server names the
+  board. The link then lands on the recent, and the Saved / Sent face
+  turns into "Open board". A `HudController` host may return the saved
+  `sessionId` from `stop()` / `report()` (`HudSaved`) to get the same.
+  Recents opened after a reload pick up the wait for a board still being
+  projected, and `window.__vitrinkaRecorder.stop()` reads `boardUrl` too.
+
 ## 0.3.2
 
 - **A Stop in one tab ends the recording in every tab.** A second tab of

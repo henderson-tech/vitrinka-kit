@@ -7,7 +7,7 @@
  * read (`GET /api/v1/sessions/:id`).
  */
 import type { HudRecent, HudRecentStatus } from './hud/controller';
-import { api, VitrinkaApiError } from './api';
+import { api, permanentStatus, VitrinkaApiError } from './api';
 import { notify } from './state';
 import { getRecorderStorage } from './storage';
 
@@ -69,6 +69,53 @@ interface SessionRead {
   deletedAt?: string | null;
   boardUrl?: string;
   board?: { url?: string };
+  projection?: { state?: string };
+}
+
+/** A session answer's board link: the server's `boardUrl`, or an older server's `board.url`. */
+export function boardUrlOf(s: Pick<SessionRead, 'boardUrl' | 'board'> | null | undefined): string | undefined {
+  return s?.boardUrl || s?.board?.url || undefined;
+}
+
+/** How often, and how long, a saved session is read until its board exists (the extension's D11 numbers). */
+export const BOARD_POLL_MS = 1_500;
+export const BOARD_WAIT_MS = 10 * 60_000;
+
+const awaiting = new Set<string>();
+
+/**
+ * The server answered a stop (or a report) before the session's board was
+ * built — it projects after the stop, stills first, 30–60 s. Read the
+ * session until it names its board and put the link on the recent, where
+ * the Saved face and the menu pick it up. Ends on a failed or empty
+ * projection, a gone or refused session, or after `forMs`; a transient
+ * error keeps waiting. Never rejects.
+ */
+export async function awaitBoard(
+  sessionId: string,
+  { everyMs = BOARD_POLL_MS, forMs = BOARD_WAIT_MS }: { everyMs?: number; forMs?: number } = {},
+): Promise<void> {
+  if (awaiting.has(sessionId)) return;
+  awaiting.add(sessionId);
+  const until = Date.now() + forMs;
+  try {
+    while (Date.now() < until) {
+      await new Promise<void>((res) => setTimeout(res, everyMs));
+      try {
+        const s = await api<SessionRead>('GET', `/api/v1/sessions/${sessionId}`);
+        const boardUrl = boardUrlOf(s);
+        if (boardUrl) return updateRecent(sessionId, { boardUrl });
+        if (s.deletedAt) return updateRecent(sessionId, { status: 'deleted' });
+        if (s.projection?.state === 'failed' || s.projection?.state === 'empty') return;
+      } catch (e) {
+        if (e instanceof VitrinkaApiError && e.status === 404) return updateRecent(sessionId, { status: 'deleted' });
+        if (e instanceof VitrinkaApiError && permanentStatus(e.status)) return;
+        console.warn(`vitrinka: waiting for the board of session ${sessionId}`, e);
+      }
+    }
+  } finally {
+    awaiting.delete(sessionId);
+  }
 }
 
 /** Ids already asked this document — a refused read is not retried on every menu open. */
@@ -86,9 +133,11 @@ export async function refreshRecents(live: string | null): Promise<void> {
     asked.add(r.sessionId);
     try {
       const s = await api<SessionRead>('GET', `/api/v1/sessions/${r.sessionId}`);
-      const boardUrl = s.boardUrl ?? s.board?.url;
+      const boardUrl = boardUrlOf(s);
       if (s.deletedAt) updateRecent(r.sessionId, { status: 'deleted' });
       else if (boardUrl) updateRecent(r.sessionId, { boardUrl, ...(s.status === 'done' ? { status: 'saved' as const } : {}) });
+      // Still projecting (the document that waited for it reloaded or left): wait here instead.
+      else if (s.projection?.state === 'running') void awaitBoard(r.sessionId);
     } catch (e) {
       if (e instanceof VitrinkaApiError && e.status === 404) updateRecent(r.sessionId, { status: 'deleted' });
       else console.warn(`vitrinka: could not refresh recent session ${r.sessionId}`, e);
@@ -106,4 +155,5 @@ export function forgetRecents(): void {
 export function __resetRecentsForTests(): void {
   cache = undefined;
   asked.clear();
+  awaiting.clear();
 }

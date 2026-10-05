@@ -33,6 +33,13 @@ export interface Servers {
   me: { prefs: MePrefs };
   /** Hold the next stop's PATCH done until released (the saving state stays visible). */
   holdStop: () => () => void;
+  /**
+   * Answer like the live server since rrweb stills (vitrinka D8): the board is
+   * projected AFTER the stop, so neither the create nor the done carries its
+   * link, and the session read says the projection is running — until the
+   * returned `ready()`, after which every answer carries the board.
+   */
+  boardLater: () => () => void;
   close: () => Promise<void>;
 }
 
@@ -80,6 +87,10 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
   let claims = 0;
   let stubUrl = '';
   let stopGate: Promise<void> | null = null;
+  let projecting = false;
+  const board = () =>
+    projecting ? { boardSlug: '' } : { boardSlug: 'fixture-session-1', boardUrl: `${stubUrl}/acme/b/fixture-session-1` };
+  const projection = () => ({ state: projecting ? 'running' : 'ready' });
 
   const stubServer = createServer(async (req, res) => {
     cors(res);
@@ -138,8 +149,7 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
           environment: 'development',
           title: (body as { title?: string }).title ?? '',
           workspace: 'acme',
-          boardSlug: 'fixture-session-1',
-          boardUrl: `${stubUrl}/acme/b/fixture-session-1`,
+          ...board(),
         }),
       );
     }
@@ -147,9 +157,10 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
     if (path.endsWith('/events') || path.endsWith('/tags')) return void res.end('{}');
     if (req.method === 'PATCH') {
       if ((body as { status?: string })?.status === 'done' && stopGate) await stopGate;
-      return void res.end(JSON.stringify({ board: { url: `${stubUrl}/acme/b/fixture-session-1` } }));
+      // The server's session shape: `boardUrl` only once a board exists, `projection` always.
+      return void res.end(JSON.stringify({ id: 'sess-e2e', status: (body as { status?: string })?.status, ...board(), projection: projection() }));
     }
-    if (req.method === 'GET') return void res.end(JSON.stringify({ maxSeq: 0, status: 'recording', boardUrl: `${stubUrl}/acme/b/fixture-session-1` }));
+    if (req.method === 'GET') return void res.end(JSON.stringify({ maxSeq: 0, status: 'recording', ...board(), projection: projection() }));
     res.writeHead(404).end();
   });
   stubUrl = await listen(stubServer);
@@ -186,6 +197,12 @@ export async function startServers(entry = 'fixture/app.tsx'): Promise<Servers> 
         };
       });
       return release;
+    },
+    boardLater: () => {
+      projecting = true;
+      return () => {
+        projecting = false;
+      };
     },
     close: async () => {
       await new Promise((r) => pageServer.close(r));

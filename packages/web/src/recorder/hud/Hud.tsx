@@ -248,7 +248,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       sent.then(
         (res) => {
           setReportDraft('');
-          settle({ type: 'saved', ...(res.boardUrl ? { boardUrl: res.boardUrl } : {}) });
+          settle({ type: 'saved', ...res });
         },
         (e: unknown) => {
           console.warn('vitrinka: report —', errorText(e));
@@ -320,7 +320,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     const settle = (ev: Parameters<typeof dispatch>[0]) =>
       setTimeout(() => dispatch(ev), Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
     controller.stop().then(
-      (r) => settle({ type: 'saved', ...(r.boardUrl ? { boardUrl: r.boardUrl } : {}) }),
+      (r) => settle({ type: 'saved', ...r }),
       (e: unknown) => {
         console.warn('vitrinka: stop —', errorText(e));
         settle({ type: 'failed', message: errorText(e) });

@@ -5,6 +5,7 @@
  * the HUD, and read a status snapshot back.
  */
 import { getState, health } from './queue';
+import { boardUrlOf } from './recents';
 import { addNote, elapsedOf, startSession, type StartOptions, stopSession, togglePause } from './session';
 
 export interface RecorderStatus {
@@ -68,7 +69,7 @@ export function installControl(): () => void {
     async stop() {
       const captured = snapshot();
       const done = await stopSession();
-      return { ...captured, boardUrl: done?.board?.url ?? captured.boardUrl };
+      return { ...captured, boardUrl: boardUrlOf(done) ?? captured.boardUrl };
     },
     note(text) {
       const t = text.trim();
