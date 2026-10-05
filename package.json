@@ -7,7 +7,7 @@
   "scripts": {
     "build": "bun run --filter '@vitrinka/*' build",
     "test": "bun run --filter '@vitrinka/*' test && bun run test:extension",
-    "test:extension": "bun test apps/extension/content.test.js",
+    "test:extension": "bun test apps/extension/content.test.js apps/extension/background.test.js",
     "typecheck": "bun run --filter '@vitrinka/redact' build && bun run --filter '@vitrinka/link' build && bun run --filter '@vitrinka/*' typecheck",
     "test:e2e:web": "bun run --filter '@vitrinka/web' test:e2e"
   },

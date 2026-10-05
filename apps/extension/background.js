@@ -943,14 +943,21 @@ async function tabInfo(tabId) {
 }
 
 async function attachTab(tabId, url) {
-  const rec = await getState();
-  if (!rec || rec.tabs[String(tabId)]) return;
+  const recording = await getState();
+  if (!recording || recording.tabs[String(tabId)]) return;
   let host = "";
   try { host = new URL(url).host; } catch { return; }
   if (!host || !/^https?:/.test(url)) return;
-  rec.nextTab = (rec.nextTab || 0) + 1; // monotonic: lane ids never reused after tab close
-  rec.tabs[String(tabId)] = { id: `tab${rec.nextTab}`, host, cdp: false };
-  await setState(rec);
+  const rec = await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(tabId)]) return null;
+    current.nextTab = (current.nextTab || 0) + 1; // monotonic: lane ids never reused after tab close
+    current.tabs[String(tabId)] = { id: `tab${current.nextTab}`, host, cdp: false };
+    await setState(current);
+    return current;
+  });
+  if (!rec) return;
+  const laneId = rec.tabs[String(tabId)].id;
 
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
@@ -974,8 +981,12 @@ async function attachTab(tabId, url) {
       await chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach",
         { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
     }
-    const rec2 = await getState();
-    if (rec2 && rec2.tabs[String(tabId)]) { rec2.tabs[String(tabId)].cdp = true; await setState(rec2); }
+    await withLock(async () => {
+      const current = await getState();
+      if (!sameRecording(current, rec) || current.tabs[String(tabId)]?.id !== laneId) return;
+      current.tabs[String(tabId)].cdp = true;
+      await setState(current);
+    });
   } catch (e) {
     console.warn("vitrinka: CDP attach failed — recording without network bodies", tabId, String(e));
   }
@@ -1050,9 +1061,8 @@ function capHeaders(h, rec) {
   return vtRedact.redactHeaders(rulesOf(rec), h);
 }
 
-// fetchPolicy pulls the workspace redaction policy at session start. null
-// (server too old, network down, 4xx) = the engine's safe defaults — never
-// full fidelity, which only ever arrives as an explicit server-approved flag.
+// fetchPolicy pulls the workspace redaction policy at session start. Full
+// fidelity only ever arrives as an explicit, validated server-approved flag.
 // fetchPolicy resolves to THREE distinct states — never conflate them,
 // because the engine's DOM/pixel defaults are PERMISSIVE and resolving
 // "unknown" to them fails open:
@@ -1075,8 +1085,20 @@ async function fetchPolicy(workspace) {
     // A 2xx WITHOUT the policy envelope (204, proxy-stripped body) is
     // out-of-contract — UNKNOWN, not "no policy": the real endpoint always
     // carries a `policy` key, even for the zero policy.
-    if (!res || typeof res !== "object" || !("policy" in res)) return undefined;
-    return res.policy || null;
+    if (!res || typeof res !== "object" || Array.isArray(res) || !("policy" in res)) return undefined;
+    const policy = res.policy;
+    if (policy === null) return null;
+    // A malformed answer must stay UNKNOWN: settling it could reopen DOM or
+    // pixels, or persist rules the engine cannot compile and suppress retries.
+    // Unknown fields remain forward-compatible; recognized fields are typed.
+    if (!policy || typeof policy !== "object" || Array.isArray(policy)) return undefined;
+    for (const key of ["extraHeaders", "extraBodyKeys", "patterns"]) {
+      if (key in policy && (!Array.isArray(policy[key]) || !policy[key].every((value) => typeof value === "string"))) return undefined;
+    }
+    for (const key of ["maskAllText", "fullFidelity"]) {
+      if (key in policy && typeof policy[key] !== "boolean") return undefined;
+    }
+    return policy;
   } catch (e) {
     const status = statusOf(e);
     // permanentStatus = 4xx minus 408/429: a rate-limited or proxy-timed-out
@@ -1259,10 +1281,15 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 });
 
 chrome.debugger.onDetach.addListener(async (source) => {
-  const rec = await getState();
-  if (!rec) return;
-  const tab = rec.tabs[String(source.tabId)];
-  if (tab) { tab.cdp = false; await setState(rec); }
+  const recording = await getState();
+  const laneId = recording?.tabs[String(source.tabId)]?.id;
+  if (!laneId) return;
+  await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(source.tabId)]?.id !== laneId) return;
+    current.tabs[String(source.tabId)].cdp = false;
+    await setState(current);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1829,11 +1856,15 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const rec = await getState();
-  if (rec && rec.tabs[String(tabId)]) {
-    delete rec.tabs[String(tabId)];
-    await setState(rec);
-  }
+  const recording = await getState();
+  const laneId = recording?.tabs[String(tabId)]?.id;
+  if (!laneId) return;
+  await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(tabId)]?.id !== laneId) return;
+    delete current.tabs[String(tabId)];
+    await setState(current);
+  });
 });
 
 // ---------------------------------------------------------------------------
