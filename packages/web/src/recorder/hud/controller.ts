@@ -145,13 +145,23 @@ export interface HudReport {
   selector: string;
 }
 
+/**
+ * What a stop or an idle report saved. `boardUrl` when the board already
+ * exists; else `sessionId` names the recent whose link the Saved face takes
+ * once the server has built the board.
+ */
+export interface HudSaved {
+  boardUrl?: string;
+  sessionId?: string;
+}
+
 export interface HudController {
   getSnapshot(): HudSnapshot;
   subscribe(listener: () => void): () => void;
   start(opts: { title: string }): Promise<void>;
   togglePause(): Promise<void>;
   /** Drains, then closes the session; rejects (session kept) while unreachable. */
-  stop(): Promise<{ boardUrl?: string }>;
+  stop(): Promise<HudSaved>;
   note(text: string): void;
   annotate(a: HudAnnotation): void;
   setAnnotating(active: boolean): void;
@@ -175,7 +185,7 @@ export interface HudController {
    * second call after a rejection retries the same report. Optional: a host
    * without it never offers the menu row.
    */
-  report?(r: HudReport): Promise<{ boardUrl?: string }>;
+  report?(r: HudReport): Promise<HudSaved>;
 }
 
 export const DEFAULT_PREFS: HudPrefs = { size: 'md', verbose: false };

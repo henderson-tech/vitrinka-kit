@@ -13,7 +13,7 @@ import { readLink, recorderConfig, vitrinkaLinked } from './config';
 import { forgetLink, linkDevice } from './link';
 import { cachedAccount, cachedPrefs, fetchMe, savePrefs } from './me';
 import { getState, health } from './queue';
-import { readRecents, refreshRecents } from './recents';
+import { boardUrlOf, readRecents, refreshRecents } from './recents';
 import { canReport, holdReport, sendReport } from './report';
 import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from './session';
 import { annotateState, setAnnotating, subscribe } from './state';
@@ -85,12 +85,12 @@ export function createPageController(): HudController {
     },
     async stop() {
       const boardUrl = getState()?.boardUrl;
-      const live = getState() !== null;
+      const sessionId = getState()?.sessionId;
       const done = await stopSession();
       // null for a live session = the server refused to close it (ended locally, not saved).
-      if (live && done === null) throw new Error('the server refused to close this session — it ended locally, not saved');
-      const url = done?.board?.url ?? boardUrl;
-      return url ? { boardUrl: url } : {};
+      if (sessionId && done === null) throw new Error('the server refused to close this session — it ended locally, not saved');
+      const url = boardUrlOf(done) ?? boardUrl;
+      return { ...(url ? { boardUrl: url } : {}), ...(sessionId ? { sessionId } : {}) };
     },
     note: (text) => addNote(text),
     annotate: ({ text, rect, selector, task }) => addAnnotation(text, rect, selector, { task }),

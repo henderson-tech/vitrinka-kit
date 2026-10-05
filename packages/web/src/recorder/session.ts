@@ -24,6 +24,7 @@ import {
   disarmReconcile,
   drainBuffer,
   getState,
+  markStopping,
   pushEvent,
   queuedCount,
   REC_KEY,
@@ -33,7 +34,7 @@ import {
   type SessionState,
   setState,
 } from './queue';
-import { forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
+import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
 import { getRecorderStorage } from './storage';
 
@@ -41,7 +42,7 @@ export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.3.2';
+export const RECORDER_VERSION = '0.3.3';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -235,7 +236,7 @@ async function attachTags(sessionId: string, tags: string[] | undefined): Promis
 
 export async function togglePause(): Promise<boolean> {
   const rec = getState();
-  if (!rec || rec.dead) return false;
+  if (!rec || rec.dead || rec.stopping) return false;
   rec.paused = !rec.paused;
   if (rec.paused) {
     rec.activeMs = (rec.activeMs || 0) + (rec.resumeAt ? Date.now() - Date.parse(rec.resumeAt) : 0);
@@ -325,6 +326,17 @@ export async function stopSession(): Promise<SessionDone | null> {
   if (!rec) return null;
   // The recording's length is what the tester saw at Stop, not Stop + drain.
   const durationMs = elapsedOf(rec);
+  // The other tabs leave rec at the Stop, not when the save ends; a stop
+  // that keeps the session hands it back to them as it now is.
+  markStopping(rec.sessionId, durationMs);
+  try {
+    return await finishStop(rec, durationMs);
+  } finally {
+    markStopping(null);
+  }
+}
+
+async function finishStop(rec: SessionState, durationMs: number): Promise<SessionDone | null> {
   disarmReconcile();
   for (const fn of beforeStopHooks) {
     try {
@@ -377,8 +389,9 @@ export async function stopSession(): Promise<SessionDone | null> {
     }
   }
   // A permanent refusal still ends the recording locally, but it was not saved.
-  const boardUrl = done?.board?.url ?? rec.boardUrl;
+  const boardUrl = boardUrlOf(done) ?? rec.boardUrl;
   updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
+  if (done && !boardUrl) void awaitBoard(rec.sessionId);
   // Another tab may have ended this session or started the next one while
   // the stop was out: the state and the queues are then not this stop's to clear.
   if (getState()?.sessionId === rec.sessionId) {

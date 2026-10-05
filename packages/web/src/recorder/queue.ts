@@ -102,6 +102,13 @@ export interface SessionState {
    * reload re-applies the same rules instead of silently reverting.
    */
   policy?: RedactionPolicy | null;
+  /**
+   * Another tab is stopping this session: the copy it stores reads as
+   * paused with its clock frozen at the Stop, so every other tab stops
+   * capturing and painting rec at once, not when the save ends. Pause and
+   * resume are refused on it; Stop still works.
+   */
+  stopping?: boolean;
 }
 
 export type { RecorderEvent };
@@ -163,7 +170,28 @@ export function getState(): SessionState | null {
 export function setState(rec: SessionState | null): void {
   recCache = rec;
   if (rec === null) kv().remove(REC_KEY);
-  else safeSet(REC_KEY, JSON.stringify(rec));
+  else safeSet(REC_KEY, JSON.stringify(stored(rec)));
+}
+
+/** The session this tab is stopping, and its clock at the Stop. */
+let stoppingHere: { sessionId: string; activeMs: number } | null = null;
+
+/** What the other tabs read of `rec`: while this tab stops it, the frozen `stopping` copy. */
+function stored(rec: SessionState): SessionState {
+  if (stoppingHere?.sessionId !== rec.sessionId) return rec;
+  return { ...rec, paused: true, activeMs: stoppingHere.activeMs, resumeAt: null, stopping: true };
+}
+
+/**
+ * This tab started (`sessionId`) or finished (null) stopping a session. Only
+ * the STORED record changes: this tab's own cache stays live, so the tail
+ * its Stop still drains (rrweb's last events, settled captures) lands.
+ */
+export function markStopping(sessionId: string | null, activeMs = 0): void {
+  const was = stoppingHere?.sessionId;
+  stoppingHere = sessionId ? { sessionId, activeMs } : null;
+  const live = getState();
+  if (live && (live.sessionId === sessionId || live.sessionId === was)) setState(live);
 }
 
 export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
@@ -851,6 +879,7 @@ export function __dropCachesForTests(): void {
   }
   flushBusy = false;
   tailDropped = false;
+  stoppingHere = null;
   recCache = undefined;
   bufferCache = undefined;
   chunkCache = undefined;

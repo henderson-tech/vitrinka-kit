@@ -367,7 +367,11 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
 
   const flowShown = shownFlow.face;
   const confirmAction = shownFlow.face === 'confirm' ? shownFlow.action : 'stop';
-  const savedUrl = shownFlow.face === 'saved' ? shownFlow.boardUrl : undefined;
+  // Saved before its board was built: the link arrives on the recent once the server names it.
+  const savedUrl =
+    shownFlow.face === 'saved'
+      ? (shownFlow.boardUrl ?? p.snap.recents.find((r) => r.sessionId === shownFlow.sessionId)?.boardUrl)
+      : undefined;
   const failure = shownFlow.face === 'failed' ? shownFlow.message : '';
   // A bug report's send: "Sending…", "Sent", "Couldn't send" — and it can always be retried.
   const report = 'report' in shownFlow && shownFlow.report === true;

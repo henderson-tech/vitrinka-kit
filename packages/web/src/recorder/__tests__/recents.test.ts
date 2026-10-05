@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { createPageController } from '../page-controller';
-import { MAX_RECENTS, noteRecent, readRecents, refreshRecents } from '../recents';
+import { awaitBoard, BOARD_POLL_MS, MAX_RECENTS, noteRecent, readRecents, refreshRecents } from '../recents';
 import { startSession, stopSession } from '../session';
 import { installStub, freshRecorder, fakeLocation, type Stub } from './stub';
 
@@ -47,6 +47,37 @@ describe('recents', () => {
     ]);
     expect(readRecents()[0]).toMatchObject({ sessionId: 's-6', boardUrl: 'https://vitrinka.test/b/six' });
     expect(readRecents()[1]).toMatchObject({ sessionId: 's-5', status: 'deleted' });
+  });
+
+  it('a session saved before its board exists gets the link once its read names it, and stops asking on a failed projection', async () => {
+    noteRecent({ sessionId: 's-1', title: 'one', startedAt: 1, status: 'saved' });
+    noteRecent({ sessionId: 's-2', title: 'two', startedAt: 2, status: 'saved' });
+    stub.script.sessions.push(
+      { ok: true, body: { status: 'done', boardSlug: '', projection: { state: 'running' } } },
+      { ok: false, status: 503 },
+      { ok: true, body: { status: 'done', boardUrl: 'https://vitrinka.test/b/one', projection: { state: 'ready' } } },
+    );
+    await awaitBoard('s-1', { everyMs: 1 });
+    expect(stub.calls.filter((c) => c.method === 'GET')).toHaveLength(3);
+    expect(readRecents().find((r) => r.sessionId === 's-1')?.boardUrl).toBe('https://vitrinka.test/b/one');
+
+    stub.script.sessions.push({ ok: true, body: { status: 'done', projection: { state: 'failed' } } });
+    await awaitBoard('s-2', { everyMs: 1 });
+    expect(stub.calls.filter((c) => c.method === 'GET')).toHaveLength(4);
+    expect(readRecents().find((r) => r.sessionId === 's-2')?.boardUrl).toBeUndefined();
+  });
+
+  it('a stop answered before its board exists hands the HUD the session id, and its recent gains the link', async () => {
+    const c = createPageController();
+    stub.script.sessions.push({ ok: true, body: { id: 'sess-1', project: 'example', environment: 'development', title: 'late' } });
+    await c.start({ title: 'late' });
+    stub.script.patch.push({ ok: true, body: { id: 'sess-1', status: 'done', boardSlug: '', projection: { state: 'running' } } });
+    stub.script.sessions.push({ ok: true, body: { status: 'done', boardUrl: 'https://vitrinka.test/b/late', projection: { state: 'ready' } } });
+    expect(await c.stop()).toEqual({ sessionId: 'sess-1' });
+    expect(readRecents()[0]).toMatchObject({ sessionId: 'sess-1', status: 'saved' });
+    expect(readRecents()[0]?.boardUrl).toBeUndefined();
+    await new Promise((res) => setTimeout(res, BOARD_POLL_MS + 200));
+    expect(c.getSnapshot().recents[0]).toMatchObject({ sessionId: 'sess-1', boardUrl: 'https://vitrinka.test/b/late' });
   });
 
   it('a stop the server refuses for good ends locally as unsaved, and the controller says so', async () => {

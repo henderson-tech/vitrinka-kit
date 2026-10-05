@@ -29,7 +29,7 @@ import { checkoutRRWeb } from './capture/rrweb';
 import { recorderConfig, vitrinkaLinked } from './config';
 import { clipHasSnapshot, type FlightClip, flightActive, startFlightBuffer, stopFlightBuffer, takeFlightClip } from './flight';
 import { EVENTS_PER_POST, getState, MAX_BATCH_BYTES, splitRRWebEvents, utf8Bytes } from './queue';
-import { noteRecent } from './recents';
+import { awaitBoard, boardUrlOf, noteRecent } from './recents';
 import { addAnnotation, createSession, imagePixels, type ViewRect } from './session';
 import { currentRoute, notify } from './state';
 
@@ -258,7 +258,7 @@ const steps: readonly ((j: ReportJob) => Promise<void>)[] = [
   (j) => postEvents(j.sessionId, [j.note]),
   async (j) => {
     const done = await api<SessionDone>('PATCH', `/api/v1/sessions/${j.sessionId}`, { status: 'done' });
-    const url = done.board?.url;
+    const url = boardUrlOf(done);
     if (url) j.boardUrl = url;
   },
 ];
@@ -268,7 +268,7 @@ const steps: readonly ((j: ReportJob) => Promise<void>)[] = [
  * Idle: the held clip as a `kind: "report"` session — rejects with the
  * failing step's error, and a second call (Retry) resumes the same job.
  */
-export async function sendReport(note: ReportNote): Promise<{ boardUrl?: string }> {
+export async function sendReport(note: ReportNote): Promise<{ boardUrl?: string; sessionId?: string }> {
   const rec = getState();
   if (rec) {
     if (rec.paused || rec.dead) throw new Error('the recording is not capturing — resume it to report');
@@ -300,7 +300,8 @@ export async function sendReport(note: ReportNote): Promise<{ boardUrl?: string 
     status: 'saved',
     ...(j.boardUrl ? { boardUrl: j.boardUrl } : {}),
   });
-  return j.boardUrl ? { boardUrl: j.boardUrl } : {};
+  if (!j.boardUrl) void awaitBoard(j.sessionId);
+  return { ...(j.boardUrl ? { boardUrl: j.boardUrl } : {}), sessionId: j.sessionId };
 }
 
 /** The provider unmounted: forget the buffer and any held clip; a remount re-arms. */

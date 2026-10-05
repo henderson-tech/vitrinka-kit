@@ -440,6 +440,42 @@ test('a second tab follows the shared recording: it joins on load and goes idle 
   await other.close();
 });
 
+test('a second tab leaves the recording within 2 s of Stop in the first, while the save is still out', async ({ page }) => {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const other = await page.context().newPage();
+  await other.goto(`${pageUrl}/`);
+  const otherPill = other.locator('[data-e2e="recorder-pill"]');
+  await expect(otherPill).toHaveAttribute('data-state', 'rec');
+  await stampLeavingRec(other);
+  await page.bringToFront();
+  await stampClicks(page);
+
+  // The save is held, as a slow drain or a busy server holds it live: the
+  // second tab must follow the Stop, not the end of the save.
+  const release = servers.holdStop();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('group', { name: 'Stop and save' }).getByRole('button', { name: 'Stop', exact: true }).click();
+  const stoppedAt = await page.evaluate(() => (window as Clocked).clickedAt ?? 0);
+  await expect(page.locator('[data-e2e="saving"]')).toBeVisible();
+  await other.bringToFront();
+  await expect(otherPill).not.toHaveAttribute('data-state', 'rec', { timeout: 2_000 });
+  const leftAt = await other.evaluate(() => (window as Clocked).leftRecAt ?? 0);
+  test.info().annotations.push({ type: 'Stop → second tab leaves rec', description: `${leftAt - stoppedAt} ms` });
+  expect(leftAt - stoppedAt).toBeLessThan(2_000);
+  // Its clock stands still while the first tab saves.
+  const clock = otherPill.locator('.clock .time');
+  const frozen = (await clock.textContent()) ?? '';
+  await other.waitForTimeout(1500);
+  await expect(clock).toHaveText(frozen);
+
+  release();
+  await expect(page.locator('[data-e2e="saved"]')).toBeVisible({ timeout: 30_000 });
+  await expect(otherPill).toHaveAttribute('data-face', 'idle', { timeout: 2_000 });
+  await other.close();
+});
+
 test('the ⋯ menu opens from the keyboard with focus on its first item; ↓ walks it, Esc returns to ⋯', async ({ page }) => {
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();
@@ -644,6 +680,53 @@ test('report a bug from the idle pill: the last minute files as its own session,
   expect(order.every((i) => i >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
+
+test('a report sent before its board is built says Sent · in Recents, then Open board opens it once it is', async ({ page }) => {
+  // The live server projects a board after the stop (stills render first), so Send learns no link.
+  const ready = servers.boardLater();
+  await page.goto(`${pageUrl}/`);
+  await page.locator('#buy').click();
+  await page.getByRole('button', { name: 'Start recording' }).hover();
+  await page.locator('.seg.on .b-more').click();
+  await page.getByRole('menuitem', { name: 'Report a bug' }).click();
+  const ta = page.getByPlaceholder('What went wrong?');
+  await ta.fill('Buy does nothing');
+  await ta.press('Enter');
+  const saved = page.locator('[data-e2e="saved"]');
+  await expect(saved).toContainText('Sent', { timeout: 30_000 });
+  // No link to a board that does not exist yet.
+  await expect(saved).toContainText('in Recents');
+  await expect(saved.getByRole('link')).toHaveCount(0);
+
+  ready();
+  const readyAt = Date.now();
+  const open = saved.getByRole('link', { name: /Open board/ });
+  await expect(open).toBeVisible({ timeout: 10_000 });
+  test.info().annotations.push({ type: 'board ready → Open board', description: `${Date.now() - readyAt} ms` });
+  const popup = page.waitForEvent('popup');
+  await open.click();
+  await expect(await popup).toHaveURL(`${stubUrl}/acme/b/fixture-session-1`);
+});
+
+type Clocked = Window & { clickedAt?: number; leftRecAt?: number };
+
+/** Stamp, on the page's clock, the moment each click reaches the page (`clickedAt`). */
+async function stampClicks(page: Page): Promise<void> {
+  await page.evaluate(() => addEventListener('click', () => void ((window as Clocked).clickedAt = Date.now()), true));
+}
+
+/** Stamp, on the page's clock, the moment the pill first stops reading `rec` (`leftRecAt`). */
+async function stampLeavingRec(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const root = document.querySelector('[data-vitrinka-hud]')!.shadowRoot!;
+    const w = window as Clocked;
+    const check = () => {
+      const state = root.querySelector('[data-e2e="recorder-pill"]')?.getAttribute('data-state');
+      if (w.leftRecAt === undefined && state !== 'rec') w.leftRecAt = Date.now();
+    };
+    new MutationObserver(check).observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-state'] });
+  });
+}
 
 /** Start recording and enter annotate mode by finger, the way a phone does it. */
 async function annotateByTap(page: Page): Promise<void> {
