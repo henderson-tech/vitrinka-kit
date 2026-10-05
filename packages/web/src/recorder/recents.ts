@@ -136,6 +136,8 @@ export async function refreshRecents(live: string | null): Promise<void> {
       const boardUrl = boardUrlOf(s);
       if (s.deletedAt) updateRecent(r.sessionId, { status: 'deleted' });
       else if (boardUrl) updateRecent(r.sessionId, { boardUrl, ...(s.status === 'done' ? { status: 'saved' as const } : {}) });
+      // Still projecting (the document that waited for it reloaded or left): wait here instead.
+      else if (s.projection?.state === 'running') void awaitBoard(r.sessionId);
     } catch (e) {
       if (e instanceof VitrinkaApiError && e.status === 404) updateRecent(r.sessionId, { status: 'deleted' });
       else console.warn(`vitrinka: could not refresh recent session ${r.sessionId}`, e);

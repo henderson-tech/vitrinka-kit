@@ -67,6 +67,18 @@ describe('recents', () => {
     expect(readRecents().find((r) => r.sessionId === 's-2')?.boardUrl).toBeUndefined();
   });
 
+  it('a recent still projecting when Recents opens is waited for there, not asked once and forgotten', async () => {
+    noteRecent({ sessionId: 's-1', title: 'one', startedAt: 1, status: 'saved' });
+    stub.script.sessions.push(
+      { ok: true, body: { status: 'done', projection: { state: 'running' } } },
+      { ok: true, body: { status: 'done', boardUrl: 'https://vitrinka.test/b/one', projection: { state: 'ready' } } },
+    );
+    await refreshRecents(null);
+    expect(readRecents()[0]?.boardUrl).toBeUndefined();
+    await new Promise((res) => setTimeout(res, BOARD_POLL_MS + 200));
+    expect(readRecents()[0]?.boardUrl).toBe('https://vitrinka.test/b/one');
+  });
+
   it('a stop answered before its board exists hands the HUD the session id, and its recent gains the link', async () => {
     const c = createPageController();
     stub.script.sessions.push({ ok: true, body: { id: 'sess-1', project: 'example', environment: 'development', title: 'late' } });
