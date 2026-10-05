@@ -1033,6 +1033,8 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
 export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
   const t0 = Date.now();
   while (Date.now() - t0 < deadlineMs) {
+    // A peer may journal its departure after an already-running flush scanned storage.
+    recoverAllocations(true);
     if (queuedCount() === 0) return true;
     const sent = await flush();
     if (getState()?.dead) return false;

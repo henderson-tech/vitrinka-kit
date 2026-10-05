@@ -228,6 +228,41 @@ describe('session', () => {
     expect(stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('departed during Stop'))).toBe(true);
   });
 
+  it('discovers a departed peer journal written after an in-flight flush scanned storage', async () => {
+    const storage = memoryRecorderStorage();
+    const watchers = new Map<string, (raw: string | null) => void>();
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_key, run) => { run(); },
+      remove: (key) => { storage.remove(key); watchers.get(key)?.(null); },
+      watch: (key, check) => { watchers.set(key, check); return () => void watchers.delete(key); },
+    });
+    __resetForTests();
+    await startSession();
+    await flush();
+    addNote('already flushing');
+    let release = () => {};
+    stub.gate = new Promise<void>((resolve) => { release = resolve; });
+    const inFlight = flush();
+    while (!stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('already flushing'))) await Bun.sleep(1);
+    storage.set('tab.late-peer', JSON.stringify({ sessionId: 'sess-1', at: Date.now() }));
+    const waiting = waitForRecorderPeers(['tab.late-peer'], 'sess-1', 3000);
+    storage.set('allocation.late-peer.1', JSON.stringify({ draft: {
+      sessionId: 'sess-1', ts: new Date().toISOString(), tabId: 'late-peer', tabHost: 'app.example.test',
+      kind: 'event', event: { kind: 'note', payload: { text: 'written after scan' } },
+    } }));
+    const departed = JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true, departed: true, recoverable: true });
+    storage.set('tab.late-peer', departed);
+    watchers.get('tab.late-peer')!(departed);
+    stub.gate = null;
+    release();
+    await inFlight;
+    expect(await waiting).toBe(true);
+    expect(storage.getString('tab.late-peer')).toBeNull();
+    expect(stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('written after scan'))).toBe(true);
+  });
+
   it('registers the restored document again after a back-forward cache pageshow', async () => {
     const bus = tabEvents();
     const storage = memoryRecorderStorage();
