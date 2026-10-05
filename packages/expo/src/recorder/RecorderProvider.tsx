@@ -30,6 +30,7 @@ import {
   reconcile,
   scheduleFlush,
 } from './queue';
+import { installUnauthorizedHandler } from './link';
 import { armIdleStop, recoverRedactionPolicy } from './session';
 import { currentRoute, setCurrentRoute } from './state';
 
@@ -87,6 +88,7 @@ export function RecorderProvider({
     // Center pull, notification banner, incoming call and app-switcher peek, so
     // kicking a network upload there would fire constantly during normal use
     //. Only a real 'background' transition uploads.
+    const off401 = installUnauthorizedHandler();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'inactive') {
         persistNow();
@@ -102,7 +104,10 @@ export function RecorderProvider({
         }
       }
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      off401();
+    };
   }, []);
 
   useEffect(() => {

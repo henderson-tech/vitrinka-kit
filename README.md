@@ -5,18 +5,48 @@ machines and in your browsers — recorders, client packages, and the browser
 extension. The source is published here so you can see exactly what runs on
 your device and what data it collects.
 
-> vitrinka is an artifacts library and annotation-board platform: recorders
-> capture manual-testing journeys (screenshots, interactions, network calls,
-> notes) and publish them to your vitrinka server, where they become reviewable,
-> annotatable boards.
+> vitrinka connects a software team and its AI on one shared canvas. Testers
+> record their journeys instead of writing bug reports — the recording carries
+> the reproduction (screenshots, interactions, network calls, notes), so
+> nobody re-describes or re-reproduces what already happened once. Developers
+> review work by circling what's wrong on the screen, and a listening agent
+> picks the annotations up with the full context already attached. The tools
+> in this repository are the capture side of that loop: they publish to your
+> vitrinka server, where the data becomes reviewable, annotatable boards.
 
 ## What's in this repository
 
 | Path | What it is |
 |---|---|
 | [`packages/expo`](packages/expo) | `@vitrinka/expo` — the Expo / React Native toolkit. Today: the journey recorder (`@vitrinka/expo/recorder`). |
-| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. |
+| [`packages/web`](packages/web) | `@vitrinka/web` — the React DOM toolkit (Next, Vite, …). Today: the journey recorder (`@vitrinka/web/recorder`) — rrweb DOM stream, clicks, navigation, network, console, notes — and the `withVitrinkaRecorder` build guard for Next. |
+| [`packages/link`](packages/link) | `@vitrinka/link` — the device link (code + approval → ingest-only `vkr_` token) both recorders authenticate with. Zero deps. |
+| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. Generated from the product repo like `skills/`; changes land there. |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | What the recorders capture and where it is sent. |
+| [`skills/`](skills) | Agent skills for working with vitrinka — generated from the product repo, installable as the `vitrinka` plugin (Claude Code / Codex) or via the skills CLI. |
+| [`agents/`](agents) | Companion agents used by the skills, generated from the same product-repo source. |
+
+## Quick start — agent skills
+
+The skills ship through the standard channels — pick yours:
+
+```bash
+# Claude Code
+claude plugin marketplace add henderson-tech/vitrinka-kit
+claude plugin install vitrinka@kit
+
+# Codex
+codex plugin marketplace add henderson-tech/vitrinka-kit
+codex plugin add vitrinka
+
+# Any skills-CLI agent (Cursor, Copilot, Windsurf, …)
+npx skills add henderson-tech/vitrinka-kit
+```
+
+The `vitrinka` CLI's `vitrinka setup` / `vitrinka setup skills` drive the same
+mechanisms with a status table and a picker. This surface is **generated** —
+authored in the product repo and rendered here by its exporter; edits belong
+there, not in these files.
 
 ## Quick start — Expo recorder
 

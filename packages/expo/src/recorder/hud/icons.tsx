@@ -22,25 +22,6 @@ function Box({ size, children }: { size: number; children: ReactNode }) {
   return <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>{children}</View>;
 }
 
-/** Filled record dot (icon-lib Circle with fill). */
-export function Circle({ size, color, fill }: IconProps) {
-  const d = size * 0.82;
-  return (
-    <Box size={size}>
-      <View
-        style={{
-          width: d,
-          height: d,
-          borderRadius: d / 2,
-          backgroundColor: fill ?? 'transparent',
-          borderWidth: fill ? 0 : 1.5,
-          borderColor: color,
-        }}
-      />
-    </Box>
-  );
-}
-
 /** Filled stop square. */
 export function Square({ size, color, fill }: IconProps) {
   const d = size * 0.78;
@@ -229,34 +210,5 @@ export function Pencil({ size, color }: IconProps) {
         <View style={{ width: size * 0.1, height: t, backgroundColor: color, opacity: 0.5, borderTopRightRadius: 1.5, borderBottomRightRadius: 1.5 }} />
       </View>
     </Box>
-  );
-}
-
-/**
- * Concave quarter fillet blending an edge-docked body into the screen edge —
- * the "inverse rounded corner" react-native-svg used to draw. Pure Views: a
- * transparent 4F×4F box whose F-thick BORDER (in the dock color) with a 2F
- * radius forms a ring; clipping one F×F quadrant leaves exactly the concave
- * wedge, with the quarter-circle hole staying transparent over the live app.
- * `flip` mirrors vertically (bottom fillet). Purely decorative:
- * `pointerEvents="none"` so it never steals taps from the app underneath.
- */
-export function ConcaveFillet({ size, color, flip, style }: { size: number; color: string; flip?: boolean; style?: ViewStyle }) {
-  return (
-    <View pointerEvents="none" style={[{ width: size, height: size, overflow: 'hidden' }, style]}>
-      <View
-        style={{
-          position: 'absolute',
-          left: -2 * size,
-          top: flip ? -size : -2 * size,
-          width: 4 * size,
-          height: 4 * size,
-          borderRadius: 2 * size,
-          borderWidth: size,
-          borderColor: color,
-          backgroundColor: 'transparent',
-        }}
-      />
-    </View>
   );
 }

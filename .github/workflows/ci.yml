@@ -7,6 +7,7 @@ on:
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,3 +27,19 @@ jobs:
         run: |
           bun run --filter @vitrinka/redact build:vendor
           diff packages/redact/dist/redact.vendor.js apps/extension/vendor/redact.js
+
+  # The web recorder end to end: one headless Chromium against a node:http
+  # page fixture + vitrinka stub (packages/web/e2e). Its own job so the unit
+  # suite above never waits on a browser download.
+  e2e-web:
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter '@vitrinka/redact' build && bun run --filter '@vitrinka/link' build
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e:web

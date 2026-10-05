@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.2
+
+- **PEM private keys are scrubbed by value.** A `-----BEGIN … PRIVATE
+  KEY-----` block (RSA, EC, OPENSSH, PKCS#8, ENCRYPTED) becomes one
+  `[redacted]` wherever string values are scrubbed — under any body key
+  (`keyPem`), in free text, in headers — even when a cap cut off its END
+  line. A form or query value whose decoded form holds the BEGIN line loses
+  its whole value. Certificates, public keys and prose that says "BEGIN"
+  stay. Four new conformance vectors pin it for ports.
+
+## 0.1.1
+
+- Declares `"type": "module"`: the build is ESM, and without the field Node
+  22+ re-parses it behind a `MODULE_TYPELESS_PACKAGE_JSON` warning while
+  runtimes without module detection (Node 20) fail to load it.
+- Ships the Elastic-2.0 `LICENSE` text in the tarball, like the other kit
+  packages.
+
 ## 0.1.0
 
 Initial release: the shared recorder redaction engine.

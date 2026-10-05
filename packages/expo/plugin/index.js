@@ -32,9 +32,9 @@ function withVitrinkaRecorder(config, props = {}) {
   const appVariant = process.env[variantEnvVar] ?? 'production';
   assertRecorderBuildEnv(appVariant, props);
 
-  const enabled = Boolean(
-    process.env.EXPO_PUBLIC_VITRINKA_URL && process.env.EXPO_PUBLIC_VITRINKA_TOKEN,
-  );
+  // URL-only enablement: auth is the device link (or an env token for
+  // unattended builds), so the URL alone decides whether the recorder ships.
+  const enabled = Boolean(process.env.EXPO_PUBLIC_VITRINKA_URL);
   if (enabled && (props.requireStripCheck ?? true)) {
     const projectRoot =
       (config._internal && config._internal.projectRoot) || process.cwd();

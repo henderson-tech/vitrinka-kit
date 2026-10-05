@@ -53,7 +53,7 @@ export function VitrinkaRecorderRoot({
 }) {
   // Inlined literals → statically true on any build without recorder env, so
   // everything below is dead code and never bundled.
-  if (!process.env.EXPO_PUBLIC_VITRINKA_URL || !process.env.EXPO_PUBLIC_VITRINKA_TOKEN) {
+  if (!process.env.EXPO_PUBLIC_VITRINKA_URL) {
     return children;
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -71,16 +71,16 @@ export function VitrinkaRecorderRoot({
  * under KeyboardProvider (KeyboardStickyView needs it), and the pill drawing
  * after it keeps the ⌖/✕ chip tappable above the dim.
  *
- * `hideIdleGripOn`: pathnames where the idle grip must not mount because the
- * host app owns competing right-edge UI there (the grip's invisible hit target
- * is deliberately wide). A live recording stays visible on those routes.
+ * `hideIdleGripOn`: pathnames where the idle puck must not mount because the
+ * host app owns competing UI at its spot. A live recording stays visible on
+ * those routes (and can be dragged elsewhere or tucked).
  */
 export function VitrinkaRecorderPill({
   hideIdleGripOn,
 }: {
   hideIdleGripOn?: readonly string[];
 } = {}) {
-  if (!process.env.EXPO_PUBLIC_VITRINKA_URL || !process.env.EXPO_PUBLIC_VITRINKA_TOKEN) {
+  if (!process.env.EXPO_PUBLIC_VITRINKA_URL) {
     return null; // same static-strip contract as above
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports

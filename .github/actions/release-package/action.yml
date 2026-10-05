@@ -1,0 +1,90 @@
+name: Release one @vitrinka package
+description: >
+  The one publish path behind every release-<pkg>.yml: refuse a tag that did
+  not come through main, build and test the workspace, publish
+  packages/<package> with provenance. The caller checks out with
+  fetch-depth 0 and persist-credentials false, holds id-token: write, and
+  passes NODE_AUTH_TOKEN (secrets.NPM_TOKEN) as step env.
+
+inputs:
+  package:
+    description: Directory under packages/ — also the tag prefix (<package>-vX.Y.Z)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Refuse tags not reachable from main (BEFORE any lifecycle script runs)
+      shell: bash
+      run: |
+        # A pushed tag can point at ANY commit; the version check alone would
+        # let an unreviewed branch publish with NPM_TOKEN in scope. Only
+        # commits that went through main's PR flow may publish.
+        git fetch --no-tags origin main
+        if ! git merge-base --is-ancestor HEAD origin/main; then
+          echo "Tag ${GITHUB_REF_NAME} points at a commit not reachable from main — refusing to publish" >&2
+          exit 1
+        fi
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        # registry-url writes the ${NODE_AUTH_TOKEN} placeholder the token
+        # fallback needs.
+        registry-url: https://registry.npmjs.org
+    - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
+      shell: bash
+      # Node 22 bundles npm 10, which silently skips OIDC and publishes with
+      # the token. EXACT pin, not `npm@11`: this job holds id-token: write,
+      # and a mutable range would run whatever the registry serves that day
+      # inside the one job that can mint our publish identity.
+      run: |
+        set -euo pipefail
+        npm install -g npm@11.19.0
+        v="$(npm --version)"
+        [ "$(printf '%s\n11.5.1\n' "$v" | sort -V | head -1)" = "11.5.1" ] \
+          || { echo "::error::npm $v < 11.5.1 — too old for OIDC trusted publishing"; exit 1; }
+    - run: bun install --frozen-lockfile
+      shell: bash
+    - name: Verify tag matches package version
+      id: version
+      shell: bash
+      env:
+        PKG: ${{ inputs.package }}
+      run: |
+        TAG_VERSION="${GITHUB_REF_NAME#"$PKG"-v}"
+        PKG_VERSION="$(node -p "require('./packages/$PKG/package.json').version")"
+        if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+          echo "Tag $TAG_VERSION != package.json $PKG_VERSION" >&2
+          exit 1
+        fi
+        # GitHub can deliver one tag push twice (2026-09-22: link-v0.1.0 and
+        # redact-v0.1.0 each ran two publishes). The release is the version
+        # being on npm, so a repeat is a no-op, not a red run.
+        if npm view "@vitrinka/$PKG@$PKG_VERSION" version >/dev/null 2>&1; then
+          echo "::notice::@vitrinka/$PKG@$PKG_VERSION is already on npm — nothing to publish"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        fi
+    # Build first — web and expo resolve @vitrinka/link and redact through
+    # their build output (main/types point at build/), same order as ci.yml.
+    - if: steps.version.outputs.published != 'true'
+      run: bun run build
+      shell: bash
+    - if: steps.version.outputs.published != 'true'
+      run: bun run typecheck
+      shell: bash
+    - if: steps.version.outputs.published != 'true'
+      run: bun run test
+      shell: bash
+    - name: Publish
+      if: steps.version.outputs.published != 'true'
+      shell: bash
+      working-directory: packages/${{ inputs.package }}
+      # Hybrid auth: a package with an npm trusted-publisher entry for this
+      # workflow publishes through the job's OIDC identity; the rest fall
+      # back to NODE_AUTH_TOKEN (granular, @vitrinka scope only, expires
+      # 2026-12-21). Drop the token once all four carry entries — npm ends
+      # direct publishing with bypass-2FA tokens in January 2027.
+      run: npm publish --provenance --access public

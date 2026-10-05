@@ -1,0 +1,20 @@
+{
+  "name": "kit",
+  "interface": {
+    "displayName": "Vitrinka"
+  },
+  "plugins": [
+    {
+      "name": "vitrinka",
+      "source": {
+        "source": "local",
+        "path": "./codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

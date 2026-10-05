@@ -49,15 +49,15 @@ function isRecorderOrigin(originModulePath) {
  *   decides the swap, so it is the last point where the answer is knowable.
  */
 function withRecorderStrip(metroConfig, opts = {}) {
-  const enabled = Boolean(
-    process.env.EXPO_PUBLIC_VITRINKA_URL && process.env.EXPO_PUBLIC_VITRINKA_TOKEN,
-  );
+  // URL-only enablement: auth is the device link (or an env token for
+  // unattended builds), so the URL alone decides whether the recorder ships.
+  const enabled = Boolean(process.env.EXPO_PUBLIC_VITRINKA_URL);
 
   const profile = process.env.EAS_BUILD_PROFILE;
   if (!enabled && profile && (opts.requireOnProfiles ?? []).includes(profile)) {
     throw new Error(
       `[@vitrinka/expo] Build refused — the "${profile}" profile requires the vitrinka ` +
-        'recorder env, and EXPO_PUBLIC_VITRINKA_TOKEN is not set. Inject it per build; ' +
+        'recorder env, and EXPO_PUBLIC_VITRINKA_URL is not set. Set it on the profile; ' +
         'without it this profile silently produces a recorder-less binary, which is the ' +
         'one thing it exists not to be.',
     );

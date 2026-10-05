@@ -1,0 +1,152 @@
+/**
+ * Recorder root — mounted ONLY when `url` + `key` are present (see index.ts).
+ * Installs the capture lanes once per document, recovers a session that
+ * survived a reload, and keeps the rrweb lane in step with the session — or,
+ * idle under a mounted pill, with the flight recorder (report.ts).
+ */
+import { type ReactElement, type ReactNode, useEffect } from 'react';
+
+import { installClickLane } from './capture/click';
+import { patchConsole, unpatchConsole } from './capture/console';
+import { installNavLane, noteNavigation, primeNavigation } from './capture/nav';
+import { patchNetwork, unpatchNetwork } from './capture/net';
+import { checkoutRRWeb, flushRRWeb, startFlightRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
+import { configureRecorder, type RecorderConfig } from './config';
+import { installControl } from './control';
+import { flightActive } from './flight';
+import { installUnauthorizedHandler } from './link';
+import { insideHud } from './hud/host';
+import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
+import { dropFlight, syncFlight } from './report';
+import { followOtherTabs, onBeforeStop, recoverRedactionPolicy } from './session';
+import { annotateState, setTabIdentity, subscribe } from './state';
+
+const TAB_KEY = 'vitrinka.tab';
+
+/** One lane per browser tab: a per-tab id kept in sessionStorage (survives reloads). */
+function tabId(): string {
+  try {
+    const ss = globalThis.sessionStorage;
+    const have = ss.getItem(TAB_KEY);
+    if (have) return have;
+    const id = Math.random().toString(36).slice(2, 10);
+    ss.setItem(TAB_KEY, id);
+    return id;
+  } catch {
+    return 'root';
+  }
+}
+
+
+export function RecorderProvider({
+  config,
+  children,
+}: {
+  config: RecorderConfig;
+  children?: ReactNode;
+}): ReactElement {
+  configureRecorder(config);
+
+  useEffect(() => {
+    configureRecorder(config);
+  }, [config]);
+
+  useEffect(() => {
+    setTabIdentity(tabId(), location.host);
+    primeNavigation();
+    // The fetch/XHR and console patches are idempotent (a globalThis mark)
+    // and UNINSTALLED on unmount below, so the recorder never outlives its
+    // tree; the History wrap is idempotent too and stays (a nav event with no
+    // session is dropped at the queue unless the flight recorder holds it).
+    patchNetwork();
+    patchConsole();
+    installNavLane();
+    const uninstallClicks = installClickLane({
+      ignore: (t) => annotateState.active || insideHud(t),
+    });
+    const uninstallControl = installControl();
+    const uninstall401 = installUnauthorizedHandler();
+
+    // Keep the rrweb lane in step with the session: start on record, a fresh
+    // checkout on resume, ship-and-stop on stop. While idle the same lane
+    // feeds the pill's flight recorder; it hands rrweb over (one record() at
+    // a time) before a recording takes it.
+    let wasRecording = false;
+    let wasPaused = false;
+    let wasFlying = false;
+    const syncLanes = () => {
+      void syncFlight();
+      const rec = getState();
+      const recording = rec !== null && !rec.dead;
+      const flying = flightActive();
+      if (wasFlying && !flying) stopRRWeb();
+      if (recording && !wasRecording) startRRWeb();
+      else if (!recording && wasRecording) stopRRWeb();
+      else if (recording && wasPaused && !rec.paused) checkoutRRWeb();
+      if (flying && !wasFlying) startFlightRRWeb();
+      wasRecording = recording;
+      wasPaused = rec?.paused ?? false;
+      wasFlying = flying;
+    };
+    const unsubscribe = subscribe(syncLanes);
+    const offBeforeStop = onBeforeStop(flushRRWeb);
+    // Another tab's Start, pause or Stop reaches this one (syncLanes follows).
+    const unfollow = followOtherTabs();
+
+    // A reload mid-session: the durable tail needs a drain, the reconcile
+    // poll re-arming, the policy re-applying, and the new document is a nav.
+    scheduleFlush();
+    if (getState()) {
+      recoverRedactionPolicy();
+      armReconcile();
+      noteNavigation();
+    }
+    syncLanes();
+
+    // Leaving the document: ship the rrweb tail, persist, and try a keepalive
+    // flush of a small events batch so the last steps ride out.
+    const onPageHide = () => {
+      flushRRWeb();
+      persistNow();
+      void flush({ keepalive: true });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && getState()) {
+        void flush();
+        void reconcile();
+      }
+    };
+    addEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVisible);
+      unsubscribe();
+      offBeforeStop();
+      unfollow();
+      uninstallClicks();
+      uninstallControl();
+      uninstall401();
+      stopRRWeb();
+      dropFlight();
+      unpatchNetwork();
+      unpatchConsole();
+    };
+    // The lanes install once per mount; config changes are handled above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return <>{children}</>;
+}
+
+/**
+ * Feed the recorder a router's pathname (Next: `usePathname()`). The default
+ * History wrap already sees `pushState`; this hook exists for routers that
+ * navigate without it and is idempotent alongside it.
+ */
+export function useRecorderRoute(pathname: string | null | undefined): void {
+  useEffect(() => {
+    if (pathname == null) return;
+    noteNavigation();
+  }, [pathname]);
+}

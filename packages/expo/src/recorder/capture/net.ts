@@ -3,8 +3,10 @@
  *
  * A consuming app's API client may ride axios, which uses XHR on RN — that patch
  * carries the API waterfall. The fetch patch covers manual fetches. Bodies
- * are captured whole up to BODY_CAP (D7 capture-everything, mesh-only);
- * native-level requests (image loads, native SDKs) are out of scope.
+ * are captured whole up to BODY_CAP (D7 capture-everything: recording is
+ * opt-in per session and the tester chooses what to record; nothing leaves the
+ * device except to the configured vitrinka host); native-level requests (image
+ * loads, native SDKs) are out of scope.
  *
  * Recorder's own vitrinka traffic is excluded to avoid feedback loops.
  * Patches observe only — errors in capture code must never break the app's

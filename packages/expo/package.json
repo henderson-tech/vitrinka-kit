@@ -1,11 +1,11 @@
 {
   "name": "@vitrinka/expo",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "vitrinka toolkit for Expo apps \u2014 the journey recorder: capture manual-testing sessions (screenshots, interactions, network, notes) straight into vitrinka boards.",
   "license": "Elastic-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/FixIt-Technologies/vitrinka-kit.git",
+    "url": "https://github.com/henderson-tech/vitrinka-kit.git",
     "directory": "packages/expo"
   },
   "source": "src/index.ts",
@@ -68,6 +68,7 @@
     ]
   },
   "dependencies": {
+    "@vitrinka/link": "^0.1.2",
     "@vitrinka/redact": "^0.1.0"
   },
   "peerDependencies": {

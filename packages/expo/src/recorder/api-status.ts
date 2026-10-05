@@ -1,21 +1,7 @@
 /**
- * Transport-status vocabulary, split out of `api.ts` so it carries NO native
- * imports (`api.ts` pulls expo-file-system for uploads). That lets tests assert
- * against the SHIPPED classification rule instead of re-implementing it — a
- * re-implementation would keep passing if the real rule changed
- *.
+ * Transport-status vocabulary — ONE copy lives in `@vitrinka/link` (the
+ * zero-dependency package every recorder already depends on); this module
+ * keeps the import path stable for `api.ts` and the tests, and stays free of
+ * native imports so suites can assert the SHIPPED classification rule.
  */
-
-export class VitrinkaApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
-
-/** A server verdict retrying can never fix (4xx minus timeout/rate-limit). */
-export function permanentStatus(status: number): boolean {
-  return status >= 400 && status < 500 && status !== 408 && status !== 429;
-}
+export { permanentStatus, VitrinkaApiError } from '@vitrinka/link';

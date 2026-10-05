@@ -252,9 +252,32 @@ export function sensitiveParam(rules: RuleSet, name: string): boolean {
   return n.endsWith('apikey') || n.endsWith('token');
 }
 
-/** Apply the policy's extra regex patterns to one string value. */
+/**
+ * A PEM private key — RSA, EC, OPENSSH, PKCS#8, ENCRYPTED, any label — is a
+ * secret by its VALUE, whatever key or line carries it (`keyPem`, a logged
+ * config, a pasted textarea body). The whole block becomes one marker. A
+ * block with no END line (cut off by a body cap) is scrubbed to the end of
+ * the string: the cap must never become a bypass. A certificate or public
+ * key PEM is not a secret and stays.
+ */
+const PEM_PRIVATE_KEY =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+
+/** A PEM private-key header in DECODED text; `+` is a space in a form value. */
+const PEM_PRIVATE_KEY_HEADER = /-----BEGIN[A-Z +]*PRIVATE[ +]KEY-----/;
+
+/** Replace every PEM private-key block in one string value. */
+function scrubPem(s: string): string {
+  return s.includes('PRIVATE KEY-----') ? s.replace(PEM_PRIVATE_KEY, REDACTED) : s;
+}
+
+/**
+ * Apply the built-in value patterns (PEM private keys) and the policy's extra
+ * regex patterns to one string value. Every surface's string values pass
+ * through here, so a value-shaped secret is caught regardless of its key.
+ */
 function maskPatterns(rules: RuleSet, s: string): string {
-  let out = s;
+  let out = scrubPem(s);
   for (const rx of rules.patterns) {
     rx.lastIndex = 0;
     out = out.replace(rx, REDACTED);
@@ -266,8 +289,12 @@ function maskPatterns(rules: RuleSet, s: string): string {
 // Percent-decoding for INSPECTION (never for output), failing closed
 // ---------------------------------------------------------------------------
 
-/** Does this text contain a `secretkey=value` pair? Used for encoded values. */
+/**
+ * Does this DECODED value carry a secret — a `secretkey=value` pair, or a PEM
+ * private key (which only reads as one once its `%0A`/`+` escapes are gone)?
+ */
 function containsSecretPair(rules: RuleSet, text: string): boolean {
+  if (PEM_PRIVATE_KEY_HEADER.test(text)) return true;
   for (const m of text.matchAll(/([A-Za-z][A-Za-z0-9_.\-[\]]{0,60})\s*[:=]/g)) {
     if (sensitiveBodyKey(rules, m[1] as string)) return true;
   }
@@ -417,7 +444,10 @@ const MASK_TEXT_LIMIT = 128 * 1024;
 
 function maskText(rules: RuleSet, text: string): string {
   if (text.length > MASK_TEXT_LIMIT) return `[body omitted: ${text.length} bytes, unmaskable]`;
-  const scrubbed = text
+  // PEM blocks go FIRST: the key=value pass below can swallow a block's END
+  // line (`…AB=\n-----END` reads as a pair), which would leave the block
+  // matched only up to the end of the string.
+  const scrubbed = scrubPem(text)
     // Secret HEADERS mask their whole value first — running this before the
     // generic pass avoids matching only `Bearer` in `authorization: Bearer
     // <token>` and only the first pair of `Cookie: a=1; b=2`.

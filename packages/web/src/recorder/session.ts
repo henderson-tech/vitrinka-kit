@@ -1,0 +1,409 @@
+/**
+ * Session lifecycle + shared recorder state, ported from the Expo recorder
+ * (itself from the extension's start/pause/stop semantics):
+ *
+ * - start: POST /sessions {host, title, meta} — the recorder key pins the
+ *   project; the server resolves the environment (or honours an explicit one).
+ * - stop: drain FIRST; a timed-out drain REFUSES the stop (capture freezes
+ *   paused, durable tail kept, "stop again once online"). A permanent PATCH
+ *   verdict completes the stop locally so the tester isn't wedged.
+ * - pause: freezes the HUD clock via activeMs/resumeAt bookkeeping.
+ * - reconcile (extension D5/D9): armed for the life of the session; a dead
+ *   verdict freezes capture, and Stop on a dead session completes locally.
+ */
+import type { RedactionPolicy } from '@vitrinka/redact';
+
+import type { SessionDone } from '../protocol';
+import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
+import { redactUrl, setRedactionPolicy } from './capture/redact';
+import { recorderConfig } from './config';
+import {
+  adoptStoredState,
+  armReconcile,
+  capturesSettled,
+  disarmReconcile,
+  drainBuffer,
+  getState,
+  markStopping,
+  pushEvent,
+  queuedCount,
+  REC_KEY,
+  resetHealth,
+  resetIdle,
+  resetQueues,
+  type SessionState,
+  setState,
+  stoppingElsewhere,
+} from './queue';
+import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
+import { currentRoute, notify } from './state';
+import { getRecorderStorage } from './storage';
+
+export { currentRoute, notify, subscribe } from './state';
+export type { SessionDone } from '../protocol';
+
+/** Sent as `meta.recorder`; bumped with the package version. */
+export const RECORDER_VERSION = '0.3.3';
+export const RECORDER_ID = `web/${RECORDER_VERSION}`;
+
+/** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
+export interface SessionOut {
+  id: string;
+  project: string;
+  environment: string;
+  title: string;
+  boardUrl?: string;
+  boardSlug?: string;
+  workspace?: string;
+}
+
+/**
+ * Re-apply a RECOVERED session's redaction policy after a reload — and
+ * re-FETCH it when the original fetch never settled (`policy === undefined`).
+ */
+let policyRecoveryInFlight = false;
+
+export function recoverRedactionPolicy(): void {
+  const rec = getState();
+  if (!rec) return;
+  setRedactionPolicy(rec.policy ?? null);
+  if (rec.policy !== undefined) return;
+  if (policyRecoveryInFlight) return;
+  policyRecoveryInFlight = true;
+  void fetchPolicy()
+    .then((policy) => {
+      const live = getState();
+      if (live?.sessionId !== rec.sessionId) return;
+      if (live.policy !== undefined) return;
+      setRedactionPolicy(policy);
+      setState({ ...live, policy });
+    })
+    .finally(() => {
+      policyRecoveryInFlight = false;
+    });
+}
+
+/**
+ * Keep this document on the recording its other tabs share: the session
+ * record and the recents live in storage every tab of the origin reads, but
+ * each document caches them. A Stop in one tab ends the session in the
+ * others (their pills go idle, their lanes stop sending into it), a Start
+ * is joined as a reload joins it, a pause follows. Returns the unsubscribe.
+ */
+export function followOtherTabs(): () => void {
+  const storage = getRecorderStorage();
+  const offRec = storage.watch?.(REC_KEY, (raw) => {
+    const had = getState()?.policy;
+    const change = adoptStoredState(raw);
+    if (change === 'unchanged') return;
+    if (change === 'ended') setRedactionPolicy(null);
+    if (change === 'joined') {
+      recoverRedactionPolicy();
+      armReconcile();
+    }
+    // The starting tab writes the workspace policy after its first record:
+    // its rules apply here the moment they arrive.
+    const policy = getState()?.policy;
+    if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
+    notify();
+  });
+  const offRecents = storage.watch?.(RECENTS_KEY, forgetRecents);
+  return () => {
+    offRec?.();
+    offRecents?.();
+  };
+}
+
+export function elapsedOf(rec: SessionState | null): number {
+  if (!rec) return 0;
+  let ms = rec.activeMs || 0;
+  if (!rec.paused && rec.resumeAt) ms += Date.now() - Date.parse(rec.resumeAt);
+  return ms;
+}
+
+// -- lifecycle ---------------------------------------------------------------
+
+export interface StartOptions {
+  title?: string;
+  /** Server lane; omitted = the project's rule decides (config's default applies). */
+  environment?: string;
+  /** Marks a machine-driven run (recorded in session meta). */
+  driver?: 'ai';
+  /** Tags to attach right after create (non-fatal). */
+  tags?: string[];
+}
+
+/** The document's host — the create's `host`, the same field the extension sends. */
+function pageHost(): string {
+  try {
+    return globalThis.location?.host ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * `POST /api/v1/sessions` as every web session makes it — a recording and a
+ * bug report alike: the page's `host`, the configured project and lane, and
+ * the recorder meta. `devicePixelRatio` is the scale every rect is recorded
+ * in (`imagePixels`), so the server shoots its stills at it.
+ */
+export function createSession(
+  title: string,
+  opts: { environment?: string; meta?: Record<string, unknown> } = {},
+): Promise<SessionOut> {
+  const cfg = recorderConfig();
+  const environment = opts.environment ?? cfg.environment;
+  return api<SessionOut>('POST', '/api/v1/sessions', {
+    host: pageHost(),
+    title,
+    ...(cfg.project ? { project: cfg.project } : {}),
+    ...(environment ? { environment } : {}),
+    meta: {
+      recorder: RECORDER_ID,
+      userAgent: globalThis.navigator?.userAgent ?? '',
+      platform: 'web',
+      devicePixelRatio: globalThis.devicePixelRatio || 1,
+      ...(cfg.appVersion ? { appVersion: cfg.appVersion } : {}),
+      ...opts.meta,
+    },
+  });
+}
+
+export async function startSession(opts: StartOptions = {}): Promise<SessionState> {
+  // The safe defaults apply from the first captured byte; the workspace
+  // policy (fetched in parallel — fetchPolicy never rejects) can only ADD
+  // rules or, self-host only, fullFidelity.
+  setRedactionPolicy(null);
+  const policyPromise = fetchPolicy();
+  const ses = await createSession(opts.title || '', {
+    ...(opts.environment ? { environment: opts.environment } : {}),
+    ...(opts.driver ? { meta: { driver: opts.driver } } : {}),
+  });
+  void policyPromise.then((policy) => {
+    const rec = getState();
+    if (rec?.sessionId !== ses.id) return;
+    setRedactionPolicy(policy);
+    setState({ ...rec, policy });
+  });
+  setState({
+    sessionId: ses.id,
+    project: ses.project,
+    environment: ses.environment,
+    title: ses.title,
+    ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
+    seq: 0,
+    paused: false,
+    activeMs: 0,
+    resumeAt: new Date().toISOString(),
+  });
+  resetQueues();
+  resetHealth();
+  resetIdle();
+  noteRecent({
+    sessionId: ses.id,
+    title: ses.title,
+    startedAt: Date.now(),
+    status: 'recording',
+    ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
+  });
+  await attachTags(ses.id, opts.tags);
+  armReconcile();
+  pushEvent(
+    'nav',
+    { url: redactUrl(currentUrl()), route: currentRoute.pathname },
+    { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
+  );
+  notify();
+  return getState() as SessionState;
+}
+
+function currentUrl(): string {
+  try {
+    return globalThis.location?.href ?? currentRoute.pathname;
+  } catch {
+    return currentRoute.pathname;
+  }
+}
+
+async function attachTags(sessionId: string, tags: string[] | undefined): Promise<void> {
+  if (!tags?.length) return;
+  try {
+    await api('POST', `/api/v1/sessions/${sessionId}/tags`, { tags });
+  } catch (e) {
+    console.warn(`vitrinka: could not tag session ${sessionId} with ${tags.join(', ')}`, e);
+  }
+}
+
+export async function togglePause(): Promise<boolean> {
+  const rec = getState();
+  if (!rec || rec.dead || stoppingElsewhere(rec)) return false;
+  // A stale mark: the tab that was stopping it is gone, so this is a plain pause.
+  delete rec.stopping;
+  rec.paused = !rec.paused;
+  if (rec.paused) {
+    rec.activeMs = (rec.activeMs || 0) + (rec.resumeAt ? Date.now() - Date.parse(rec.resumeAt) : 0);
+    rec.resumeAt = null;
+  } else {
+    rec.resumeAt = new Date().toISOString();
+  }
+  setState(rec);
+  notify();
+  await api('PATCH', `/api/v1/sessions/${rec.sessionId}`, {
+    status: rec.paused ? 'paused' : 'recording',
+  }).catch((e) => console.warn('vitrinka: pause PATCH failed', e));
+  return rec.paused;
+}
+
+const route = () => ({ tabId: currentRoute.tabId, tabHost: currentRoute.tabHost });
+
+/** A plain note — `{text, route}`, the extension's shape. */
+export function addNote(text: string): void {
+  pushEvent('note', { text, route: currentRoute.pathname }, route());
+}
+
+/** A rect in CSS pixels (viewport coordinates). */
+export interface ViewRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Scale a viewport rect to device pixels — the extension's `imageRect` space. */
+export function imagePixels(r: ViewRect): ViewRect {
+  const s = globalThis.devicePixelRatio || 1;
+  return {
+    x: Math.round(r.x * s),
+    y: Math.round(r.y * s),
+    w: Math.round(r.w * s),
+    h: Math.round(r.h * s),
+  };
+}
+
+/**
+ * An annotation — the extension's annotate-note `{text, rect, selector,
+ * annotate: true}` (+ `task` when the tester chose the task destination);
+ * vitrinka projects it into a board annotation. `selector` is '' for a free
+ * region. The rect is in device pixels. An empty note is still a valid
+ * annotation, matching the extension.
+ */
+export function addAnnotation(
+  text: string,
+  rect: ViewRect,
+  selector: string,
+  opts: { task?: boolean } = {},
+): void {
+  pushEvent(
+    'note',
+    {
+      text,
+      rect: imagePixels(rect),
+      selector,
+      annotate: true,
+      route: currentRoute.pathname,
+      ...(opts.task ? { task: true } : {}),
+    },
+    route(),
+  );
+}
+
+/**
+ * Hooks that run at the top of Stop, before the drain snapshot — the rrweb
+ * lane ships its sub-2s tail here so the last DOM events make the session.
+ */
+const beforeStopHooks = new Set<() => void>();
+
+export function onBeforeStop(fn: () => void): () => void {
+  beforeStopHooks.add(fn);
+  return () => beforeStopHooks.delete(fn);
+}
+
+/**
+ * Stop the session. Throws with the queued-item count when the server is
+ * unreachable — the durable tail is NEVER deleted; capture freezes paused and
+ * a later Stop finishes the job once online.
+ */
+export async function stopSession(): Promise<SessionDone | null> {
+  const rec = getState();
+  if (!rec) return null;
+  // The recording's length is what the tester saw at Stop, not Stop + drain.
+  const durationMs = elapsedOf(rec);
+  // The other tabs leave rec at the Stop, not when the save ends; a stop
+  // that keeps the session hands it back to them as it now is.
+  markStopping(rec.sessionId, durationMs);
+  try {
+    return await finishStop(rec, durationMs);
+  } finally {
+    markStopping(null);
+  }
+}
+
+async function finishStop(rec: SessionState, durationMs: number): Promise<SessionDone | null> {
+  disarmReconcile();
+  for (const fn of beforeStopHooks) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn('vitrinka: before-stop hook failed', e);
+    }
+  }
+  const completeDeadStop = (reason: string | undefined): never => {
+    const kept = queuedCount();
+    updateRecent(rec.sessionId, { status: 'unsaved', durationMs });
+    setState(null);
+    setRedactionPolicy(null);
+    resetQueues();
+    notify();
+    throw new Error(
+      `${reason || 'session rejected by the server'} — recording ended locally` +
+        (kept ? `; ${kept} undelivered item(s) discarded` : ''),
+    );
+  };
+  if (rec.dead) completeDeadStop(rec.deadReason);
+  if (!(await capturesSettled())) {
+    console.warn('vitrinka: stopping with unsettled captures — a late event may not make this session');
+  }
+  if (!(await drainBuffer())) {
+    const live = getState();
+    // Another tab may have moved on to a session of its own meanwhile — never this stop's to hold.
+    const held = live?.sessionId === rec.sessionId ? live : null;
+    if (held?.dead) completeDeadStop(held.deadReason);
+    if (held && !held.paused) {
+      held.activeMs = elapsedOf(held);
+      held.paused = true;
+      held.resumeAt = null;
+      setState(held);
+    }
+    armReconcile();
+    notify();
+    throw new Error(`server unreachable — ${queuedCount()} item(s) kept; stop again once online`);
+  }
+  let done: SessionDone | null = null;
+  try {
+    done = await api<SessionDone>('PATCH', `/api/v1/sessions/${rec.sessionId}`, { status: 'done' });
+  } catch (e) {
+    if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
+      console.warn('vitrinka: stop rejected permanently — clearing local session', e);
+    } else {
+      console.warn('vitrinka: stop PATCH failed — session kept', e);
+      armReconcile();
+      throw e;
+    }
+  }
+  // A permanent refusal still ends the recording locally, but it was not saved.
+  const boardUrl = boardUrlOf(done) ?? rec.boardUrl;
+  updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
+  if (done && !boardUrl) void awaitBoard(rec.sessionId);
+  // Another tab may have ended this session or started the next one while
+  // the stop was out: the state and the queues are then not this stop's to clear.
+  if (getState()?.sessionId === rec.sessionId) {
+    setState(null);
+    setRedactionPolicy(null);
+    resetQueues();
+  }
+  notify();
+  return done;
+}
+
+export type { RedactionPolicy };

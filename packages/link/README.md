@@ -1,0 +1,48 @@
+# @vitrinka/link
+
+The device link both vitrinka recorders authenticate with: the recorder asks
+the server for a short code, the tester approves it in vitrinka (same device
+via a link, or another device via the server-rendered QR), and the recorder
+receives an ingest-only `vkr_` token. No baked secrets, no QR library.
+
+```ts
+import { startLink, pollLink, linkWorkspace, LinkExpired, LinkWorkspaceMismatch } from '@vitrinka/link';
+
+const base = 'https://app.vitrinka.ai/w/acme';
+const workspace = linkWorkspace(base); // 'acme' — undefined for a bare origin
+const start = await startLink(base, { label: 'Safari on macOS · app.example.test', workspace });
+start.user_code;  // 'ABCD-EFGH' — show it
+start.verifyUrl;  // open on the same device (…&workspace=acme preselects it)
+start.qrUrl;      // <img src> for the desktop→phone path (SVG from the server)
+const linked = await pollLink(start.base, start.device_code, { interval: start.interval, expiresIn: start.expires_in, workspace });
+linked.token;     // 'vkr_…' — store it, send it as the bearer
+```
+
+Doors (at the base URL's origin): `POST /api/v1/cli/auth {kind:"recorder",label}` →
+201 `{device_code, user_code, verify_path, verify_url?, qr_path, interval,
+expires_in}`; `POST /api/v1/cli/auth/claim {device_code}` → 202 pending ·
+200 `{token, kind, workspace, label, expires_in}` · 404 expired (`LinkExpired`).
+A transient claim failure (network `TypeError`, 5xx, 408, 429) never ends the poll: it
+backs off (doubling, capped at 30s, honouring a readable `Retry-After`) until `expiresIn`
+passes, then rejects with `LinkExpired`; any other 4xx rejects with `LinkError`.
+A 401 from any session door means the token is dead: forget it and link again.
+
+A token only authenticates in the workspace it was approved into, so a
+`/w/<slug>` base passes that slug as `workspace`: it rides the approve and QR
+URLs as a `workspace=<slug>` preselect (never the start body), and a claim
+approved into another workspace rejects with `LinkWorkspaceMismatch`
+(`linked`, `expected`, a ready-to-show message) — the token is discarded.
+
+## Dock (`@vitrinka/link/dock`)
+
+Where a recorder HUD may rest, shared by every recorder so a throw lands the
+same way everywhere: six spots (corners plus top and bottom centre), a
+release projected along its velocity, and a tuck into a side-edge tab when
+more than a third of the HUD is pushed past that edge. Pure numbers.
+
+```ts
+import { settle, neighbour, parsePlace, spotRect } from '@vitrinka/link/dock';
+
+settle(releasedRect, { x: vx, y: vy }, viewport, insets); // { spot: 'tr' } | { tuck: 'right', y: 0.4 }
+neighbour({ spot: 'br' }, 'ArrowLeft');                   // { spot: 'bc' } — the keyboard alternative
+```

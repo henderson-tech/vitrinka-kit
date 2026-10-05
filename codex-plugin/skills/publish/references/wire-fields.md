@@ -1,0 +1,14 @@
+# Wire fields the skills refer to
+
+Generated from the server's own field definitions — every row is the wire
+contract as the code states it, so edit the source, never this page. A skill
+names a field, this page says what it means.
+
+| field | carried by | meaning (the struct's own doc) |
+|---|---|---|
+| `docCard` | the `vitrinka board push` / `PUT …/content` response (`syncResponse` in `internal/web/handlers_api.go`) | DocCard is the solo-view URL of the doc card a fully-canonical semantic push minted/updated (card-is-truth, unification phase-1 decision #2). Additive: absent for non-semantic sets and docs with non-canonical blocks (a diagnostic names the block). |
+| `url` | every board object (create, list, get) (`boardJSON` in `internal/web/handlers_boards.go`) | URL is the board's ONE link, minted by the server (short links were retired 2026-09-08): print it as returned, never compose a board path. |
+| `created` | `POST /api/v1/boards` with `tags` (`boardJSON` in `internal/web/handlers_boards.go`) | Created and TagsError are the create-with-tags receipt (POST /api/v1/boards with `tags`): Created names the tags the create just MINTED (the guard against typo tags, tags+spotlight decisions #5) and TagsError reports a tag write that failed AFTER the board row landed — the board exists, the tags do not, and the caller must hear it. Both are omitted from every other board response. |
+| `tagsError` | `POST /api/v1/boards` with `tags` (`boardJSON` in `internal/web/handlers_boards.go`) | TagsError is the client-safe message when the tag write after a create failed: the board exists, its tags did not land — fix the tags, never retry the create (the retry would 409). |
+| `elemNo` | every card object (compose, get, scrape) (`cardJSON` in `internal/web/handlers_boards.go`) | ElemNo is the card's stable per-board element identity ("E12"); Version is the card_versions entry the face shows (board-v5). FacePending marks a face produced by a not-yet-reviewed attempt — the pulsing-dot signal (live-card-versions 2026-07-06). |
+| `dataRef` | an element envelope whose bulk data the server spilled to a blob (`Element` in `internal/element/element.go`) | DataRef is the board data blob (/uploads/<board>/data-….json) the server spilled this element's bulk data into; when set, it replaces the inline data slot wholesale and reads carry a summary instead of the rows. |

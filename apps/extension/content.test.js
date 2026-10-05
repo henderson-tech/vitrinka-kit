@@ -12,13 +12,17 @@ function recorder(policy) {
     constructor(tagName = "DIV") {
       this.tagName = tagName;
       this.style = {};
+      this.dataset = {};
       this.classList = { length: 0, add() {}, toggle() {} };
       this.innerText = "";
       this.value = "";
     }
     getAttribute() { return null; }
-    closest() { return this; }
+    closest(selector) { return selector.startsWith("[data-vitrinka-recorder]") || selector.startsWith(".rr-") ? null : this; }
+    querySelector() { return null; }
     contains() { return false; }
+    setAttribute() {}
+    removeAttribute() {}
     getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 30 }; }
     attachShadow() { return { querySelector: () => new Element() }; }
     addEventListener() {}
@@ -26,12 +30,15 @@ function recorder(policy) {
     remove() {}
   }
   const context = createContext({
-    Element, console, Blob, Date,
+    Element, console, Blob, Date, crypto, queueMicrotask,
+    MutationObserver: class { observe() {} disconnect() {} },
+    VitrinkaHud: { mount: () => () => {} },
     window: { devicePixelRatio: 1, innerWidth: 1440 },
     location: { pathname: "/", href: "https://example.test/" },
     document: {
       createElement: () => new Element(),
       documentElement: new Element(),
+      querySelectorAll: () => [],
       addEventListener: (name, listener) => documentListeners.set(name, listener),
       removeEventListener: (name, listener) => {
         if (documentListeners.get(name) === listener) documentListeners.delete(name);
@@ -46,10 +53,11 @@ function recorder(policy) {
       records.push(record);
       return () => { record.stopped = true; };
     },
-    chrome: { runtime: {
+    chrome: { storage: { local: { get: async () => ({}), set: async () => {} } }, runtime: {
+      getManifest: () => ({ version: "0.9.5" }),
       sendMessage: (msg, callback) => {
         messages.push(msg);
-        callback(msg.type === "vt-policy" ? policy : { ok: true });
+        callback(msg.type === "vt-policy" ? policy : msg.type === "vt-status" ? { ok: true, rec: { sessionId: 1, startedAt: new Date().toISOString() } } : { ok: true });
       },
       onMessage: {
         addListener: (listener) => listeners.push(listener),
@@ -65,7 +73,8 @@ function recorder(policy) {
     async start(nextPolicy = policy) {
       policy = nextPolicy;
       runInContext(source, context);
-      await Promise.resolve();
+      // Shared HUD initialization settles before rrweb starts its snapshot.
+      for (let i = 0; i < 12; i++) await Promise.resolve();
     },
     async stop() {
       for (const listener of [...listeners]) listener({ type: "vt-stop" }, {}, () => {});

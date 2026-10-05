@@ -16,6 +16,7 @@
 import { vtdb } from "./db.js";
 import * as vtRedact from "./vendor/redact.js";
 import { newerVersion } from "./version.js";
+import { vtHeaders, WORKSPACE_HEADER } from "./wire.js";
 
 const FLUSH_MS = 2000;
 const SHOT_THROTTLE_MS = 700;
@@ -33,6 +34,8 @@ const RECONCILE_MS = 10_000;
 // Board-readiness poll cadence + ceiling (D11).
 const READY_POLL_MS = 1_500;
 const READY_GIVE_UP_MS = 10 * 60_000;
+// One readiness read's bound: a hung one is a transient miss, retried next tick.
+const READY_READ_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
 // config + state
@@ -51,9 +54,13 @@ async function getConfig() {
   // false — a main-tab chrome.debugger.attach succeeds NONDETERMINISTICALLY
   // under Playwright (its own CDP session usually wins), so organic page
   // traffic would otherwise leak into a spec's waterfall only on slow runs.
-  const { base = "", token = "", captureWorkers = true, captureNetwork = true, stopDrainMs = STOP_DRAIN_MS } =
-    await chrome.storage.local.get(["base", "token", "captureWorkers", "captureNetwork", "stopDrainMs"]);
-  return { base: base.replace(/\/$/, ""), token, captureWorkers, captureNetwork, stopDrainMs };
+  // workspace names which tenant this browser records into: a personal token
+  // acts in every workspace its owner belongs to, so the server refuses with
+  // 401 workspace_required when an account has more than one and the request
+  // names none. Empty is valid — a single-workspace account never needs it.
+  const { base = "", workspace = "", token = "", captureWorkers = true, captureNetwork = true, stopDrainMs = STOP_DRAIN_MS } =
+    await chrome.storage.local.get(["base", "workspace", "token", "captureWorkers", "captureNetwork", "stopDrainMs"]);
+  return { base: base.replace(/\/$/, ""), workspace, token, captureWorkers, captureNetwork, stopDrainMs };
 }
 
 async function getState() {
@@ -62,6 +69,12 @@ async function getState() {
 }
 async function setState(rec) {
   await chrome.storage.local.set({ rec });
+}
+
+// Continue reopens the same server id but starts a new local recording.
+// Missing generations compare equal for a legacy row until its next adoption.
+function sameRecording(current, expected) {
+  return !!current && !!expected && current.sessionId === expected.sessionId && current.generation === expected.generation;
 }
 
 // capturing gates every NEW capture. `stopping` is deliberately separate from
@@ -73,13 +86,27 @@ function capturing(rec) {
 
 // One async mutex serializes every read-modify-write of rec. The SW is
 // single-threaded, but interleaved awaits let two producers read the same seq
-// or clobber each other's writes (review #3644465006/#3644464994).
-let _chain = Promise.resolve();
-function withLock(fn) {
-  const run = _chain.then(fn, fn);
-  _chain = run.catch(() => {});
-  return run;
+// or clobber each other's writes (review #3644465006/#3644464994). Every
+// other stored read-modify-write (the HUD's recents and prefs) gets a chain
+// of its own from serialized(), so it never queues behind the capture path.
+function serialized() {
+  let chain = Promise.resolve();
+  return (fn) => {
+    const run = chain.then(fn, fn);
+    chain = run.catch(() => {});
+    return run;
+  };
 }
+const withLock = serialized();
+
+// A session id is a number per deployment AND per workspace: #12 exists on
+// two servers, and in two workspaces of one. Anything kept beyond the live
+// recording (recents, the board wait, a queued tail) names its scope beside
+// the id, and is only ever asked about on that base with that workspace.
+async function scopeOf(workspace) {
+  return { base: (await getConfig()).base, workspace: workspace || "" };
+}
+const scopeKey = (scope, sessionId) => `${scope.base}\n${scope.workspace || ""}\n${sessionId}`;
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -93,15 +120,34 @@ function permanentStatus(st) {
   return st >= 400 && st < 500 && st !== 408 && st !== 429;
 }
 
-async function api(method, path, body, contentType) {
-  const { base, token } = await getConfig();
+// The workspace a call acts in: the live session's (pinned when the session
+// was created — resolved from the tab's host across every membership, see
+// startSession) over the options page's global default. One browser can
+// record a fixit tab into fixit and a voke tab into voke without retyping
+// the options page in between.
+async function activeWorkspace(configWorkspace) {
+  const rec = await getState();
+  return (rec && rec.workspace) || configWorkspace || "";
+}
+
+async function api(method, path, body, contentType, opts = {}) {
+  // opts.cred sends with exactly the settings read a caller already checked
+  // (sendPrefs), never a fresh one a relink may have changed meanwhile.
+  const { base, workspace, token } = opts.cred || await getConfig();
   if (!base) throw new Error("vitrinka base URL not configured (options page)");
-  const headers = {};
-  if (token) headers.authorization = `Bearer ${token}`;
+  // opts.base pins a scoped read to the server its session lives on, checked
+  // against the same settings read the request is built from: a switch since
+  // the caller looked refuses it (no status, so callers treat it as
+  // transient) instead of asking another deployment about the same #N.
+  if ("base" in opts && opts.base !== base) throw new Error(`${method} ${path} not sent: the session lives on ${opts.base}, the recorder now points at ${base}`);
+  const headers = vtHeaders(token, "workspace" in opts ? opts.workspace : await activeWorkspace(workspace));
   if (body !== undefined) headers["content-type"] = contentType || "application/json";
   const res = await fetch(base + path, {
     method, headers,
     body: body === undefined ? undefined : contentType ? body : JSON.stringify(body),
+    // opts.timeoutMs bounds a call the UI waits on (the HUD's /recorder/me);
+    // capture uploads stay unbounded on purpose — the queue retries them.
+    ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
   });
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${await res.text()}`);
   const text = await res.text();
@@ -111,7 +157,7 @@ async function api(method, path, body, contentType) {
 // ---------------------------------------------------------------------------
 // rrweb chunk splitting
 //
-// Serialized-size split for rrweb batches: with inlineImages/collectFonts on,
+// Serialized-size split for rrweb batches: with collectFonts on,
 // a single 2s batch (especially the full snapshot) can blow past the server's
 // 12 MiB chunk cap — and an oversized chunk can NEVER upload, so admitting it
 // would poison the queue. Greedy-pack events into in-order parts under a pack
@@ -172,6 +218,7 @@ let lastError = "";
 let failures = 0;
 let serverMaxSeq = -1;
 let wrapping = null; // {total, left} while Stop drains
+let liveBoard = { sessionId: null, url: "" }; // the recording's server-minted board link
 
 function noteSync() {
   lastSyncAt = Date.now();
@@ -205,7 +252,9 @@ async function health() {
     queued: st.count,
     bytes: st.bytes,
     blobs: st.blobs,
+    chunks: st.chunks || 0,
     sinceSyncMs: sinceSync,
+    lastSyncAt: lastSyncAt || null,
     failures,
     error: lastError,
     sessionId: rec ? rec.sessionId : null,
@@ -215,6 +264,9 @@ async function health() {
     // is accounted for on the server.
     synced: !!rec && serverMaxSeq >= 0 && serverMaxSeq >= (rec.seq || 0) && st.count === 0,
     deadReason: rec && rec.dead ? rec.deadReason : "",
+    // The live board (D10) as the server addresses it — the HUD's ⋯ menu
+    // links it while recording. Learned on reconcile, never composed.
+    boardUrl: rec && liveBoard.sessionId === rec.sessionId ? liveBoard.url : "",
     wrapping,
     elapsedMs: elapsedOf(rec),
   };
@@ -229,6 +281,289 @@ async function broadcastHealth() {
   for (const tabId of Object.keys(rec.tabs || {})) {
     chrome.tabs.sendMessage(Number(tabId), { type: "vt-health", health: h }).catch(() => {});
   }
+  maybePollPair(rec);
+}
+
+// ---------------------------------------------------------------------------
+// pair-mode narration (pair decisions 2026-08-28 #2)
+//
+// While a session records, the HUD shows whether a Claude session is
+// LISTENING for this project and what it is narrating (board_working) —
+// so the tester learns "⟳ fixing №3 … / ✓ restarting, reload" without ever
+// leaving the app under test. Piggybacked on broadcastHealth (the SW is
+// reliably awake exactly while events flow) and throttled: a poll every ~5s
+// while capture is active, silence otherwise. Failures show nothing — the
+// pair line is narration, never health.
+
+let pairLastPoll = 0;
+let pairLastState = null; // { sessionId, pair } — keyed so a NEW recording never paints the previous session's state
+async function maybePollPair(rec) {
+  if (!rec || rec.dead || !rec.sessionId) return;
+  // The websocket is the primary wire; this poll is its automatic fallback.
+  // Try (re)connecting on every health beat — connectPairWS self-throttles —
+  // and stay quiet while the socket is up for this exact session.
+  connectPairWS().catch(() => {});
+  if (pairSockOpen() && pairSockSession === rec.sessionId) return;
+  if (pairLastState && pairLastState.sessionId !== rec.sessionId) {
+    // Session changed: drop the stale state AND the throttle stamp, so the
+    // new session's first line arrives now, not up to 5s late.
+    pairLastState = null;
+    pairLastPoll = 0;
+  }
+  if (Date.now() - pairLastPoll < 5000) return;
+  pairLastPoll = Date.now();
+  let pair;
+  try {
+    pair = await api("GET", `/api/v1/sessions/${rec.sessionId}/pair`);
+  } catch {
+    return; // keep the last known line; health owns outage messaging
+  }
+  pairLastState = { sessionId: rec.sessionId, pair };
+  for (const tabId of Object.keys(rec.tabs || {})) {
+    chrome.tabs.sendMessage(Number(tabId), { type: "vt-pair", pair }).catch(() => {});
+  }
+}
+// pairStateFor answers vt-status: only ever the CURRENT session's state.
+function pairStateFor(rec) {
+  if (!rec || !pairLastState || pairLastState.sessionId !== rec.sessionId) return null;
+  return pairLastState.pair;
+}
+
+// ---------------------------------------------------------------------------
+// pair panel websocket (pair-panel decisions 2026-08-29)
+//
+// The panel's live wire: /api/v1/sessions/{id}/pair/ws streams item/reply/
+// status/working/relay frames; while it is OPEN the ~5s /pair poll above goes
+// quiet (it is the automatic fallback, not a sibling). The wire law is the
+// server's: every durable write goes over REST via api() below (vt-pair-reply
+// / vt-pair-new / vt-pair-accept / vt-pair-bounce), the socket only echoes.
+//
+// A browser WebSocket cannot carry an Authorization header, so a
+// declarativeNetRequest session rule stamps the extension's Bearer credential
+// onto websocket handshakes to the configured server — the exact same
+// credential api() sends, on the exact same auth path server-side. The rule
+// is scoped to (our host, websocket, /api/v1/sessions/) so it can never leak
+// the token to another site.
+//
+// The server pings every ~15s and we answer with a pong nudge — that traffic
+// is also what keeps this MV3 worker alive inside Chrome's 30s idle window
+// while a panel is up.
+
+const PAIR_DNR_RULE_ID = 7301;
+const PAIR_REPLIES_KEPT = 20;
+const PAIR_RELAY_KEPT = 40;
+const PAIR_TIMELINE_KEPT = 30;
+
+let pairSock = null;
+let pairSockSession = 0;
+let pairRetryAt = 0;
+let pairBackoffMs = 2000;
+// The SW-side mirror of everything the panel renders, rebuilt from frames —
+// a freshly injected page pulls it whole (vt-pair-panel / vt-status) instead
+// of waiting for the next frame. Session-keyed like pairLastState.
+let pairPanel = null;
+
+function resetPairPanel(sessionId) {
+  pairPanel = { sessionId, board: "", listening: false, working: null,
+    items: [], replies: {}, timeline: {}, relay: [], wsUp: false };
+}
+function pairPanelFor(rec) {
+  // A session the server has disowned (rec.dead) has no live pair surface —
+  // reads return nothing and, through pairItemKnown, writes authorize nothing
+  // (r3889185777).
+  if (!rec || rec.dead || !pairPanel || pairPanel.sessionId !== rec.sessionId) return null;
+  return pairPanel;
+}
+function pairSockOpen() {
+  return !!pairSock && pairSock.readyState === WebSocket.OPEN;
+}
+
+function pushTimeline(id, status) {
+  const tl = pairPanel.timeline[id] || (pairPanel.timeline[id] = []);
+  if (tl.length && tl[tl.length - 1].status === status) return;
+  tl.push({ status, at: new Date().toISOString() });
+  if (tl.length > PAIR_TIMELINE_KEPT) tl.shift();
+}
+
+function applyPairFrame(f) {
+  if (!pairPanel) return;
+  switch (f.type) {
+    case "hello":
+      pairPanel.board = f.board || "";
+      pairPanel.listening = !!f.listening;
+      pairPanel.working = f.working || null;
+      break;
+    case "items":
+      pairPanel.items = f.items || [];
+      for (const it of pairPanel.items) pushTimeline(it.id, it.status);
+      break;
+    case "item": {
+      const it = f.item;
+      if (!it) return;
+      const i = pairPanel.items.findIndex((x) => x.id === it.id);
+      if (i >= 0) pairPanel.items[i] = it; else pairPanel.items.push(it);
+      pushTimeline(it.id, it.status);
+      break;
+    }
+    case "status": {
+      const it = pairPanel.items.find((x) => x.id === f.id);
+      if (it) it.status = f.status;
+      pushTimeline(f.id, f.status);
+      break;
+    }
+    case "reply": {
+      const list = pairPanel.replies[f.id] || (pairPanel.replies[f.id] = []);
+      list.push(f.message);
+      if (list.length > PAIR_REPLIES_KEPT) list.shift();
+      break;
+    }
+    case "working":
+      pairPanel.working = f.status ? { status: f.status, actor: f.actor } : null;
+      break;
+    case "listening":
+      pairPanel.listening = !!f.listening;
+      break;
+    case "relay":
+      pairPanel.relay.push({ text: f.text, ts: f.ts });
+      if (pairPanel.relay.length > PAIR_RELAY_KEPT) pairPanel.relay.shift();
+      break;
+  }
+}
+
+async function broadcastPairFrame(frame) {
+  const rec = await getState();
+  if (!rec || rec.sessionId !== pairSockSession) return;
+  for (const tabId of Object.keys(rec.tabs || {})) {
+    chrome.tabs.sendMessage(Number(tabId), { type: "vt-pair-frame", frame }).catch(() => {});
+  }
+}
+
+// ensureWSAuthHeader installs the session DNR rule that authenticates the
+// websocket handshake. Best-effort: without it the handshake is refused
+// server-side and the panel simply stays on the poll fallback.
+async function ensureWSAuthHeader() {
+  const { base, workspace: configWorkspace, token } = await getConfig();
+  const workspace = await activeWorkspace(configWorkspace);
+  if (!base || !token || !chrome.declarativeNetRequest) return false;
+  // Left-anchored to the FULL configured origin — scheme, host AND port
+  // (requestDomains matches domains only and silently dropped the port, so a
+  // token for host:8443 could ride to other ports of the same host;
+  // r3886550909). "|" is DNR's left anchor.
+  const origin = new URL(base).origin;
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [PAIR_DNR_RULE_ID],
+    addRules: [{
+      id: PAIR_DNR_RULE_ID,
+      priority: 1,
+      action: {
+        type: "modifyHeaders",
+        // A browser WebSocket carries neither header, so BOTH the credential
+        // and the tenant it acts in have to be stamped here — a handshake
+        // authenticated but unaddressed is refused exactly like an
+        // unauthenticated one once the account has several memberships.
+        requestHeaders: [
+          { header: "Authorization", operation: "set", value: `Bearer ${token}` },
+          ...(workspace ? [{ header: WORKSPACE_HEADER, operation: "set", value: workspace }] : []),
+        ],
+      },
+      condition: {
+        urlFilter: "|" + origin + "/api/v1/sessions/",
+        resourceTypes: ["websocket"],
+      },
+    }],
+  });
+  return true;
+}
+
+async function connectPairWS() {
+  const rec = await getState();
+  if (!rec || rec.dead || rec.stopping || !rec.sessionId) return;
+  if (pairSock && pairSockSession === rec.sessionId &&
+      (pairSock.readyState === WebSocket.OPEN || pairSock.readyState === WebSocket.CONNECTING)) return;
+  if (Date.now() < pairRetryAt) return;
+  const { base } = await getConfig();
+  if (!base) return;
+  try {
+    if (!(await ensureWSAuthHeader())) return; // no token/DNR — poll fallback carries the line
+  } catch (e) {
+    console.warn("vitrinka: pair ws auth rule failed — staying on the poll", e);
+    return;
+  }
+  closePairWS();
+  if (!pairPanel || pairPanel.sessionId !== rec.sessionId) resetPairPanel(rec.sessionId);
+  let sock;
+  try {
+    sock = new WebSocket(base.replace(/^http/, "ws") + `/api/v1/sessions/${rec.sessionId}/pair/ws`);
+  } catch (e) {
+    pairRetryAt = Date.now() + pairBackoffMs;
+    pairBackoffMs = Math.min(pairBackoffMs * 2, 30_000);
+    console.warn("vitrinka: pair ws connect failed", e);
+    return;
+  }
+  pairSock = sock;
+  pairSockSession = rec.sessionId;
+  sock.onopen = () => {
+    pairBackoffMs = 2000;
+    if (pairPanel) pairPanel.wsUp = true;
+    broadcastPairFrame({ type: "ws", up: true });
+  };
+  sock.onmessage = (ev) => {
+    // A frame already queued when the socket was dropped must not repopulate
+    // the panel we just cleared — same ownership check onclose makes
+    // (r3889185777).
+    if (pairSock !== sock) return;
+    let f;
+    try { f = JSON.parse(ev.data); } catch { return; }
+    if (f.type === "ping") {
+      try { sock.send(`{"type":"pong"}`); } catch { /* close handles it */ }
+      return;
+    }
+    applyPairFrame(f);
+    broadcastPairFrame(f);
+  };
+  sock.onclose = () => {
+    if (pairSock !== sock) return;
+    pairSock = null;
+    if (pairPanel) pairPanel.wsUp = false;
+    pairRetryAt = Date.now() + pairBackoffMs;
+    pairBackoffMs = Math.min(pairBackoffMs * 2, 30_000);
+    broadcastPairFrame({ type: "ws", up: false });
+  };
+  sock.onerror = () => { /* onclose follows and owns the backoff */ };
+}
+
+function closePairWS() {
+  if (!pairSock) return;
+  const sock = pairSock;
+  pairSock = null;
+  // Detach EVERYTHING before closing: a live onmessage on a closed socket can
+  // still deliver an in-flight frame into applyPairFrame (r3889185777).
+  try {
+    sock.onmessage = null;
+    sock.onopen = null;
+    sock.onerror = null;
+    sock.onclose = null;
+    sock.close();
+  } catch { /* already dead */ }
+  if (pairPanel) pairPanel.wsUp = false;
+}
+
+// pairWriteKey mints the retry-safe identity of one panel-born item.
+// pairItemKnown answers whether id is one of THIS session's pair items per
+// the worker's own authenticated state (see the shadow-root caveat above).
+// It takes `rec` and reads through pairPanelFor so the cache is checked
+// SESSION-KEYED like every other panel read: a panel left over from a
+// stopped/dead/previous session must never authorize a write, or the guard
+// would spend the credential on the old session's annotation ids
+// (r3886925281).
+function pairItemKnown(rec, id) {
+  const panel = pairPanelFor(rec);
+  const n = Number(id);
+  return !!(panel && Array.isArray(panel.items) && panel.items.some((i) => i.id === n));
+}
+
+function pairWriteKey() {
+  return (crypto.randomUUID ? crypto.randomUUID() : `k${Date.now()}-${Math.floor(Math.random() * 1e9)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,10 +614,10 @@ async function pushEvents(items) {
 // gap) must not have its item re-attributed to a session that started
 // meanwhile. Multi-part rrweb batches reserve their whole range in this one
 // lock, so a concurrent handler can never interleave into it.
-function allocSeq(count = 1) {
+function allocSeq(count = 1, expected = null) {
   return withLock(async () => {
     const rec = await getState();
-    if (!rec) return null;
+    if (!rec || (expected && (!capturing(rec) || !sameRecording(rec, expected)))) return null;
     const first = rec.seq + 1;
     rec.seq += count;
     await setState(rec);
@@ -349,6 +684,15 @@ async function flushInner() {
       noteSync();
     } catch (e) {
       const st = statusOf(e);
+      if (st === 401 || st === 403) {
+        // A verdict on the CREDENTIAL, never on this item: the token was
+        // revoked, or it is not the one that started this session (a re-link
+        // mid-session — the server answers 403 for a session another
+        // credential started). Keep every queued item, same as phase 2's
+        // terminal verdict; only the reaper's 404/done may discard them.
+        await markSessionDead(rec, `server refused this recorder for the session (${st})`);
+        return false;
+      }
       if (permanentStatus(st)) {
         // Retrying forever would wedge the FIFO behind one bad item.
         console.warn(`vitrinka: ${item.kind} seq ${item.seq} rejected permanently (${st}) — dropped`, e);
@@ -388,7 +732,7 @@ async function flushInner() {
       // D9: a 409 from a session the server already closed used to retry every
       // 2s for the life of the browser profile, keeping the queue on disk
       // forever. A permanent verdict is terminal — say so and stop.
-      await markSessionDead(`server rejected this session (${st})`);
+      await markSessionDead(rec, `server rejected this session (${st})`);
       return false;
     }
     noteFailure(e);
@@ -437,15 +781,21 @@ async function drainQueue(deadlineMs = STOP_DRAIN_MS) {
 // markSessionDead records that the SERVER will not accept this session's
 // events any more (D9). The queue is kept — the tester can still export or
 // inspect it — but the pointless retry loop stops here.
-async function markSessionDead(reason) {
-  const rec = await getState();
-  if (!rec || rec.dead) return;
-  rec.dead = true;
-  rec.deadReason = reason;
-  await setState(rec);
-  console.warn("vitrinka: session marked dead —", reason);
-  await badge("dead");
-  await broadcastHealth();
+async function markSessionDead(expected, reason) {
+  await withLock(async () => {
+    const rec = await getState();
+    // A previous upload/reconcile can finish after Start adopted another
+    // session. Apply its verdict only to the session named in that request.
+    if (!sameRecording(rec, expected) || rec.dead) return;
+    rec.dead = true;
+    rec.deadReason = reason;
+    await setState(rec);
+    closePairWS();
+    resetPairPanel(rec.sessionId);
+    console.warn("vitrinka: session marked dead —", reason);
+    await badge("dead");
+    await broadcastHealth();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -468,8 +818,8 @@ async function reconcile() {
     // (converges, but wastefully).
     policyRefetchInFlight = true;
     applyPolicyWhenFetched(
-      fetchPolicy().finally(() => { policyRefetchInFlight = false; }),
-      rec.sessionId, null,
+      fetchPolicy(rec.workspace || "").finally(() => { policyRefetchInFlight = false; }),
+      rec, null,
     );
   }
   let ses;
@@ -477,15 +827,22 @@ async function reconcile() {
     ses = await api("GET", `/api/v1/sessions/${rec.sessionId}`);
   } catch (e) {
     if (statusOf(e) === 404) {
-      await markSessionDead("session no longer exists on the server");
+      await markSessionDead(rec, "session no longer exists on the server");
       return null;
     }
     noteFailure(e);
     return null;
   }
-  serverMaxSeq = Number(ses.maxSeq || 0);
-  if (!rec.stopping && (ses.status === "done" || ses.deletedAt)) {
-    await markSessionDead(ses.deletedAt ? "session was deleted" : "session was closed on the server");
+  const active = await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, rec)) return null;
+    serverMaxSeq = Number(ses.maxSeq || 0);
+    if (ses.boardUrl) liveBoard = { sessionId: current.sessionId, url: ses.boardUrl };
+    return current;
+  });
+  if (!active) return null;
+  if (!active.stopping && (ses.status === "done" || ses.deletedAt)) {
+    await markSessionDead(rec, ses.deletedAt ? "session was deleted" : "session was closed on the server");
   }
   await broadcastHealth();
   return ses;
@@ -493,35 +850,92 @@ async function reconcile() {
 
 // reapDeadSessions clears queue data for sessions the server considers gone.
 // LIVE data is never touched (D8/D9): the only thing that authorizes a delete
-// is the server saying done / deleted / 404 for that exact session id.
+// is the server saying done / deleted / 404 for that exact session id — asked
+// of the base and workspace it was recorded into (queueScope), since another
+// server's or workspace's #N answering 404 says nothing about this one.
+const QUEUE_SCOPE = "queueScope:";
+
+// The queue itself is keyed by session id alone (db.js [sessionId, seq]), so
+// recording #N while another scope's #N still has an undelivered tail would
+// mix the two and upload that tail into this session — another server's or
+// workspace's data. Refused before adopting the id; the tail keeps its scope.
+async function refuseForeignTail(sessionId, scope) {
+  const prior = (await chrome.storage.local.get(QUEUE_SCOPE + sessionId))[QUEUE_SCOPE + sessionId];
+  if (!prior || scopeKey(prior, sessionId) === scopeKey(scope, sessionId)) return;
+  if (!(await vtdb.sessionStats(sessionId)).count) return;
+  throw new Error(`session #${sessionId} collides with an undelivered tail of #${sessionId} recorded on ${prior.base}`
+    + `${prior.workspace ? ` in ${prior.workspace}` : ""} — switch Settings back to finish it there, or use Recorder data → Clear all`);
+}
+
+// A marker is gone once neither the queue nor the rec holds its session.
+// Candidates come from the reaper's queue snapshot, read without the lock (a
+// full scan, the queue is unbounded, must never stall capture); each is then
+// rechecked under the lock Start/Continue adopt a marker + rec with, by the
+// live rec and a one-record queue read. A marker written after the snapshot
+// is never a candidate.
+async function pruneQueueScopes(st) {
+  const stored = await chrome.storage.local.get(null);
+  const candidates = Object.keys(stored).filter((k) => k.startsWith(QUEUE_SCOPE) && !st.bySession[k.slice(QUEUE_SCOPE.length)]);
+  if (!candidates.length) return;
+  await withLock(async () => {
+    const rec = await getState();
+    const gone = [];
+    for (const k of candidates) {
+      const id = k.slice(QUEUE_SCOPE.length);
+      if (rec && String(rec.sessionId) === id) continue;
+      if ((await vtdb.head(Number(id), 1)).length) continue; // queued since the snapshot
+      gone.push(k);
+    }
+    if (gone.length) await chrome.storage.local.remove(gone);
+  });
+}
+
 async function reapDeadSessions() {
+  // A failed read proves nothing about what is queued: decide (and prune) nothing.
   const st = await vtdb.stats().catch(() => null);
-  if (!st || !st.count) return;
+  if (!st) return;
+  await pruneQueueScopes(st);
   const rec = await getState();
+  const stored = await chrome.storage.local.get(null);
+  if (!st.count) return;
+  const { base } = await getConfig();
   for (const key of Object.keys(st.bySession)) {
     const sessionId = Number(key);
     if (!sessionId) continue;
     if (rec && rec.sessionId === sessionId && !rec.dead) continue; // the live one
+    // A tail queued before 0.9.1 names no scope: asked as before, of the
+    // configured server in the active workspace.
+    const scope = stored[QUEUE_SCOPE + key] || null;
+    if (scope && scope.base !== base) continue; // another server's — this token cannot ask
     let dead = false;
     try {
-      const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
+      const ses = await api("GET", `/api/v1/sessions/${sessionId}`, undefined, undefined, scope ? { base: scope.base, workspace: scope.workspace } : {});
       dead = ses.status === "done" || !!ses.deletedAt;
     } catch (e) {
       if (statusOf(e) === 404) dead = true;
       else continue; // server unreachable — decide nothing, try again later
     }
     if (!dead) continue;
-    const n = await vtdb.dropSession(sessionId);
-    console.warn(`vitrinka: reaped ${n} item(s) of finished session ${sessionId}`);
-    if (rec && rec.sessionId === sessionId) {
+    await withLock(async () => {
+      const current = await getState();
+      // A done response obtained before Continue cannot reap its reopened tail.
+      if (current?.sessionId === sessionId && (!current.dead || !sameRecording(current, rec))) return;
+      const n = await vtdb.dropSession(sessionId);
+      console.warn(`vitrinka: reaped ${n} item(s) of finished session ${sessionId}`);
+      if (!sameRecording(current, rec) || current.sessionId !== sessionId) return;
       await setState(null);
       await badge("off");
-    }
+    });
   }
 }
 
 // ---------------------------------------------------------------------------
 // tab attachment: content script + CDP
+
+// What a recorded tab runs, in order: the manifest icons (the pair panel),
+// rrweb, the shared HUD (`@vitrinka/web`'s hud.iife.js, vendored by
+// tools/vendor-hud) and the content script that mounts it.
+const CONTENT_FILES = ["vendor/vitrinka-icons.js", "vendor/rrweb-record.min.js", "vendor/vitrinka-hud.iife.js", "content.js"];
 
 async function tabInfo(tabId) {
   const rec = await getState();
@@ -539,7 +953,7 @@ async function attachTab(tabId, url) {
   await setState(rec);
 
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["vendor/rrweb-record.min.js", "content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
   } catch (e) {
     console.warn("vitrinka: content inject failed", tabId, e);
   }
@@ -651,10 +1065,10 @@ function capHeaders(h, rec) {
 // every vt-policy/shoot waiter — for the session's lifetime. (No extra
 // rejection guard needed: Promise.race subscribes to every input, so the
 // abandoned request's late rejection is always handled.)
-async function fetchPolicy() {
+async function fetchPolicy(workspace) {
   try {
     const res = await Promise.race([
-      api("GET", "/api/v1/recorder/policy"),
+      api("GET", "/api/v1/recorder/policy", undefined, undefined, { workspace }),
       new Promise((_res, rej) =>
         setTimeout(() => rej(new Error("policy fetch timed out")), 10_000)),
     ]);
@@ -692,7 +1106,7 @@ let pendingPolicy = null;
 // fresher answer even when both runs carry the SAME server session id
 // (stop → continue of one session).
 let policyRunSeq = 0;
-function applyPolicyWhenFetched(policyPromise, sessionId, tabId) {
+function applyPolicyWhenFetched(policyPromise, recording, tabId) {
   const runSeq = ++policyRunSeq;
   // pendingPolicy holds the WHOLE CHAIN (fetch + the setState that persists
   // it), never the raw fetch promise: a waiter racing the raw promise would
@@ -711,7 +1125,7 @@ function applyPolicyWhenFetched(policyPromise, sessionId, tabId) {
     // and erase the fetched policy.
     const rec = await withLock(async () => {
       const live = await getState();
-      if (!live || live.sessionId !== sessionId || live.policy !== undefined) return null;
+      if (!sameRecording(live, recording) || live.policy !== undefined) return null;
       await setState({ ...live, policy });
       return live;
     });
@@ -724,7 +1138,7 @@ function applyPolicyWhenFetched(policyPromise, sessionId, tabId) {
     for (const id of ids) {
       chrome.tabs.sendMessage(id, { type: "vt-policy-push", pixel }).catch(() => {});
     }
-  }).catch(() => {});
+  }).catch((e) => { console.warn("vitrinka: redaction policy apply failed — keeping strict masking", e); });
   pendingPolicy = chain;
   chain.finally(() => {
     if (pendingPolicy === chain) pendingPolicy = null;
@@ -884,8 +1298,9 @@ async function shoot(tabId, payload) {
   // permissive side). Wait bounded; still unsettled ⇒ drop the frame — the
   // same fail-closed spirit as the blur-failure drop below.
   if (rec.policy === undefined) {
+    const expected = rec;
     rec = await awaitPolicySettled(2000);
-    if (!capturing(rec) || rec.policy === undefined) return;
+    if (!capturing(rec) || !sameRecording(rec, expected) || rec.policy === undefined) return;
   }
   const tab = rec.tabs[String(tabId)];
   if (!tab) return;
@@ -896,7 +1311,7 @@ async function shoot(tabId, payload) {
   // (review r3650595572): a stop — or a stop followed by a start — completing
   // during them would otherwise file these pixels into whatever session is
   // live when the encode finishes.
-  const startedIn = rec.sessionId;
+  const startedIn = rec;
   const now = Date.now();
   if (now - lastShot < SHOT_THROTTLE_MS) return;
   lastShot = now;
@@ -939,15 +1354,11 @@ async function shoot(tabId, payload) {
       if (bmp) bmp.close();
     }
   }
+  // Allocate only while the SAME generation is still capturing: Stop→Continue
+  // reuses the server id, but must never adopt pixels from its earlier policy.
+  const alloc = await allocSeq(1, startedIn);
+  if (!alloc) return;
   lastShotHash.set(String(tabId), hash);
-  // Re-validate across the capture awaits, then hold allocSeq to its answer:
-  // the early check avoids burning a seq in the common case, the comparison
-  // closes the window entirely. The encode above is an await, so the item is
-  // filed under the session the seq came from, never whatever is live once
-  // it finishes.
-  if (!capturing(await getState())) return;
-  const alloc = await allocSeq();
-  if (!alloc || alloc.sessionId !== startedIn) return;
   await enqueue({
     sessionId: alloc.sessionId, seq: alloc.seq,
     ts: new Date().toISOString(), tabId: tab.id, tabHost: tab.host,
@@ -964,28 +1375,56 @@ async function startSession(title) {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active || !/^https?:/.test(active.url || "")) throw new Error("open the app you want to record first");
   const host = new URL(active.url).host;
+  // Which workspace records this host? The apex door searches every
+  // membership's project rules (recorder_resolve.go); the options page's
+  // workspace, when set, pins the search to that one. A 404 there means the
+  // older single-tenant server has no such door — fall through and let the
+  // tenant door resolve inside the configured workspace as before.
+  let workspace = (await getConfig()).workspace;
+  try {
+    const hit = await api("GET", `/api/v1/recorder/resolve?host=${encodeURIComponent(host)}`, undefined, undefined, { workspace });
+    if (hit && hit.workspace) workspace = hit.workspace;
+  } catch (e) {
+    const m = /→ (\d{3}): (.*)$/s.exec(String(e && e.message));
+    if (!m || (m[1] !== "404" && m[1] !== "405")) throw e;
+    let code = "";
+    try { code = JSON.parse(m[2]).code || ""; } catch { /* not json */ }
+    if (code === "no_host_rule") throw new Error(`no project claims ${host} in any of your workspaces — add it to a project's domains first`);
+  }
   const ses = await api("POST", "/api/v1/sessions", {
     host, title: title || "", meta: { userAgent: navigator.userAgent, recorder: "extension/" + chrome.runtime.getManifest().version },
-  });
-  // NEVER await the policy before capture starts (REDACTION-SPEC "Fail
-  // closed"): a slow/hung policy endpoint must not block recording or orphan
-  // the just-created server session. Absent policy = the engine defaults
-  // (fail closed); applyPolicyWhenFetched patches rec when it lands and the
-  // reconcile poll retries if the SW died mid-fetch (rec.policy undefined).
-  const policyPromise = fetchPolicy();
-  await setState({
-    sessionId: ses.id, project: ses.project, environment: ses.environment,
+  }, undefined, { workspace });
+  // Pin the resolved tenant before fetching its policy or adopting its queue.
+  workspace = ses.workspace || workspace;
+  const scope = await scopeOf(workspace);
+  try {
+    await refuseForeignTail(ses.id, scope);
+  } catch (e) {
+    await api("PATCH", `/api/v1/sessions/${ses.id}`, { status: "done" }, undefined, { workspace }).catch(() => {});
+    throw e;
+  }
+  // A slow policy never blocks adoption: DOM stays strictly masked and shots
+  // wait/drop until its asynchronous answer settles for this generation.
+  const recording = {
+    generation: crypto.randomUUID(),
+    sessionId: ses.id, project: ses.project, environment: ses.environment, workspace,
     title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
-    // Active-time bookkeeping: elapsed = activeMs + (now - resumeAt while
-    // running). The HUD clock freezes on pause because of this, not luck.
     activeMs: 0, resumeAt: new Date().toISOString(),
+  };
+  await withLock(async () => {
+    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
+    await setState(recording);
   });
-  applyPolicyWhenFetched(policyPromise, ses.id, active.id);
+  applyPolicyWhenFetched(fetchPolicy(workspace), recording, active.id);
   serverMaxSeq = 0;
   lastSyncAt = Date.now();
   failures = 0;
   lastError = "";
   wrapping = null;
+  liveBoard = { sessionId: ses.id, url: ses.boardUrl || "" };
+  resetPairPanel(ses.id); // a new recording starts on an empty panel, not the last one's
+  await noteRecent({ ...scope, sessionId: String(ses.id), title: ses.title || title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording" });
+
   // Anything still queued belongs to an earlier session; the reaper clears it
   // once the server confirms, and flush drops it on sight either way.
   await reapDeadSessions().catch(() => {});
@@ -1002,23 +1441,40 @@ async function startSession(title) {
 // set + board (import-set dedups what's already placed).
 async function continueSession(sessionId) {
   const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
+  const scope = await scopeOf(ses.workspace);
+  await refuseForeignTail(ses.id, scope);
   await api("PATCH", `/api/v1/sessions/${sessionId}`, { status: "recording" });
-  // Same non-blocking policy contract as startSession — never gate resume on
-  // a slow policy endpoint; defaults capture until it lands.
-  const policyPromise = fetchPolicy();
-  await setState({
-    sessionId: ses.id, project: ses.project, environment: ses.environment,
-    title: ses.title, startedAt: new Date().toISOString(), seq: ses.maxSeq || 0,
-    paused: false, tabs: {}, activeMs: 0, resumeAt: new Date().toISOString(),
+  // Adopt the marker and generation atomically, preserving the durable tail's
+  // seq range. Policy settles asynchronously just as on a fresh Start.
+  const recording = await withLock(async () => {
+    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
+    const current = await getState();
+    const pending = await vtdb.sessionStats(ses.id);
+    const localSeq = current?.sessionId === ses.id ? current.seq || 0 : 0;
+    const next = {
+      generation: crypto.randomUUID(),
+      sessionId: ses.id, project: ses.project, environment: ses.environment, workspace: ses.workspace || "",
+      title: ses.title, startedAt: new Date().toISOString(),
+      seq: Math.max(ses.maxSeq || 0, localSeq, pending.maxSeq),
+      paused: false, tabs: {}, activeMs: 0, resumeAt: new Date().toISOString(),
+    };
+    await setState(next);
+    return next;
   });
+  applyPolicyWhenFetched(fetchPolicy(recording.workspace), recording, null);
   serverMaxSeq = Number(ses.maxSeq || 0);
   lastSyncAt = Date.now();
   failures = 0;
   lastError = "";
   wrapping = null;
+  liveBoard = { sessionId: ses.id, url: ses.boardUrl || "" };
+  resetPairPanel(ses.id); // adopted session, same rule — the WS refills it
+  await noteRecent({
+    ...scope, sessionId: String(ses.id), title: ses.title || `Session #${ses.id}`, startedAt: Date.now(), status: "recording",
+    ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
+  });
   await reapDeadSessions().catch(() => {});
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  applyPolicyWhenFetched(policyPromise, ses.id, active ? active.id : null);
   if (active && /^https?:/.test(active.url || "")) {
     await attachTab(active.id, active.url);
     await shoot(active.id, { route: routeOf(active.url), title: active.title, url: active.url });
@@ -1032,17 +1488,21 @@ async function continueSession(sessionId) {
 // drained with visible progress, and the session is closed. The BOARD is not
 // waited for — the server builds it on a worker and the recorder learns it is
 // ready by polling (D11), so Stop and Show-board are separate acts (D3).
-async function stopSession() {
-  const rec = await getState();
+// `pill` ({tabId, token}) is the HUD instance that asked, told the link later.
+async function stopSession(pill = null) {
+  const rec = await withLock(async () => {
+    const current = await getState();
+    if (current && !current.stopping) {
+      // Freeze capture atomically with Start/Continue adopting a new session.
+      // `stopping` still admits detachAll's final rrweb batch, unlike paused.
+      // elapsedOf stops counting once `stopping` is set, so read it first.
+      current.activeMs = elapsedOf(current);
+      current.stopping = true;
+      await setState(current);
+    }
+    return current;
+  });
   if (!rec) return null;
-  if (!rec.stopping) {
-    // Freeze new capture immediately; the clock stops here too. `stopping` is
-    // not `paused` on purpose — detachAll still needs each tab's final rrweb
-    // batch to be accepted.
-    rec.stopping = true;
-    rec.activeMs = elapsedOf(rec);
-    await setState(rec);
-  }
   await badge("wrap");
   await broadcastHealth();
 
@@ -1080,15 +1540,29 @@ async function stopSession() {
   }
   const sessionId = rec.sessionId;
   const title = rec.title || `Session #${sessionId}`;
-  await setState(null);
-  await vtdb.dropSession(sessionId).catch(() => {});
-  wrapping = null;
-  serverMaxSeq = -1;
-  disarmReconcile();
-  await badge("off");
+  await withLock(async () => {
+    const current = await getState();
+    if (current?.sessionId === sessionId && !sameRecording(current, rec)) return;
+    await vtdb.dropSession(sessionId);
+    if (!sameRecording(current, rec)) return;
+    closePairWS();
+    pairPanel = null; // the panel lives exactly as long as the recording
+    await setState(null);
+    wrapping = null;
+    serverMaxSeq = -1;
+    disarmReconcile();
+    await badge("off");
+  });
+  // The device's recents (the HUD's ⋯ menu): saved with its length and the
+  // server's board link, or unsaved when the server refused the close.
+  const boardUrl = (done && (done.boardUrl || (done.board && done.board.url))) || "";
+  const scope = await scopeOf(rec.workspace);
+  await updateRecent(scope, String(sessionId), {
+    status: done ? "saved" : "unsaved", durationMs: rec.activeMs || 0, ...(boardUrl ? { boardUrl } : {}),
+  });
   // D3: the board is a separate, deliberate act. Watch for it to be ready and
   // tell the tester when it is — never steal focus with a tab.
-  if (done) await watchForBoard(sessionId, title, done);
+  if (done) await watchForBoard(sessionId, title, done, scope, pill);
   return done;
 }
 
@@ -1100,16 +1574,23 @@ function elapsedOf(rec) {
 }
 
 async function togglePause() {
-  const rec = await getState();
-  if (!rec || rec.stopping) return;
-  rec.paused = !rec.paused;
-  if (rec.paused) {
-    rec.activeMs = (rec.activeMs || 0) + (rec.resumeAt ? Date.now() - Date.parse(rec.resumeAt) : 0);
-    rec.resumeAt = null;
-  } else {
-    rec.resumeAt = new Date().toISOString();
-  }
-  await setState(rec);
+  // Under the rec lock like every other write: a capture's allocSeq reading
+  // rec around this write used to put the old `paused` back, so the next
+  // toggle paused a session the HUD had just shown resumed.
+  const rec = await withLock(async () => {
+    const r = await getState();
+    if (!r || r.stopping) return null;
+    r.paused = !r.paused;
+    if (r.paused) {
+      r.activeMs = (r.activeMs || 0) + (r.resumeAt ? Date.now() - Date.parse(r.resumeAt) : 0);
+      r.resumeAt = null;
+    } else {
+      r.resumeAt = new Date().toISOString();
+    }
+    await setState(r);
+    return r;
+  });
+  if (!rec) return;
   // The HUD in every recorded tab mirrors the state — popup-pause was
   // invisible to the pill before this broadcast.
   for (const tabId of Object.keys(rec.tabs)) {
@@ -1131,12 +1612,39 @@ async function togglePause() {
 // window, with a chrome.alarm as the resurrection backstop if the worker is
 // killed mid-wait. The web surfaces get the real SSE stream instead.
 
-async function watchForBoard(sessionId, title, initial) {
-  const state = { sessionId, title, since: Date.now() };
-  await chrome.storage.local.set({ awaiting: state });
+// One wait per stop whose board is not built yet, oldest first, stored as
+// `awaiting` (absent when none, so its readers stay truthiness checks):
+// {sessionId, title, since, scope, pill}. The scope is the session's own —
+// the rec is gone by now, and the configured base/workspace may change
+// before the board is built; the pill ({tabId, token}, null for a popup
+// Stop) is the HUD instance saying "Saved · in Recents" until the announced
+// link reaches it. A later Stop adds a wait and never replaces an earlier
+// one, whose pill would otherwise wait for good.
+// An 0.9.3 worker stored one object: it reads as a list of one.
+const waitsOf = (awaiting) => (Array.isArray(awaiting) ? awaiting : awaiting ? [awaiting] : []);
+const waitKey = (wait) => scopeKey(wait.scope || {}, String(wait.sessionId));
+const withWaits = serialized();
+
+// The waits' one read-modify-write, so a Stop's add never races a poll's drop.
+function editWaits(edit) {
+  return withWaits(async () => {
+    const next = edit(waitsOf((await chrome.storage.local.get("awaiting")).awaiting));
+    if (next.length) {
+      await chrome.storage.local.set({ awaiting: next });
+    } else {
+      await chrome.storage.local.remove("awaiting");
+      chrome.alarms.clear("vt-board-ready");
+    }
+  });
+}
+const dropWait = (wait) => editWaits((waits) => waits.filter((w) => waitKey(w) !== waitKey(wait)));
+
+async function watchForBoard(sessionId, title, initial, scope, pill) {
+  const wait = { sessionId, title, since: Date.now(), scope, pill };
+  await editWaits((waits) => [...waits.filter((w) => waitKey(w) !== waitKey(wait)), wait]);
   chrome.alarms.create("vt-board-ready", { periodInMinutes: 0.5 });
   if (initial && initial.projection && initial.projection.state === "ready") {
-    return announceBoard(initial);
+    return announceBoard(initial, wait);
   }
   pollForBoard();
 }
@@ -1146,44 +1654,59 @@ function pollForBoard() {
   if (boardPollTimer) return;
   boardPollTimer = setTimeout(async () => {
     boardPollTimer = null;
+    // Side by side: a slow read of one wait never holds another's.
     const { awaiting } = await chrome.storage.local.get("awaiting");
-    if (!awaiting) return;
-    if (Date.now() - awaiting.since > READY_GIVE_UP_MS) {
-      await chrome.storage.local.remove("awaiting");
-      chrome.alarms.clear("vt-board-ready");
-      return;
-    }
-    let ses;
-    try {
-      ses = await api("GET", `/api/v1/sessions/${awaiting.sessionId}`);
-    } catch {
-      pollForBoard(); // transient — keep waiting
-      return;
-    }
-    const p = ses.projection || {};
-    if (p.state === "ready" && ses.boardSlug) return announceBoard(ses);
-    if (p.state === "failed" || p.state === "empty") {
-      await chrome.storage.local.remove("awaiting");
-      chrome.alarms.clear("vt-board-ready");
-      if (p.state === "failed") notify("Session couldn't be projected", p.error || "see the sessions page");
-      return;
-    }
-    pollForBoard();
+    await Promise.all(waitsOf(awaiting).map(checkBoard));
+    if ((await chrome.storage.local.get("awaiting")).awaiting) pollForBoard();
   }, READY_POLL_MS);
 }
 
-async function announceBoard(ses) {
-  const { awaiting } = await chrome.storage.local.get("awaiting");
-  await chrome.storage.local.remove("awaiting");
-  chrome.alarms.clear("vt-board-ready");
-  const { base } = await getConfig();
-  const url = (ses.board && ses.board.url) || `${base}/boards/${ses.boardSlug}`;
+// One wait's read: announce its board, drop it (given up, failed, empty) or
+// keep waiting (still projecting, or a transient failure).
+async function checkBoard(wait) {
+  if (Date.now() - wait.since > READY_GIVE_UP_MS) return dropWait(wait);
+  // Asked only of the server the session lives on, in its own workspace;
+  // after a base switch the wait just runs out (the recents refresh, or
+  // switching back, still finds the board).
+  const scope = wait.scope;
+  if (scope && scope.base !== (await getConfig()).base) return;
+  let ses;
+  try {
+    ses = await api("GET", `/api/v1/sessions/${wait.sessionId}`, undefined, undefined,
+      { ...(scope ? { base: scope.base, workspace: scope.workspace } : {}), timeoutMs: READY_READ_TIMEOUT_MS });
+  } catch {
+    return; // transient (a timeout included) — keep waiting
+  }
+  const p = ses.projection || {};
+  if (p.state === "ready" && ses.boardSlug) return announceBoard(ses, wait);
+  if (p.state === "failed" || p.state === "empty") {
+    await dropWait(wait);
+    if (p.state === "failed") notify("Session couldn't be projected", p.error || "see the sessions page");
+  }
+}
+
+async function announceBoard(ses, wait) {
+  await dropWait(wait);
+  // The board's address is the server's (`boardUrl`, workspace-prefixed);
+  // composing `${base}/boards/<slug>` here lost the /w/<ws> segment and
+  // 404'd on "Open board". No server-minted address (a pre-2026-09-21
+  // server) means no link — the popup's board row then reads "ready" without
+  // an href rather than pointing at a 404.
+  const url = ses.boardUrl || (ses.board && ses.board.url) || "";
   // Remembered so the popup can offer "Open board" for the last recording
   // even if the notification was missed.
   await chrome.storage.local.set({ lastBoard: {
-    sessionId: ses.id, title: (awaiting && awaiting.title) || ses.title, url, at: Date.now(),
+    sessionId: ses.id, title: wait.title || ses.title, url, at: Date.now(),
   } });
-  notify("Board ready", `${(awaiting && awaiting.title) || ses.title} — click to open`, url);
+  if (url && wait.scope) await updateRecent(wait.scope, String(ses.id), { boardUrl: url, status: "saved" });
+  // That write repainted only a live recording's tabs. The stopping pill
+  // turns "in Recents" into Open board when told — that instance alone, by
+  // its token: a Start in its tab since injected a new one, whose Saved face
+  // must never take this session's link (#N repeats across workspaces).
+  if (url && wait.pill) {
+    chrome.tabs.sendMessage(wait.pill.tabId, { type: "vt-board", hud: wait.pill.token, sessionId: String(ses.id), boardUrl: url }).catch(() => {});
+  }
+  notify("Board ready", `${wait.title || ses.title} — click to open`, url);
 }
 
 function notify(title, message, url) {
@@ -1267,7 +1790,7 @@ chrome.webNavigation.onCommitted.addListener(async (d) => {
     // Full navigation re-injects the content script.
     await pushEvents([{ tabId: known.id, tabHost: known.host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url) } }]);
     try {
-      await chrome.scripting.executeScript({ target: { tabId: d.tabId }, files: ["vendor/rrweb-record.min.js", "content.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: d.tabId }, files: CONTENT_FILES });
     } catch { /* chrome:// etc. */ }
     await shoot(d.tabId, { route: routeOf(d.url), url: d.url });
     return;
@@ -1421,6 +1944,316 @@ async function maybeSelfReload(force = false) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// the shared HUD's account, prefs and recents
+//
+// The in-page HUD is @vitrinka/web's (content.js adapts it). What it shows
+// beyond the recording lives here, in chrome.storage.local, so every tab
+// paints the same answer:
+//   hudRecents  the device's recordings, newest first —
+//               {base, workspace, sessionId, title, startedAt, durationMs?, status, boardUrl?};
+//               one is (base, workspace, sessionId), and the HUD lists the
+//               last five of the current base + workspace only
+//   hudPrefs    {size, verbose}; a linked user's server copy wins
+//   hudMe       who the token records as (GET /api/v1/recorder/me)
+// The same rules as the kit's recorder (packages/web/src/recorder/me.ts,
+// recents.ts): a 404 means a server without the route (prefs stay on the
+// device), a 409 a key build with no user to store against.
+
+const HUD_SIZES = ["sm", "md", "lg"];
+const HUD_DEFAULT_PREFS = { size: "md", verbose: false };
+const MAX_RECENTS = 5;
+// Kept across every base + workspace, so switching back still finds them.
+const MAX_STORED_RECENTS = 20;
+
+function hudPrefsOf(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    size: HUD_SIZES.includes(raw.size) ? raw.size : HUD_DEFAULT_PREFS.size,
+    verbose: typeof raw.verbose === "boolean" ? raw.verbose : HUD_DEFAULT_PREFS.verbose,
+  };
+}
+
+// The account answers for ONE credential: hudMe is stored with the digest of
+// the base + token it was read with (hudMeFor), and a link, a new token or a
+// new base (options page) makes it nobody's — even across a worker restart.
+async function credKey(cfg) {
+  const { base, token } = cfg || await getConfig();
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${base}\n${token}`));
+  return [...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Only a vkr_ recorder token (device link or admin key) has a /recorder/me
+// identity; a vkp_ personal or vks_ service token is answered locally.
+const isRecorderToken = (token) => /^vkr_/.test(token || "");
+
+// A definite identity line the server did not supply: the HUD's menu then
+// reads "<name> · <workspace>" (or "Linked device · <workspace>"), never
+// "checking who this is…" for good.
+function staticAccount(name, workspace) {
+  return {
+    kind: "linked", workspace: { slug: workspace || "", name: workspace || "" },
+    user: name ? { email: "", name } : null, project: null, label: null,
+  };
+}
+
+// The credentials whose /me read ended without an answer (any failure). Per
+// credential, so a late failure for an earlier one never unsettles the
+// current one (a single slot is overwritten by whichever failed last).
+const meSettled = new Set();
+
+// The account the HUD shows: the cached one when it belongs to the
+// configured credential, else a static line. null only while a recorder token's first /me
+// read is in flight — bounded by ME_TIMEOUT_MS.
+async function currentMe(cfg) {
+  const { hudMe = null, hudMeFor = "" } = await chrome.storage.local.get(["hudMe", "hudMeFor"]);
+  const key = await credKey(cfg);
+  if (hudMe && hudMeFor === key) return hudMe;
+  const { token, workspace } = cfg || await getConfig();
+  const rec = await getState();
+  const ws = (rec && rec.workspace) || workspace;
+  if (!isRecorderToken(token)) return staticAccount(token ? "API token" : "No token", ws);
+  return meSettled.has(key) ? staticAccount("", ws) : null;
+}
+
+// The stored recents that name their base: an entry written before 0.9.1
+// carries none, so nothing says which server or workspace its id belongs to.
+// Such entries are dropped rather than attributed to the current settings —
+// after a switch that would pin another deployment's #N to this one's board.
+async function storedRecents() {
+  const { hudRecents = [] } = await chrome.storage.local.get("hudRecents");
+  return hudRecents.filter((r) => r && typeof r.base === "string" && r.base && typeof r.sessionId === "string");
+}
+
+// The base + workspace the HUD answers for: the live recording's, else the
+// configured one, else the recorder token's own; a personal token with no
+// workspace set records wherever the tab's host resolves, so its newest
+// recording on this base names it.
+async function hudScope(recents, hudMe) {
+  const { base, workspace } = await getConfig();
+  const rec = await getState();
+  const newest = recents.find((r) => r.base === base);
+  return {
+    base,
+    workspace: (rec && rec.workspace) || workspace || (hudMe && hudMe.workspace && hudMe.workspace.slug) || (newest && newest.workspace) || "",
+  };
+}
+
+async function hudState() {
+  const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
+  const recents = await storedRecents();
+  const hudMe = await currentMe();
+  const scope = await hudScope(recents, hudMe);
+  const rec = await getState();
+  return {
+    base: scope.base,
+    workspace: scope.workspace,
+    live: rec ? String(rec.sessionId) : null,
+    recents: recents.filter((r) => r.base === scope.base && r.workspace === scope.workspace).slice(0, MAX_RECENTS),
+    prefs: hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS,
+    account: hudMe,
+  };
+}
+
+// Every recorded tab repaints from the new state; a tab whose session just
+// ended asks again itself (its menu refreshes on open).
+async function broadcastHud() {
+  const rec = await getState();
+  if (!rec) return;
+  const hud = await hudState();
+  for (const tabId of Object.keys(rec.tabs || {})) {
+    chrome.tabs.sendMessage(Number(tabId), { type: "vt-hud", hud }).catch(() => {});
+  }
+}
+
+// Start, stop, the board wait and the menu's refresh all rewrite the list;
+// one chain keeps a slow writer from restoring what another just changed.
+const withRecents = serialized();
+
+async function writeRecents(list) {
+  await chrome.storage.local.set({ hudRecents: list.slice(0, MAX_STORED_RECENTS) });
+  await broadcastHud();
+}
+
+// entry carries its scope: {base, workspace, sessionId, …}.
+function noteRecent(entry) {
+  return withRecents(async () => {
+    const key = scopeKey(entry, entry.sessionId);
+    await writeRecents([entry, ...(await storedRecents()).filter((r) => scopeKey(r, r.sessionId) !== key)]);
+  });
+}
+
+function updateRecent(scope, sessionId, patch) {
+  return withRecents(async () => {
+    const key = scopeKey(scope, sessionId);
+    const recents = await storedRecents();
+    if (!recents.some((r) => scopeKey(r, r.sessionId) === key)) return;
+    await writeRecents(recents.map((r) => (scopeKey(r, r.sessionId) === key ? { ...r, ...patch } : r)));
+  });
+}
+
+// Fill the board links the HUD's list lacks through the session's own read,
+// on the entry's own base (the configured one — this token is never sent to
+// another server) in the entry's own workspace; the live recording is skipped
+// (its link arrives with its stop). Each entry is asked once per worker life,
+// so a refused read is not retried on every menu.
+const recentsAsked = new Set();
+async function refreshRecents() {
+  const { recents } = await hudState();
+  const rec = await getState();
+  const live = rec ? scopeKey(await scopeOf(rec.workspace), rec.sessionId) : null;
+  for (const r of recents) {
+    const key = scopeKey(r, r.sessionId);
+    if (r.boardUrl || r.status === "deleted" || key === live || recentsAsked.has(key)) continue;
+    if (r.base !== (await getConfig()).base) continue; // the base changed since the list was read
+    recentsAsked.add(key);
+    try {
+      const ses = await api("GET", `/api/v1/sessions/${r.sessionId}`, undefined, undefined, { base: r.base, workspace: r.workspace });
+      const boardUrl = ses.boardUrl || (ses.board && ses.board.url) || "";
+      if (ses.deletedAt) await updateRecent(r, r.sessionId, { status: "deleted" });
+      else if (boardUrl) await updateRecent(r, r.sessionId, { boardUrl, ...(ses.status === "done" ? { status: "saved" } : {}) });
+    } catch (e) {
+      if (statusOf(e) === 404) await updateRecent(r, r.sessionId, { status: "deleted" });
+      else console.warn(`vitrinka: could not refresh recent session ${r.sessionId} (${r.workspace || "default workspace"} on ${r.base})`, e);
+    }
+  }
+}
+
+// A 404 says the server has no /recorder/me — not asked again while that
+// credential stays. Other failures settle the state but are retried later.
+const meUnavailable = new Set();
+const meWarned = new Set();
+const ME_TIMEOUT_MS = 8000;
+// Local prefs edits so far: a /me answer adopts its prefs only when no edit
+// happened since its request left, so a slow GET never reverts a choice.
+let prefEdits = 0;
+
+// Any /me failure (401/403/404/409, network, timeout): the cached or local
+// state stands, said once per credential.
+function noteMeFailed(e, key) {
+  meSettled.add(key);
+  if (statusOf(e) === 404) meUnavailable.add(key);
+  if (meWarned.has(key)) return;
+  meWarned.add(key);
+  console.warn("vitrinka: /recorder/me failed — the HUD keeps its cached account and on-device prefs", e);
+}
+
+// `key` is the credential the request left with: an answer for an earlier
+// one (re-linked meanwhile) is dropped.
+async function adoptMe(me, gen, key) {
+  const ok = me && (me.kind === "linked" || me.kind === "key") && me.workspace && typeof me.workspace.slug === "string";
+  if (!ok) {
+    console.warn("vitrinka: /recorder/me answered an unexpected shape — ignored");
+    return;
+  }
+  if (key !== (await credKey())) return;
+  const account = { kind: me.kind, workspace: me.workspace, user: me.user || null, project: me.project || null, label: me.label || null };
+  const server = hudPrefsOf(me.prefs);
+  await chrome.storage.local.set({ hudMe: account, hudMeFor: key });
+  // On the prefs chain, so the check and the write see the same edit count;
+  // never over an edit this credential's server has not acknowledged yet.
+  if (server) await withPrefs(async () => {
+    const pending = await pendingPrefs();
+    if (gen === prefEdits && !(pending && pending.for === key)) await chrome.storage.local.set({ hudPrefs: server });
+  });
+}
+
+// Soft failures (offline, an old server) keep the cached account; a 401/403
+// is a real refusal, logged, never an error to show.
+async function hudGetMe() {
+  const key = await credKey();
+  const { base, token } = await getConfig();
+  if (!base || !isRecorderToken(token) || meUnavailable.has(key)) return;
+  // An edit a failed PATCH left unacknowledged goes first: the read then
+  // answers with it, rather than reverting it — after a worker restart too.
+  if (await pendingPrefs()) await withPrefsSync(sendPrefs);
+  const gen = prefEdits;
+  try {
+    await adoptMe(await api("GET", "/api/v1/recorder/me", undefined, undefined, { timeoutMs: ME_TIMEOUT_MS }), gen, key);
+  } catch (e) {
+    noteMeFailed(e, key);
+  }
+  await broadcastHud();
+}
+
+// Prefs are a read-modify-write of hudPrefs that two quick edits (size, then
+// details) or two recorded tabs race: every write of hudPrefs — an edit, or a
+// /me answer adopting the server's copy — runs on withPrefs and merges into
+// what is stored at that moment. The server sees the edits on withPrefsSync,
+// one PATCH at a time in edit order, each carrying every change it has not
+// acknowledged yet.
+const withPrefs = serialized();
+const withPrefsSync = serialized();
+
+// hudPrefsPending {for, prefs}: the edits the server has not acknowledged,
+// sent or not, and the credential (credKey) they were made under. Stored, so
+// a worker restart neither loses nor reverts them; bound to that credential,
+// so a relink never sends one account's edit to another: the edit is dropped
+// and the new account's server copy wins, as on any relink (hudPrefs above).
+async function pendingPrefs() {
+  const { hudPrefsPending = null } = await chrome.storage.local.get("hudPrefsPending");
+  return hudPrefsPending && hudPrefsPending.prefs && Object.keys(hudPrefsPending.prefs).length ? hudPrefsPending : null;
+}
+
+// Drops the fields `sent` acknowledged (all of them when null) from the
+// pending edits made under `key`; a newer value for a field stays pending.
+function settlePrefs(key, sent) {
+  return withPrefs(async () => {
+    const pending = await pendingPrefs();
+    if (!pending || pending.for !== key) return;
+    const left = sent ? Object.fromEntries(Object.entries(pending.prefs).filter(([k, v]) => sent[k] !== v)) : {};
+    if (Object.keys(left).length) await chrome.storage.local.set({ hudPrefsPending: { for: key, prefs: left } });
+    else await chrome.storage.local.remove("hudPrefsPending");
+  });
+}
+
+async function hudSetPrefs(patch) {
+  await withPrefs(async () => {
+    const key = await credKey();
+    const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
+    const pending = await pendingPrefs();
+    await chrome.storage.local.set({
+      hudPrefs: hudPrefsOf({ ...(hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS), ...patch }),
+      hudPrefsPending: { for: key, prefs: { ...(pending && pending.for === key ? pending.prefs : {}), ...patch } },
+    });
+    prefEdits++;
+  });
+  await broadcastHud();
+  await withPrefsSync(sendPrefs);
+}
+
+async function sendPrefs() {
+  // Read together under the prefs chain: the answer to this PATCH is adopted
+  // only if no edit outside this delta happened since.
+  const { pending, gen } = await withPrefs(async () => ({ pending: await pendingPrefs(), gen: prefEdits }));
+  if (!pending) return; // an earlier PATCH already carried this edit
+  // ONE settings read decides and sends: the key the edit is checked against,
+  // the eligibility, and the base/workspace/token the PATCH carries. Settings
+  // relink by writing storage directly (options.js), so any later reread
+  // could put this account's edit under the next account's token.
+  const cred = await getConfig();
+  const key = await credKey(cred);
+  if (pending.for !== key) return void (await settlePrefs(pending.for, null)); // another credential's: dropped, never sent
+  // Prefs stay on the device for every credential the server cannot store
+  // them against: a non-recorder token, a server without the route, a key.
+  const hudMe = await currentMe(cred);
+  if (!cred.base || !isRecorderToken(cred.token) || meUnavailable.has(key) || (hudMe && hudMe.kind === "key")) return void (await settlePrefs(key, null));
+  const workspace = await activeWorkspace(cred.workspace);
+  // Relinked while deciding: the edit belongs to the account left behind and
+  // is dropped (the new account's server copy wins, as on any relink).
+  if ((await credKey()) !== key) return void (await settlePrefs(key, null));
+  try {
+    const me = await api("PATCH", "/api/v1/recorder/me", { prefs: pending.prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS, cred, workspace });
+    await settlePrefs(key, pending.prefs);
+    await adoptMe(me, gen, key);
+  } catch (e) {
+    // 404 (no route) and 409 (a key build): the server can never store them.
+    if (statusOf(e) === 404 || statusOf(e) === 409) await settlePrefs(key, null);
+    noteMeFailed(e, key);
+  }
+  await broadcastHud();
+}
+
 // Messages from content scripts + popup.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
@@ -1432,11 +2265,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // catch at the bottom of this IIFE.
       case "vt-click":
         if (tab) {
-          // The clicked element's label can BE the secret: for an <input>,
-          // innerText is "" so the content script sends el.value — a click
-          // on a filled password/token field would store it verbatim while
-          // rrweb masks the same pixels. Same engine pass the Expo client's
-          // press labels get (press.ts → redactText).
+          // Content masks field values; the remaining label can still carry
+          // a secret. Apply the same text pass as the Expo press-label lane.
           const rec = await getState();
           const payload = { ...msg.payload, text: vtRedact.redactText(rulesOf(rec), (msg.payload && msg.payload.text) || "") };
           await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "click", payload }]);
@@ -1448,8 +2278,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ ok: true });
       case "vt-snap":
         if (tab) {
-          if (msg.payload.note) {
-            await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "note", payload: { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true } }]);
+          // `task` rides with the note so the projection can file the
+          // annotation it authors as an intake draft too (the destination the
+          // tester picked in the HUD before sending). A task destination
+          // admits a note-less snap — the server titles it from the region —
+          // because choosing "task" and getting nothing would be a silent
+          // no-op; without one, an empty note stays a screenshot as before.
+          if (msg.payload.note || msg.payload.task) {
+            await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "note", payload: { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true, task: !!msg.payload.task } }]);
           }
           lastShot = 0; // a deliberate snap always captures
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true });
@@ -1461,14 +2297,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "vt-vitals":
         // Web Vitals per step (sessions-UI D8): one LCP/CLS/INP event per
         // loaded document; the timeline renders it as a ⚡ chip on the step.
-        if (tab) await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "vitals", payload: msg.payload }]);
+        if (tab) {
+          const rec = await getState();
+          const payload = { ...msg.payload, url: redactUrl(rec, (msg.payload && msg.payload.url) || "") };
+          await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "vitals", payload }]);
+        }
         return sendResponse({ ok: true });
       case "vt-rrweb": {
         const rec = await getState();
         // Accepted while `stopping` on purpose: detachAll's final batch is the
         // tail of the recording and must not be refused.
         if (rec && tab && !rec.paused && !rec.dead) {
-          const { parts, bodies, dropped } = splitRRWebEvents(msg.events);
+          // rrweb's Meta event stamps the page URL beside each full snapshot.
+          // It is outside rrweb's text/input masking, so scrub it before IDB.
+          const events = msg.events.map((ev) => ev && ev.type === 4 && ev.data && typeof ev.data.href === "string"
+            ? { ...ev, data: { ...ev.data, href: redactUrl(rec, ev.data.href) } } : ev);
+          const { parts, bodies, dropped } = splitRRWebEvents(events);
           // A dropped event (alone beyond the wire cap — realistically the
           // inlined full snapshot) can make the rest of the recording
           // unreplayable. Surface it ON the session timeline, not just in a
@@ -1502,7 +2346,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "vt-status": {
         const rec = await getState();
-        return sendResponse({ rec, elapsedMs: elapsedOf(rec), health: await health() });
+        // pair rides along so a freshly injected page paints the line
+        // immediately instead of waiting out the next poll window — but only
+        // ever the CURRENT session's state (session-keyed cache). pairPanel
+        // is the websocket panel's whole snapshot, same keying.
+        return sendResponse({ rec, elapsedMs: elapsedOf(rec), health: await health(), pair: pairStateFor(rec), pairPanel: pairPanelFor(rec) });
       }
       case "vt-policy": {
         // The content script asks before starting rrweb. The KEY/URL defaults
@@ -1539,6 +2387,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "vt-health":
         return sendResponse(await health());
+      // The shared HUD's account, prefs and recents (hudState above).
+      case "vt-hud":
+        return sendResponse(await hudState());
+      case "vt-hud-me":
+        await hudGetMe();
+        return sendResponse(await hudState());
+      case "vt-hud-prefs": {
+        const p = msg.patch || {};
+        const patch = {};
+        if (HUD_SIZES.includes(p.size)) patch.size = p.size;
+        if (typeof p.verbose === "boolean") patch.verbose = p.verbose;
+        if (Object.keys(patch).length) await hudSetPrefs(patch);
+        return sendResponse(await hudState());
+      }
+      case "vt-hud-recents":
+        await refreshRecents();
+        return sendResponse(await hudState());
+      case "vt-open-options":
+        // Linking is the options page's device-code dance; a content script
+        // cannot open it itself.
+        await chrome.runtime.openOptionsPage();
+        return sendResponse({ ok: true });
       case "vt-storage":
         return sendResponse(await vtdb.stats());
       case "vt-reap":
@@ -1554,7 +2424,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try { return sendResponse({ ok: true, session: await startSession(msg.title) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-stop":
-        try { return sendResponse({ ok: true, done: await stopSession() }); }
+        try { return sendResponse({ ok: true, done: await stopSession(sender.tab && msg.hud ? { tabId: sender.tab.id, token: String(msg.hud) } : null) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-pause":
         return sendResponse({ ok: true, paused: await togglePause() });
@@ -1570,6 +2440,69 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // The options page asks for the CLI's settings on demand ("fill from
         // this machine"), which is the same call boot() makes silently.
         return sendResponse(await hostCall("config"));
+      // Pair panel writes — ALL durable, ALL over REST (the websocket only
+      // echoes the results back as frames). Each answers {ok} or {ok:false,
+      // error} so the panel can say what happened.
+      // Id-taking writes act ONLY on ids the worker itself knows as this
+      // session's items: the panel lives in an open shadow root inside an
+      // untrusted page, which can rewrite data-id attributes and synthesize
+      // clicks — the credential must never be spendable against arbitrary
+      // annotations (r3886550907). The worker's item list came from the
+      // authenticated WS/poll, never from the page.
+      case "vt-pair-panel": {
+        const rec2 = await getState();
+        connectPairWS().catch(() => {});
+        return sendResponse({ ok: true, panel: pairPanelFor(rec2) });
+      }
+      case "vt-pair-thread": {
+        if (!pairItemKnown(await getState(), msg.id)) return sendResponse({ ok: false, error: "not a pair item of this session" });
+        try {
+          return sendResponse({ ok: true, annotation: await api("GET", `/api/v1/annotations/${msg.id}`) });
+        } catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+      }
+      case "vt-pair-reply": {
+        if (!pairItemKnown(await getState(), msg.id)) return sendResponse({ ok: false, error: "not a pair item of this session" });
+        try {
+          await api("POST", `/api/v1/annotations/${msg.id}/messages`, { author: "user", body: msg.body });
+          return sendResponse({ ok: true });
+        } catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+      }
+      case "vt-pair-new": {
+        const rec2 = await getState();
+        if (!rec2 || !rec2.sessionId) return sendResponse({ ok: false, error: "no live recording" });
+        try {
+          const made = await api("POST", `/api/v1/sessions/${rec2.sessionId}/pair/items`,
+            // The panel mints ONE key per draft and keeps it until the item
+            // is confirmed — a retry after a lost response replays the same
+            // key and dedupes server-side instead of duplicating (r3886550919).
+            { text: msg.text, clientKey: msg.clientKey || pairWriteKey() });
+          return sendResponse({ ok: true, id: made.id });
+        } catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+      }
+      case "vt-pair-accept": {
+        if (!pairItemKnown(await getState(), msg.id)) return sendResponse({ ok: false, error: "not a pair item of this session" });
+        try {
+          await api("PATCH", `/api/v1/annotations/${msg.id}`, { status: "resolved" });
+          return sendResponse({ ok: true });
+        } catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+      }
+      case "vt-pair-bounce": {
+        if (!pairItemKnown(await getState(), msg.id)) return sendResponse({ ok: false, error: "not a pair item of this session" });
+        // Bounce = the board's own re-queue gesture, verbatim: a user reply
+        // re-stages finished work, the release dispatches it (open + wake).
+        // A 409 from release means the item wasn't staged (already back in
+        // the queue) — the reply still landed, so that is success.
+        try {
+          await api("POST", `/api/v1/annotations/${msg.id}/messages`,
+            { author: "user", body: msg.body || "bounced from the pair panel — still broken" });
+          try {
+            await api("POST", `/api/v1/annotations/${msg.id}/release`);
+          } catch (e) {
+            if (statusOf(e) !== 409) throw e;
+          }
+          return sendResponse({ ok: true });
+        } catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+      }
     }
     sendResponse({ ok: false, error: "unknown message" });
   })().catch((e) => {
@@ -1590,7 +2523,7 @@ globalThis.__vt = { startSession, stopSession, togglePause, continueSession, get
 // browser profile (extension-update.spec.ts).
 globalThis.__vtUpdate = { extUpdateStatus, applyUpdate, seedConfig, hostCall, maybeSelfReload, boot: () => boot() };
 // e2e-only handles for the durable-queue paths (harmless in production).
-globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue };
+globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents, watchForBoard };
 
 // Keyboard commands relay to the active tab's HUD.
 chrome.commands.onCommand.addListener(async (command) => {

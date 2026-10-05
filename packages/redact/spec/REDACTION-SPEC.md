@@ -72,6 +72,16 @@ Body keys (values replaced wholesale, recursively): `password`, `passwd`,
 URL parameters: every sensitive body key, plus the `apikey`/`token` suffix
 rule (`?access_token=…`, `?sas_token=…`, `?my_api_key=…`).
 
+Values (scrubbed by shape, whatever key or line carries them): a **PEM
+private key** — `-----BEGIN <LABEL>PRIVATE KEY-----` through the matching
+`-----END <LABEL>PRIVATE KEY-----`, any label (`RSA `, `EC `, `OPENSSH `,
+`ENCRYPTED `, none), across lines — becomes one `[redacted]`. A block with no
+END line (cut off by a cap) is scrubbed to the end of the value. This runs
+wherever the extra patterns run (every string value of every surface), and
+an encoded value (form/query, `+` or `%20` for spaces) whose *decoded* form
+holds the BEGIN line loses its whole value. Certificates and public keys
+are not secrets and stay.
+
 The reference engine additionally **token-matches** names (splitting
 camelCase/snake/kebab into words) against a secret vocabulary (`auth`, `otp`,
 `pin`, `cvv`, `iban`, `ssn`, `credential`, …) and secret phrases

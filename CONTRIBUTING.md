@@ -19,7 +19,10 @@ bun run --filter '@vitrinka/expo' test
 - `packages/*` — npm packages under the `@vitrinka` scope. Each package owns
   its `README.md`, `CHANGELOG.md`, and tests.
 - `apps/extension` — the Chrome extension (Manifest V3, no build step; `dist.sh`
-  zips it for release).
+  zips it for release). **Generated**: the product repo's `tools/export-kit`
+  renders it from `vitrinka/apps/extension` and prunes anything else, so an
+  edit made here is overwritten by the next export — open it against the
+  product repo instead.
 
 ## Pull requests
 
@@ -30,6 +33,13 @@ bun run --filter '@vitrinka/expo' test
 
 ## Releases (maintainers)
 
-npm packages release by tag: `expo-vX.Y.Z` → CI builds and publishes
-`@vitrinka/expo` with provenance. The extension releases through the Chrome Web
-Store on its manifest version.
+npm packages release by tag: `<pkg>-vX.Y.Z` (`link`, `redact`, `web`, `expo`)
+→ `release-<pkg>.yml` → `.github/actions/release-package` builds, tests and
+publishes `@vitrinka/<pkg>` with provenance. The tag must sit on main and
+match the package's version; a version already on npm is a no-op. Tag `link`
+and `redact` first when `web` or `expo` depend on a new version of them.
+Publishing authenticates through npm trusted publishing (one entry per
+package naming its `release-<pkg>.yml`), with the `NPM_TOKEN` repo secret as
+the fallback until every package carries an entry. A new package is one thin
+`release-<pkg>.yml` plus its trusted-publisher entry. The extension releases
+from the product repo (`release-extension.yaml`) on its manifest version.

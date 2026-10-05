@@ -18,8 +18,13 @@ coverage/
 
 # AI tooling — planning, memory, and agent config never enter this repo
 .claude/
+.worktrees/
 CLAUDE.md
 AGENTS.md
 .codex/
 .cursor/
 .cursorignore
+
+# Playwright output (packages/web/e2e)
+test-results/
+playwright-report/
