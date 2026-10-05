@@ -99,19 +99,26 @@ export function registerRecorderTab() {
 export async function waitForRecorderPeers(keys: readonly string[], sessionId: string, timeoutMs = 60_000): Promise<boolean> {
   const storage = getRecorderStorage();
   if (!storage.watch || !keys.length) return true;
-  if (keys.some((key) => {
-    const peer = readParticipant(storage.getString(key));
-    return peer?.departed && peer.recoverable;
-  })) {
-    await flush();
-    await drainBuffer();
-  }
   const results = await Promise.all(keys.map((key) => new Promise<boolean>((resolve) => {
     let off = () => {};
+    let recovering = false;
     const finish = (saved: boolean) => { clearTimeout(timer); off(); resolve(saved); };
     const check = (raw: string | null | undefined) => {
       const peer = readParticipant(raw);
       if (!peer || peer.sessionId !== sessionId) finish(true);
+      else if (peer.departed && peer.recoverable) {
+        if (recovering) return;
+        recovering = true;
+        void (async () => {
+          await flush();
+          await drainBuffer();
+          const remaining = readParticipant(storage.getString(key));
+          finish(!remaining || remaining.sessionId !== sessionId);
+        })().catch((error: unknown) => {
+          console.warn('vitrinka: departed tab could not save its tail', error);
+          finish(false);
+        });
+      }
       else if (peer.failed) finish(false);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);

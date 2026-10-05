@@ -7,11 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { currentRules } from '../capture/redact';
 import { configureRecorder } from '../config';
-import { __resetForTests, adoptStoredState, flush, getState, markStopping, pushRRWebBatch, STOPPING_TTL_MS } from '../queue';
+import { __dropCachesForTests, __resetForTests, adoptStoredState, flush, getState, markStopping, persistNow, pushRRWebBatch, STOPPING_TTL_MS } from '../queue';
 import { addAnnotation, addNote, followOtherTabs, onBeforeStop, RECORDER_ID, startSession, stopSession, togglePause } from '../session';
 import { currentRoute, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../storage';
-import { registerRecorderTab } from '../tabs';
+import { registerRecorderTab, waitForRecorderPeers } from '../tabs';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
@@ -170,6 +170,62 @@ describe('session', () => {
       bus.events.dispatchEvent(new Event('pagehide'));
       expect(JSON.parse(storage.getString(key) ?? 'null')).toMatchObject({ sessionId: 'sess-1', failed: true, departed: true });
     } finally { tab.dispose(); bus.restore(); }
+  });
+
+  it('keeps a reloaded assigned journal recoverable when departing under a held lock', async () => {
+    const bus = tabEvents();
+    const storage = memoryRecorderStorage();
+    let held = false;
+    __resetStorageForTests();
+    configureRecorderStorage({ ...storage, watch: () => () => {}, withLock: async (_key, run) => {
+      if (held) await new Promise<void>(() => {});
+      run();
+    } });
+    __resetForTests();
+    await startSession();
+    addNote('assigned before reload');
+    stub.script.events.push({ ok: false, status: 503 });
+    expect(await flush()).toBe(false);
+    persistNow();
+    __dropCachesForTests();
+    held = true;
+    const tab = registerRecorderTab()!;
+    try {
+      const key = storage.keys!().find((key) => key.startsWith('tab.'))!;
+      bus.events.dispatchEvent(new Event('pagehide'));
+      expect(JSON.parse(storage.getString(key) ?? 'null')).toMatchObject({ departed: true, recoverable: true });
+      held = false;
+      expect(await flush()).toBe(true);
+      expect(storage.getString(key)).toBeNull();
+    } finally { tab.dispose(); bus.restore(); }
+  });
+
+  it('recovers a durable peer that departs after the Stop wait has started', async () => {
+    const storage = memoryRecorderStorage();
+    const watchers = new Map<string, (raw: string | null) => void>();
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...storage,
+      withLock: async (_key, run) => { run(); },
+      remove: (key) => { storage.remove(key); watchers.get(key)?.(null); },
+      watch: (key, check) => { watchers.set(key, check); return () => void watchers.delete(key); },
+    });
+    __resetForTests();
+    await startSession();
+    await flush();
+    storage.set('tab.sibling', JSON.stringify({ sessionId: 'sess-1', at: Date.now() }));
+    const waiting = waitForRecorderPeers(['tab.sibling'], 'sess-1', 1000);
+    expect(watchers.has('tab.sibling')).toBe(true);
+    storage.set('allocation.sibling.1', JSON.stringify({ draft: {
+      sessionId: 'sess-1', ts: new Date().toISOString(), tabId: 'sibling', tabHost: 'app.example.test',
+      kind: 'event', event: { kind: 'note', payload: { text: 'departed during Stop' } },
+    } }));
+    const departed = JSON.stringify({ sessionId: 'sess-1', at: Date.now(), failed: true, departed: true, recoverable: true });
+    storage.set('tab.sibling', departed);
+    watchers.get('tab.sibling')!(departed);
+    expect(await waiting).toBe(true);
+    expect(storage.getString('tab.sibling')).toBeNull();
+    expect(stub.calls.some((call) => call.path.endsWith('/events') && JSON.stringify(call.body).includes('departed during Stop'))).toBe(true);
   });
 
   it('registers the restored document again after a back-forward cache pageshow', async () => {
