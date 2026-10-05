@@ -143,6 +143,9 @@ function safeSet(key: string, value: string): boolean {
   }
 }
 
+/** Storage key of the session record — shared by every tab of the origin. */
+export const REC_KEY = 'rec';
+
 // The session record is small and read on every event — cache it in memory and
 // write through, so the capture hot path never parses JSON.
 let recCache: SessionState | null | undefined;
@@ -153,14 +156,56 @@ let recCache: SessionState | null | undefined;
  * in the same tick.
  */
 export function getState(): SessionState | null {
-  if (recCache === undefined) recCache = readJson<SessionState | null>('rec', null);
+  if (recCache === undefined) recCache = readJson<SessionState | null>(REC_KEY, null);
   return recCache;
 }
 
 export function setState(rec: SessionState | null): void {
   recCache = rec;
-  if (rec === null) kv().remove('rec');
-  else safeSet('rec', JSON.stringify(rec));
+  if (rec === null) kv().remove(REC_KEY);
+  else safeSet(REC_KEY, JSON.stringify(rec));
+}
+
+export type StoredChange = 'joined' | 'updated' | 'ended' | 'unchanged';
+
+/**
+ * Another document of this origin (a second tab) wrote the session record.
+ * The store is shared, this cache is not — a tab that joined a recording on
+ * load would otherwise keep painting and capturing it after another tab
+ * stopped it. So: a stop there ends the session here, dropping this tab's
+ * undelivered tail (the server no longer accepts it); a session started
+ * there is joined, as a reload joins it; the same session takes the stored
+ * record (a pause, a dead verdict) but never a lower seq than this tab
+ * already allocated. Nothing is written back.
+ */
+export function adoptStoredState(raw: string | null): StoredChange {
+  let next: SessionState | null = null;
+  if (raw) {
+    try {
+      next = JSON.parse(raw) as SessionState;
+    } catch {
+      return 'unchanged';
+    }
+  }
+  const cur = getState();
+  if (!next) {
+    if (!cur) return 'unchanged';
+    recCache = null;
+    dropLocalTail();
+    disarmReconcile();
+    return 'ended';
+  }
+  if (cur?.sessionId === next.sessionId) {
+    next.seq = Math.max(next.seq, cur.seq);
+    // A policy this tab already holds outlives a record written before it.
+    if (next.policy === undefined && cur.policy !== undefined) next.policy = cur.policy;
+    recCache = next;
+    return 'updated';
+  }
+  recCache = next;
+  // A tail this tab still held belongs to another session, never to this one.
+  dropLocalTail();
+  return 'joined';
 }
 
 /**
@@ -171,6 +216,12 @@ const PERSIST_DEBOUNCE_MS = 700;
 
 let bufferCache: RecorderEvent[] | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * This tab let go of its tail for another tab's session (dropLocalTail): its
+ * empty caches must not overwrite the stored tail that tab owns — not even
+ * on pagehide — until this tab queues work of its own again.
+ */
+let tailDropped = false;
 
 function getBuffer(): RecorderEvent[] {
   if (bufferCache === undefined) bufferCache = readJson<RecorderEvent[]>('buffer', []);
@@ -188,10 +239,11 @@ function persistBuffer(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
-  if (bufferCache !== undefined) safeSet('buffer', JSON.stringify(bufferCache));
+  if (bufferCache !== undefined && !tailDropped) safeSet('buffer', JSON.stringify(bufferCache));
 }
 
 function schedulePersist(): void {
+  tailDropped = false;
   if (persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = null;
@@ -202,6 +254,7 @@ function schedulePersist(): void {
 
 function setBuffer(buffer: RecorderEvent[]): void {
   bufferCache = buffer;
+  tailDropped = false;
   persistBuffer();
 }
 
@@ -220,6 +273,7 @@ function getChunks(): PendingChunk[] {
 
 /** Best-effort: persisted while small, memory-only (and said so) beyond the budget. */
 function persistChunks(): void {
+  if (tailDropped) return;
   const chunks = getChunks();
   if (chunks.length === 0) {
     kv().remove('chunks');
@@ -235,6 +289,7 @@ function persistChunks(): void {
 function setChunks(chunks: PendingChunk[]): void {
   chunkCache = chunks;
   chunkBytes = chunks.reduce((n, c) => n + c.body.length, 0);
+  tailDropped = false;
   persistChunks();
 }
 
@@ -422,6 +477,15 @@ export async function capturesSettled(deadlineMs = CAPTURES_SETTLE_MS): Promise<
   return true;
 }
 
+/**
+ * Did this tab's session change while an upload for `rec` was out — ended
+ * or replaced by another tab (adoptStoredState)? Then the upload's outcome
+ * must not touch the queue, which belongs to the next session now.
+ */
+function movedOn(rec: SessionState): boolean {
+  return getState()?.sessionId !== rec.sessionId;
+}
+
 /** Is `id` the session currently in state AND still accepting capture? */
 export function isSessionLive(id: string): boolean {
   const rec = getState();
@@ -597,6 +661,9 @@ async function drainPending(limit = 5): Promise<boolean> {
     }
     try {
       const up = await uploadChunk(rec.sessionId, item.seq, item.body);
+      // Another tab ended or replaced the session while this upload was out:
+      // its tail is gone here, and nothing of it may re-enter the queue.
+      if (movedOn(rec)) return getChunks().length === 0;
       // The event row joins the buffer only now, keeping its original seq —
       // a late retry fills the stream's gap.
       pushRawEvent({
@@ -611,6 +678,7 @@ async function drainPending(limit = 5): Promise<boolean> {
       noteSync();
       gone.add(item.seq);
     } catch (e) {
+      if (movedOn(rec)) return getChunks().length === 0;
       if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
         console.warn(`vitrinka: rrweb chunk seq ${item.seq} rejected permanently (${e.status}) — dropped`);
         gone.add(item.seq);
@@ -692,6 +760,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   try {
     await api('POST', `/api/v1/sessions/${rec.sessionId}/events`, { events: batch }, opts);
   } catch (e) {
+    if (movedOn(rec)) return false;
     if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
       markSessionDead(`server rejected this session (${e.status})`);
       return false;
@@ -702,6 +771,9 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
     scheduleFlush();
     return false;
   }
+  // Acked for a session this tab no longer holds: the buffer is another
+  // session's now, and its seqs restart — never filter it by these.
+  if (movedOn(rec)) return true;
   noteSync();
   serverMaxSeq = Math.max(serverMaxSeq, batch[batch.length - 1]?.seq ?? serverMaxSeq);
   notify();
@@ -730,6 +802,21 @@ export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
 export function resetQueues(): void {
   setBuffer([]);
   setChunks([]);
+}
+
+/**
+ * Forget this tab's buffers WITHOUT writing storage: another tab owns the
+ * stored record now, and its own tail there must survive.
+ */
+function dropLocalTail(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  bufferCache = [];
+  chunkCache = [];
+  chunkBytes = 0;
+  tailDropped = true;
 }
 
 /** Test-only: drop all module state so suites cannot leak into each other. */
@@ -763,6 +850,7 @@ export function __dropCachesForTests(): void {
     flushTimer = null;
   }
   flushBusy = false;
+  tailDropped = false;
   recCache = undefined;
   bufferCache = undefined;
   chunkCache = undefined;

@@ -18,7 +18,7 @@ import { installUnauthorizedHandler } from './link';
 import { insideHud } from './hud/host';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
 import { dropFlight, syncFlight } from './report';
-import { onBeforeStop, recoverRedactionPolicy } from './session';
+import { followOtherTabs, onBeforeStop, recoverRedactionPolicy } from './session';
 import { annotateState, setTabIdentity, subscribe } from './state';
 
 const TAB_KEY = 'vitrinka.tab';
@@ -90,6 +90,8 @@ export function RecorderProvider({
     };
     const unsubscribe = subscribe(syncLanes);
     const offBeforeStop = onBeforeStop(flushRRWeb);
+    // Another tab's Start, pause or Stop reaches this one (syncLanes follows).
+    const unfollow = followOtherTabs();
 
     // A reload mid-session: the durable tail needs a drain, the reconcile
     // poll re-arming, the policy re-applying, and the new document is a nav.
@@ -121,6 +123,7 @@ export function RecorderProvider({
       document.removeEventListener('visibilitychange', onVisible);
       unsubscribe();
       offBeforeStop();
+      unfollow();
       uninstallClicks();
       uninstallControl();
       uninstall401();

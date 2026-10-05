@@ -203,9 +203,12 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   const annotating = p.snap.annotating;
   const hold = p.menuOpen || p.composing || annotating || face === 'flow';
 
-  // Content a closing segment keeps for its closing frames.
+  // Content a closing segment keeps for its closing frames — an ended
+  // recording's clock stands where it stopped, never ticking on.
   const lastRec = useRef<HudRecording | null>(rec);
   if (rec) lastRec.current = rec;
+  else if (lastRec.current && lastRec.current.resumedAt !== null)
+    lastRec.current = { ...lastRec.current, activeMs: elapsedOf(lastRec.current, p.now), resumedAt: null };
   const lastFlow = useRef<Flow>(p.flow);
   if (p.flow.face !== 'none') lastFlow.current = p.flow;
   const shownRec = rec ?? lastRec.current;
@@ -319,8 +322,10 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   }
 
   const chip = shownRec ? syncChip(shownRec.sync, p.now) : null;
-  const bad = chip?.kind === 'offline' || chip?.kind === 'error';
-  const state = bad ? 'bad' : !shownRec || shownRec.paused || shownRec.dead ? 'paused' : 'rec';
+  // The state is the LIVE recording's: an ended one lends its closing frames content, never its state.
+  const live = rec ? syncChip(rec.sync, p.now).kind : null;
+  const bad = live === 'offline' || live === 'error';
+  const state = bad ? 'bad' : !rec || rec.paused || rec.dead ? 'paused' : 'rec';
   const unlinked = !p.snap.linked;
   const puckLabel = unlinked ? 'Link recorder' : 'Start recording';
   const confirming = p.flow.face === 'confirm';

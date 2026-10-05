@@ -70,7 +70,9 @@ Only during a session you explicitly start:
   lane. Within an enabled build, capture runs only between you starting a
   recording from the pill (or the `window.__vitrinkaRecorder` control
   handle) and stopping it; the pill is always visible while recording. A
-  recording survives a reload of the same tab and continues in it. The one
+  recording survives a reload of the same tab and continues in it; another
+  tab of the app opened during it joins it, and a Stop in any tab ends
+  capture in all of them. The one
   exception is the **flight recorder** behind "Report a bug" (below): while
   the pill is mounted and idle on a device that can record (a key or a
   link), it keeps the page's last minute **in memory only** — nothing is

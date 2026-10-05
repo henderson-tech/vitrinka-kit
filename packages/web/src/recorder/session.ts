@@ -18,6 +18,7 @@ import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
 import { redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
 import {
+  adoptStoredState,
   armReconcile,
   capturesSettled,
   disarmReconcile,
@@ -25,20 +26,22 @@ import {
   getState,
   pushEvent,
   queuedCount,
+  REC_KEY,
   resetHealth,
   resetIdle,
   resetQueues,
   type SessionState,
   setState,
 } from './queue';
-import { noteRecent, updateRecent } from './recents';
+import { forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
+import { getRecorderStorage } from './storage';
 
 export { currentRoute, notify, subscribe } from './state';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.3.1';
+export const RECORDER_VERSION = '0.3.2';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -76,6 +79,37 @@ export function recoverRedactionPolicy(): void {
     .finally(() => {
       policyRecoveryInFlight = false;
     });
+}
+
+/**
+ * Keep this document on the recording its other tabs share: the session
+ * record and the recents live in storage every tab of the origin reads, but
+ * each document caches them. A Stop in one tab ends the session in the
+ * others (their pills go idle, their lanes stop sending into it), a Start
+ * is joined as a reload joins it, a pause follows. Returns the unsubscribe.
+ */
+export function followOtherTabs(): () => void {
+  const storage = getRecorderStorage();
+  const offRec = storage.watch?.(REC_KEY, (raw) => {
+    const had = getState()?.policy;
+    const change = adoptStoredState(raw);
+    if (change === 'unchanged') return;
+    if (change === 'ended') setRedactionPolicy(null);
+    if (change === 'joined') {
+      recoverRedactionPolicy();
+      armReconcile();
+    }
+    // The starting tab writes the workspace policy after its first record:
+    // its rules apply here the moment they arrive.
+    const policy = getState()?.policy;
+    if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
+    notify();
+  });
+  const offRecents = storage.watch?.(RECENTS_KEY, forgetRecents);
+  return () => {
+    offRec?.();
+    offRecents?.();
+  };
 }
 
 export function elapsedOf(rec: SessionState | null): number {
@@ -316,7 +350,9 @@ export async function stopSession(): Promise<SessionDone | null> {
     console.warn('vitrinka: stopping with unsettled captures — a late event may not make this session');
   }
   if (!(await drainBuffer())) {
-    const held = getState();
+    const live = getState();
+    // Another tab may have moved on to a session of its own meanwhile — never this stop's to hold.
+    const held = live?.sessionId === rec.sessionId ? live : null;
     if (held?.dead) completeDeadStop(held.deadReason);
     if (held && !held.paused) {
       held.activeMs = elapsedOf(held);
@@ -343,9 +379,13 @@ export async function stopSession(): Promise<SessionDone | null> {
   // A permanent refusal still ends the recording locally, but it was not saved.
   const boardUrl = done?.board?.url ?? rec.boardUrl;
   updateRecent(rec.sessionId, { status: done ? 'saved' : 'unsaved', durationMs, ...(boardUrl ? { boardUrl } : {}) });
-  setState(null);
-  setRedactionPolicy(null);
-  resetQueues();
+  // Another tab may have ended this session or started the next one while
+  // the stop was out: the state and the queues are then not this stop's to clear.
+  if (getState()?.sessionId === rec.sessionId) {
+    setState(null);
+    setRedactionPolicy(null);
+    resetQueues();
+  }
   notify();
   return done;
 }
