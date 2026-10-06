@@ -14,6 +14,7 @@
 // one uploader drains the queue FIFO. Every entry point rehydrates first.
 
 import { vtdb } from "./db.js";
+import * as vtRedact from "./vendor/redact.js";
 import { newerVersion } from "./version.js";
 import { vtHeaders, WORKSPACE_HEADER } from "./wire.js";
 
@@ -613,10 +614,10 @@ async function pushEvents(items) {
 // gap) must not have its item re-attributed to a session that started
 // meanwhile. Multi-part rrweb batches reserve their whole range in this one
 // lock, so a concurrent handler can never interleave into it.
-function allocSeq(count = 1) {
+function allocSeq(count = 1, expected = null) {
   return withLock(async () => {
     const rec = await getState();
-    if (!rec) return null;
+    if (!rec || (expected && (!capturing(rec) || !sameRecording(rec, expected)))) return null;
     const first = rec.seq + 1;
     rec.seq += count;
     await setState(rec);
@@ -806,6 +807,21 @@ async function markSessionDead(expected, reason) {
 async function reconcile() {
   const rec = await getState();
   if (!rec) return null;
+  // A SW death between session start and the policy fetch landing leaves
+  // rec.policy undefined forever (the promise died with the worker) — the
+  // reconcile poll is the natural retry heartbeat. undefined strictly means
+  // "no answer yet"; a completed-but-failed fetch stored null (defaults are
+  // then final). Single-flight so overlapping polls don't stack fetches.
+  if (rec.policy === undefined && !policyRefetchInFlight && !pendingPolicy) {
+    // !pendingPolicy: the start-path fetch may still be in flight — starting
+    // a second fetch would bump policyRunSeq and discard the first apply
+    // (converges, but wastefully).
+    policyRefetchInFlight = true;
+    applyPolicyWhenFetched(
+      fetchPolicy(rec.workspace || "").finally(() => { policyRefetchInFlight = false; }),
+      rec, null,
+    );
+  }
   let ses;
   try {
     ses = await api("GET", `/api/v1/sessions/${rec.sessionId}`);
@@ -927,14 +943,21 @@ async function tabInfo(tabId) {
 }
 
 async function attachTab(tabId, url) {
-  const rec = await getState();
-  if (!rec || rec.tabs[String(tabId)]) return;
+  const recording = await getState();
+  if (!recording || recording.tabs[String(tabId)]) return;
   let host = "";
   try { host = new URL(url).host; } catch { return; }
   if (!host || !/^https?:/.test(url)) return;
-  rec.nextTab = (rec.nextTab || 0) + 1; // monotonic: lane ids never reused after tab close
-  rec.tabs[String(tabId)] = { id: `tab${rec.nextTab}`, host, cdp: false };
-  await setState(rec);
+  const rec = await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(tabId)]) return null;
+    current.nextTab = (current.nextTab || 0) + 1; // monotonic: lane ids never reused after tab close
+    current.tabs[String(tabId)] = { id: `tab${current.nextTab}`, host, cdp: false };
+    await setState(current);
+    return current;
+  });
+  if (!rec) return;
+  const laneId = rec.tabs[String(tabId)].id;
 
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
@@ -958,8 +981,12 @@ async function attachTab(tabId, url) {
       await chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach",
         { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
     }
-    const rec2 = await getState();
-    if (rec2 && rec2.tabs[String(tabId)]) { rec2.tabs[String(tabId)].cdp = true; await setState(rec2); }
+    await withLock(async () => {
+      const current = await getState();
+      if (!sameRecording(current, rec) || current.tabs[String(tabId)]?.id !== laneId) return;
+      current.tabs[String(tabId)].cdp = true;
+      await setState(current);
+    });
   } catch (e) {
     console.warn("vitrinka: CDP attach failed — recording without network bodies", tabId, String(e));
   }
@@ -984,178 +1011,170 @@ async function detachAll() {
 const inflight = new Map();
 
 // ---------------------------------------------------------------------------
-// redaction (SaaS data-security 2026-08-23 decision #2)
+// redaction (SaaS data-security decision #2) — the shared @vitrinka/redact
+// engine (vendor/redact.js, generated from packages/redact).
 //
-// Safe-by-default capture-side scrubbing, mirroring the server's
-// internal/redact engine: auth-bearing header VALUES and known-sensitive
-// JSON/form body keys never leave the machine. The workspace policy
-// (GET /api/v1/recorder/policy, fetched at session start) adds extra names,
-// regex patterns, and — self-host only — the fullFidelity escape hatch.
-// The server re-applies the same policy at ingest as the backstop; this side
-// is defense in depth + smaller stored payloads. Fail CLOSED: no policy
-// (fetch failed, old server) means the defaults, never capture-everything.
+// Safe-by-default capture-side scrubbing, mirroring the server's ingest
+// engine: auth-bearing header VALUES, known-sensitive JSON/form body keys and
+// URL query/fragment secrets never leave the machine. The workspace policy
+// (GET /api/v1/recorder/policy, fetched at session start, riding in `rec` so
+// every SW wake has it) adds extra names, regex patterns, and — self-host
+// only — the fullFidelity escape hatch. The server re-applies the same policy
+// at ingest as the backstop; this side is defense in depth + smaller stored
+// payloads. Fail CLOSED: no policy (fetch failed, old server) means the
+// engine defaults, never capture-everything.
 
-const REDACTED = "[redacted]";
-// Normalized (lowercase, -/_ stripped) — matches the server's norm().
-const DEFAULT_HDRS = new Set(["authorization", "proxyauthorization", "cookie", "setcookie",
-  "xapikey", "xauthtoken", "xcsrftoken", "xamzsecuritytoken"]);
-const DEFAULT_KEYS = new Set(["password", "passwd", "secret", "token", "accesstoken",
-  "refreshtoken", "idtoken", "authorization", "apikey", "clientsecret",
-  "card", "cardnumber", "cvv", "cvc", "pin", "ssn"]);
-const normName = (s) => String(s).toLowerCase().replace(/[-_]/g, "");
+// Compiled rules for a rec's policy (the engine caches by policy identity).
+function rulesOf(rec) {
+  return vtRedact.compileRules((rec && rec.policy) || null);
+}
 
-// Compiled-policy cache (per SW life — rebuilt for free on every wake).
-let _polCache = { src: undefined, c: null };
-function compiledPolicy(policy) {
-  const src = JSON.stringify(policy || null);
-  if (_polCache.src === src) return _polCache.c;
-  const hdrs = new Set(DEFAULT_HDRS);
-  const keys = new Set(DEFAULT_KEYS);
-  const patterns = [];
-  for (const h of (policy && policy.extraHeaders) || []) hdrs.add(normName(h));
-  for (const k of (policy && policy.extraBodyKeys) || []) keys.add(normName(k));
-  for (const p of (policy && policy.patterns) || []) {
-    // Server-validated as RE2; a JS-engine-specific miss must not kill
-    // capture — the server backstop still applies the pattern at ingest.
-    try { patterns.push(new RegExp(p, "g")); }
-    catch (e) { console.warn("vitrinka: unsupported redaction pattern", p, e); }
-  }
-  _polCache = { src, c: { full: !!(policy && policy.fullFidelity), hdrs, keys, patterns } };
-  return _polCache.c;
-}
-function sensitiveHeader(c, name) {
-  const n = normName(name);
-  return c.hdrs.has(n) || n.endsWith("apikey") || n.endsWith("token");
-}
-function maskPatterns(c, s) {
-  for (const rx of c.patterns) { rx.lastIndex = 0; s = s.replace(rx, REDACTED); }
-  return s;
-}
-// sensitiveParam mirrors the server's SensitiveParam: sensitive body keys plus
-// the api-key/token suffix rule (?access_token=…, ?sas_token=…).
-function sensitiveParam(c, name) {
-  const n = normName(name);
-  return c.keys.has(n) || n.endsWith("apikey") || n.endsWith("token");
-}
-// scrubPairs redacts sensitive-keyed pairs in one raw query/fragment/form
-// string, splitting on BOTH separators (& and ;). Never URLSearchParams: it
-// treats `;` as a literal, hiding a trailing `;access_token=…` inside the
-// previous value's string — the same class of bypass as the server's
-// url.ParseQuery hole (phase-1 gate finding #1). Mirrors Engine.scrubQuery;
-// a benign string comes back byte-identical.
-function scrubPairs(sensitive, raw) {
-  let changed = false;
-  const out = raw.split(/[&;]/).filter((p) => p !== "").map((p) => {
-    const i = p.indexOf("=");
-    const key = i >= 0 ? p.slice(0, i) : p;
-    let name = key;
-    try { name = decodeURIComponent(key.replace(/\+/g, " ")); } catch { /* raw key matches below */ }
-    if (sensitive(name)) { changed = true; return encodeURIComponent(name) + "=" + REDACTED; }
-    return p; // preserve benign pairs' original encoding
-  });
-  return changed ? out.join("&") : raw;
-}
 // redactUrl scrubs sensitive query/fragment parameter values from a URL
-// before it is stored — OAuth callbacks, magic links, SAS URLs. Mirrors the
-// server backstop's Engine.URL; benign URLs pass through byte-identical.
-function redactUrl(policy, raw) {
-  const c = compiledPolicy(policy);
-  if (c.full || !raw) return raw;
-  const param = (name) => sensitiveParam(c, name);
-  let out = raw;
-  try {
-    const u = new URL(raw);
-    let changed = false;
-    if (u.search.length > 1) {
-      const q = scrubPairs(param, u.search.slice(1));
-      if (q !== u.search.slice(1)) { u.search = "?" + q; changed = true; }
-    }
-    // Implicit-grant OAuth returns tokens in the FRAGMENT (#access_token=…).
-    if (u.hash.length > 1 && u.hash.includes("=")) {
-      const f = scrubPairs(param, u.hash.slice(1));
-      if (f !== u.hash.slice(1)) { u.hash = "#" + f; changed = true; }
-    }
-    if (changed) out = u.toString();
-  } catch {
-    // Not an absolute URL — still scrub whatever follows the first ?/#
-    // (mirrors the server's unparseable-URL path).
-    const i = raw.search(/[?#]/);
-    if (i >= 0) {
-      out = raw.slice(0, i + 1) +
-        raw.slice(i + 1).split("#").map((seg) => scrubPairs(param, seg)).join("#");
-    }
-  }
-  return maskPatterns(c, out);
+// before it is stored — OAuth callbacks, magic links, SAS URLs. Benign URLs
+// pass through byte-identical.
+function redactUrl(rec, raw) {
+  return vtRedact.redactUrl(rulesOf(rec), raw || "");
 }
-function scrubTree(c, v, depth = 0) {
-  if (depth > 64) return REDACTED;
-  if (Array.isArray(v)) return v.map((x) => scrubTree(c, x, depth + 1));
-  if (v && typeof v === "object") {
-    for (const k of Object.keys(v)) v[k] = c.keys.has(normName(k)) ? REDACTED : scrubTree(c, v[k], depth + 1);
-    return v;
-  }
-  return typeof v === "string" ? maskPatterns(c, v) : v;
+
+// redactBodyCapped scrubs one request/response body and caps it to BODY_CAP
+// in the engine's shape-aware ORDER (REDACTION-SPEC §Bodies): JSON redacts
+// WHOLE then caps — slicing first would downgrade exactly the payloads most
+// likely to carry credentials to the weaker truncation fallback. Form-encoded
+// and multipart bodies scrub key-wise; everything else gets the text pass.
+function redactBodyCapped(rec, body, contentType) {
+  return vtRedact.redactAndCap(rulesOf(rec), body || "", BODY_CAP, contentType || "");
 }
+
+// headerCT extracts a content-type from a raw CDP header map ("" if absent).
 function headerCT(h) {
-  for (const k of Object.keys(h || {})) if (normName(k) === "contenttype") return String(h[k]);
+  for (const k of Object.keys(h || {})) {
+    if (k.toLowerCase().replace(/[-_]/g, "") === "contenttype") return String(h[k]);
+  }
   return "";
-}
-// redactBody scrubs one (already BODY_CAP-capped) request/response body.
-// JSON parses + scrubs recursively; a JSON-looking body that fails to parse
-// (truncated at the cap) gets a key-pair regex pass so the cap never becomes
-// a bypass; form-encoded bodies scrub key-wise; anything else only passes
-// the policy patterns.
-function redactBody(policy, body, contentType) {
-  const c = compiledPolicy(policy);
-  if (c.full || !body) return body;
-  const t = body.trimStart();
-  if (t.startsWith("{") || t.startsWith("[")) {
-    try { return JSON.stringify(scrubTree(c, JSON.parse(body))); }
-    catch {
-      return maskPatterns(c, body.replace(
-        /("([a-z0-9_-]+)"\s*:\s*)("(?:[^"\\]|\\.)*"?|[^,}\]\r\n]*)/gi,
-        (m, pre, key) => (c.keys.has(normName(key)) ? pre + '"' + REDACTED + '"' : m)));
-    }
-  }
-  if (/x-www-form-urlencoded/i.test(contentType || "")) {
-    // Same dual-separator split as redactUrl — URLSearchParams would hide a
-    // `;password=…` pair inside the preceding value (gate finding #1).
-    return maskPatterns(c, scrubPairs((name) => c.keys.has(normName(name)), body));
-  }
-  return maskPatterns(c, body);
 }
 
 // Headers ride along capped (D2 "all headers") and REDACTED: sensitive names
-// lose their value before anything is stored. Individual values bounded,
+// lose their value before anything is stored; individual values bounded,
 // total budget ~8 KiB per side so one giant cookie can't bloat the event.
-function capHeaders(h, policy) {
+function capHeaders(h, rec) {
   if (!h) return undefined;
-  const c = compiledPolicy(policy);
-  const out = {};
-  let budget = 8192;
-  for (const [k, v] of Object.entries(h)) {
-    const raw = !c.full && sensitiveHeader(c, k) ? REDACTED
-      : c.full ? String(v) : maskPatterns(c, String(v));
-    const val = raw.slice(0, 1024);
-    budget -= k.length + val.length;
-    if (budget < 0) { out["…"] = "(truncated)"; break; }
-    out[k] = val;
-  }
-  return out;
+  return vtRedact.redactHeaders(rulesOf(rec), h);
 }
 
-// fetchPolicy pulls the workspace redaction policy at session start. null
-// (server too old, network down, 4xx) = the safe defaults — never full
-// fidelity, which only ever arrives as an explicit server-approved flag.
-// workspace: the session's — it runs BEFORE setState pins rec.workspace, so
-// activeWorkspace() cannot know it yet (review on #838).
+// fetchPolicy pulls the workspace redaction policy at session start. Full
+// fidelity only ever arrives as an explicit, validated server-approved flag.
+// fetchPolicy resolves to THREE distinct states — never conflate them,
+// because the engine's DOM/pixel defaults are PERMISSIVE and resolving
+// "unknown" to them fails open:
+//   policy object / null  — the server ANSWERED (2xx, or a deliberate 4xx =
+//                           no policy / request refused): defaults are FINAL.
+//   undefined             — UNKNOWN (timeout, network error, 5xx): rec.policy
+//                           stays unset, waiters answer STRICT, shoot() keeps
+//                           dropping, and the reconcile poll retries.
+// BOUNDED (10s): a hung endpoint must not pin pendingPolicy — and with it
+// every vt-policy/shoot waiter — for the session's lifetime. (No extra
+// rejection guard needed: Promise.race subscribes to every input, so the
+// abandoned request's late rejection is always handled.)
 async function fetchPolicy(workspace) {
   try {
-    return (await api("GET", "/api/v1/recorder/policy", undefined, undefined, { workspace })).policy || null;
+    const res = await Promise.race([
+      api("GET", "/api/v1/recorder/policy", undefined, undefined, { workspace }),
+      new Promise((_res, rej) =>
+        setTimeout(() => rej(new Error("policy fetch timed out")), 10_000)),
+    ]);
+    // A 2xx WITHOUT the policy envelope (204, proxy-stripped body) is
+    // out-of-contract — UNKNOWN, not "no policy": the real endpoint always
+    // carries a `policy` key, even for the zero policy.
+    if (!res || typeof res !== "object" || Array.isArray(res) || !("policy" in res)) return undefined;
+    const policy = res.policy;
+    if (policy === null) return null;
+    // A malformed answer must stay UNKNOWN: settling it could reopen DOM or
+    // pixels, or persist rules the engine cannot compile and suppress retries.
+    // Unknown fields remain forward-compatible; recognized fields are typed.
+    if (!policy || typeof policy !== "object" || Array.isArray(policy)) return undefined;
+    for (const key of ["extraHeaders", "extraBodyKeys", "patterns"]) {
+      if (key in policy && (!Array.isArray(policy[key]) || !policy[key].every((value) => typeof value === "string"))) return undefined;
+    }
+    for (const key of ["maskAllText", "fullFidelity"]) {
+      if (key in policy && typeof policy[key] !== "boolean") return undefined;
+    }
+    return policy;
   } catch (e) {
-    console.warn("vitrinka: redaction policy fetch failed — using safe defaults", e);
-    return null;
+    const status = statusOf(e);
+    // permanentStatus = 4xx minus 408/429: a rate-limited or proxy-timed-out
+    // GET is TRANSIENT — settling it would reopen the fail-open this tri-state
+    // exists to close (401/403 stay permanent deliberately: a dead token kills
+    // the uploads through the same api(), so the session is dying regardless).
+    if (permanentStatus(status)) {
+      console.warn("vitrinka: no redaction policy (HTTP " + status + ") — using safe defaults", e);
+      return null;
+    }
+    console.warn("vitrinka: redaction policy fetch failed — strict masking until the retry lands", e);
+    return undefined;
   }
+}
+
+// applyPolicyWhenFetched patches the fetched policy into rec once it lands —
+// only while the SAME run is live and no answer settled meanwhile — then
+// pushes the pixel policy to every attached tab (a surviving content-script
+// instance keeps module state across sessions). Never blocks session start
+// (REDACTION-SPEC "Fail closed": the KEY/URL defaults capture until the
+// policy lands; the DOM/pixel directives wait via awaitPolicySettled below,
+// because THEIR default is the permissive side).
+let policyRefetchInFlight = false;
+// The in-flight fetch, exposed so vt-policy/shoot can wait on it bounded.
+let pendingPolicy = null;
+// Monotonic run counter: a stale promise from run A must not outrace run B's
+// fresher answer even when both runs carry the SAME server session id
+// (stop → continue of one session).
+let policyRunSeq = 0;
+function applyPolicyWhenFetched(policyPromise, recording, tabId) {
+  const runSeq = ++policyRunSeq;
+  // pendingPolicy holds the WHOLE CHAIN (fetch + the setState that persists
+  // it), never the raw fetch promise: a waiter racing the raw promise would
+  // resume and re-read storage BEFORE the apply's write committed, observe
+  // policy === undefined on a fetch that just succeeded, and take the strict
+  // path on a perfectly healthy backend.
+  const chain = policyPromise.then(async (policy) => {
+    if (runSeq !== policyRunSeq) return; // a newer run superseded this fetch
+    // UNKNOWN outcome (timeout/network/5xx): let the chain settle — which
+    // unpins pendingPolicy so waiters stop hanging — but write NOTHING:
+    // rec.policy stays undefined, waiters stay strict, reconcile retries.
+    if (policy === undefined) return;
+    // The read-modify-write rides withLock like every other state writer —
+    // an unserialized apply could interleave with attachTab/pushEvents,
+    // whose stale rec (policy still undefined) would commit AFTER this write
+    // and erase the fetched policy.
+    const rec = await withLock(async () => {
+      const live = await getState();
+      if (!sameRecording(live, recording) || live.policy !== undefined) return null;
+      await setState({ ...live, policy });
+      return live;
+    });
+    if (!rec) return;
+    // Push to the explicit tab AND every attached tab — the reconcile retry
+    // has no single "active" tab, and surviving instances all need the flip.
+    const pixel = vtRedact.pixelPolicy(vtRedact.compileRules(policy || null));
+    const ids = new Set(Object.keys(rec.tabs || {}).map(Number));
+    if (tabId != null) ids.add(tabId);
+    for (const id of ids) {
+      chrome.tabs.sendMessage(id, { type: "vt-policy-push", pixel }).catch(() => {});
+    }
+  }).catch((e) => { console.warn("vitrinka: redaction policy apply failed — keeping strict masking", e); });
+  pendingPolicy = chain;
+  chain.finally(() => {
+    if (pendingPolicy === chain) pendingPolicy = null;
+  });
+}
+
+// Bounded wait for the in-flight policy. Returns the FRESH rec afterwards;
+// callers whose safe default is the PERMISSIVE side (rrweb text masking,
+// screenshot blur) must not act on an unsettled state.
+async function awaitPolicySettled(ms) {
+  if (pendingPolicy) {
+    await Promise.race([pendingPolicy, new Promise((res) => setTimeout(res, ms))]);
+  }
+  return getState();
 }
 
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
@@ -1179,18 +1198,25 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   }
   const tab = rec.tabs[String(source.tabId)];
   if (!tab) return;
+  // Console/exception text is the classic secret side-channel: an app's
+  // fetch wrapper logging `login failed <url>?access_token=… {"refresh_token"…}`
+  // would bypass the body/URL scrubs entirely — run the engine's text pass
+  // (URL params, auth headers, JWTs, key=value pairs) before buffering, the
+  // same as the Expo client's console capture.
   if (method === "Runtime.consoleAPICalled" && params.type === "error") {
+    const raw = (params.args || []).map((a) => a.value ?? a.description ?? "").join(" ");
     await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "console", payload: {
       level: "error",
-      text: (params.args || []).map((a) => a.value ?? a.description ?? "").join(" ").slice(0, 500),
+      text: (vtRedact.redactText(rulesOf(rec), raw) || "").slice(0, 500),
     } }]);
     return;
   }
   if (method === "Runtime.exceptionThrown") {
     const d = params.exceptionDetails || {};
+    const raw = (d.exception && (d.exception.description || d.exception.value)) || d.text || "uncaught exception";
     await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "console", payload: {
       level: "error",
-      text: (d.exception && (d.exception.description || d.exception.value) || d.text || "uncaught exception").slice(0, 500),
+      text: (vtRedact.redactText(rulesOf(rec), String(raw)) || "").slice(0, 500),
     } }]);
     return;
   }
@@ -1198,7 +1224,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     // WS visibility (D2): connection-level capture; frame capture is a
     // documented follow-up (README known limits).
     await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "request", payload: {
-      method: "WS", url: redactUrl(rec.policy, params.url), status: 101, type: "WebSocket",
+      method: "WS", url: redactUrl(rec, params.url), status: 101, type: "WebSocket",
     } }]);
     return;
   }
@@ -1206,16 +1232,19 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   if (method === "Network.requestWillBeSent") {
     const r = params.request;
     inflight.set(key, {
-      method: r.method, url: redactUrl(rec.policy, r.url),
-      reqBody: redactBody(rec.policy, (r.postData || "").slice(0, BODY_CAP), headerCT(r.headers)),
-      reqHeaders: capHeaders(r.headers, rec.policy),
+      method: r.method, url: redactUrl(rec, r.url),
+      reqBody: redactBodyCapped(rec, r.postData || "", headerCT(r.headers)),
+      reqHeaders: capHeaders(r.headers, rec),
       start: params.timestamp, type: params.type, sessionId: source.sessionId,
     });
   } else if (method === "Network.responseReceived") {
     const f = inflight.get(key);
     if (f) {
       f.status = params.response.status; f.mime = params.response.mimeType; f.type = params.type;
-      f.resHeaders = capHeaders(params.response.headers, rec.policy);
+      // The FULL Content-Type, boundary included — mimeType alone strips the
+      // parameters, and multipart redaction dispatches on the boundary.
+      f.resCT = headerCT(params.response.headers);
+      f.resHeaders = capHeaders(params.response.headers, rec);
     }
   } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") {
     const f = inflight.get(key);
@@ -1232,7 +1261,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
       try {
         const target = f.sessionId ? { tabId: source.tabId, sessionId: f.sessionId } : { tabId: source.tabId };
         const b = await chrome.debugger.sendCommand(target, "Network.getResponseBody", { requestId: params.requestId });
-        resBody = redactBody(rec.policy, (b.base64Encoded ? "" : b.body || "").slice(0, BODY_CAP), f.mime || "");
+        resBody = redactBodyCapped(rec, b.base64Encoded ? "" : b.body || "", f.resCT || f.mime || "");
       } catch { /* body already gone — metadata still lands */ }
     }
     await pushEvents([{
@@ -1252,10 +1281,15 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 });
 
 chrome.debugger.onDetach.addListener(async (source) => {
-  const rec = await getState();
-  if (!rec) return;
-  const tab = rec.tabs[String(source.tabId)];
-  if (tab) { tab.cdp = false; await setState(rec); }
+  const recording = await getState();
+  const laneId = recording?.tabs[String(source.tabId)]?.id;
+  if (!laneId) return;
+  await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(source.tabId)]?.id !== laneId) return;
+    current.tabs[String(source.tabId)].cdp = false;
+    await setState(current);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1284,18 +1318,27 @@ function shotHash(s) {
 }
 
 async function shoot(tabId, payload) {
-  const rec = await getState();
+  let rec = await getState();
   if (!capturing(rec)) return;
+  // A frame captured before the policy settles could be a full-resolution
+  // shot of a workspace that demanded blur (maskAllText's default is the
+  // permissive side). Wait bounded; still unsettled ⇒ drop the frame — the
+  // same fail-closed spirit as the blur-failure drop below.
+  if (rec.policy === undefined) {
+    const expected = rec;
+    rec = await awaitPolicySettled(2000);
+    if (!capturing(rec) || !sameRecording(rec, expected) || rec.policy === undefined) return;
+  }
   const tab = rec.tabs[String(tabId)];
   if (!tab) return;
+  // The tab URL can be an OAuth callback / magic link — same query-secret
+  // scrub as recorded network URLs, for every shoot() call site at once.
+  if (payload && payload.url) payload = { ...payload, url: redactUrl(rec, payload.url) };
   // The session this frame belongs to, fixed BEFORE the capture awaits below
   // (review r3650595572): a stop — or a stop followed by a start — completing
   // during them would otherwise file these pixels into whatever session is
   // live when the encode finishes.
-  const startedIn = rec.sessionId;
-  // The tab URL can be an OAuth callback / magic link — same query-secret
-  // scrub as recorded network URLs, for every shoot() call site at once.
-  if (payload && payload.url) payload = { ...payload, url: redactUrl(rec.policy, payload.url) };
+  const startedIn = rec;
   const now = Date.now();
   if (now - lastShot < SHOT_THROTTLE_MS) return;
   lastShot = now;
@@ -1313,21 +1356,42 @@ async function shoot(tabId, payload) {
   if (!payload || !payload.snap) {
     if (lastShotHash.get(String(tabId)) === hash) return;
   }
-  lastShotHash.set(String(tabId), hash);
-  // Re-validate across the capture awaits, then hold allocSeq to its answer:
-  // the early check avoids burning a seq in the common case, the comparison
-  // closes the window entirely.
-  if (!capturing(await getState())) return;
-  const alloc = await allocSeq();
-  if (!alloc || alloc.sessionId !== startedIn) return;
   // Native Blob into the queue — no base64 dataURL sitting on disk (D7).
-  // The encode below is an await, so the item is filed under the session the
-  // seq came from, never whatever is live once it finishes.
-  const blob = await (await fetch(dataURL)).blob();
+  let blob = await (await fetch(dataURL)).blob();
+  // Pixel masking (maskAllText ⇒ blur): screenshots carry real rendered
+  // text — downscale until text is unreadable while layout survives,
+  // mirroring the Expo client's blurred keyframes. FAIL CLOSED: if the
+  // downscale fails, a masked workspace gets no frame rather than raw
+  // pixels. Runs BEFORE the dedup-hash write and the seq allocation, so a
+  // dropped frame neither burns a seq (a hole in the ordinal stream) nor
+  // poisons the dedup cache (the NEXT capture of this unchanged screen must
+  // still land).
+  if (vtRedact.pixelPolicy(rulesOf(rec)) === "blur") {
+    let bmp;
+    try {
+      bmp = await createImageBitmap(blob);
+      const w = 96, h = Math.max(1, Math.round((bmp.height / bmp.width) * w));
+      const cv = new OffscreenCanvas(w, h);
+      cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+      blob = await cv.convertToBlob({ type: "image/jpeg", quality: 0.7 });
+    } catch (e) {
+      console.warn("vitrinka: shot blur failed — frame dropped (maskAllText)", String(e));
+      return;
+    } finally {
+      if (bmp) bmp.close();
+    }
+  }
+  // Allocate only while the SAME generation is still capturing: Stop→Continue
+  // reuses the server id, but must never adopt pixels from its earlier policy.
+  const alloc = await allocSeq(1, startedIn);
+  if (!alloc) return;
+  lastShotHash.set(String(tabId), hash);
   await enqueue({
     sessionId: alloc.sessionId, seq: alloc.seq,
     ts: new Date().toISOString(), tabId: tab.id, tabHost: tab.host,
-    kind: "shot", payload, blob, blobCT: "image/png",
+    // blobCT is the literal upload Content-Type — it must describe the BLOB
+    // (JPEG after the blur path), never assume the capture format.
+    kind: "shot", payload, blob, blobCT: blob.type || "image/png",
   });
 }
 
@@ -1357,33 +1421,28 @@ async function startSession(title) {
   const ses = await api("POST", "/api/v1/sessions", {
     host, title: title || "", meta: { userAgent: navigator.userAgent, recorder: "extension/" + chrome.runtime.getManifest().version },
   }, undefined, { workspace });
-  // Pin the tenant the session lives in: every later call (events, shots,
-  // pair, stop, the board poll) rides rec.workspace, never the global default.
+  // Pin the resolved tenant before fetching its policy or adopting its queue.
   workspace = ses.workspace || workspace;
-  // The workspace redaction policy rides in rec so every SW wake has it
-  // without a network round trip; a failed fetch means the safe defaults.
-  const policy = await fetchPolicy(workspace);
   const scope = await scopeOf(workspace);
   try {
     await refuseForeignTail(ses.id, scope);
   } catch (e) {
-    // Nothing was recorded into it: close the empty session rather than leave it open.
     await api("PATCH", `/api/v1/sessions/${ses.id}`, { status: "done" }, undefined, { workspace }).catch(() => {});
     throw e;
   }
-  // The marker and the rec it belongs to are adopted under one lock, the one
-  // the reaper prunes markers under, so it never sees one without the other.
+  // A slow policy never blocks adoption: DOM stays strictly masked and shots
+  // wait/drop until its asynchronous answer settles for this generation.
+  const recording = {
+    generation: crypto.randomUUID(),
+    sessionId: ses.id, project: ses.project, environment: ses.environment, workspace,
+    title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
+    activeMs: 0, resumeAt: new Date().toISOString(),
+  };
   await withLock(async () => {
     await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
-    await setState({
-      generation: crypto.randomUUID(),
-      sessionId: ses.id, project: ses.project, environment: ses.environment, workspace, policy,
-      title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
-      // Active-time bookkeeping: elapsed = activeMs + (now - resumeAt while
-      // running). The HUD clock freezes on pause because of this, not luck.
-      activeMs: 0, resumeAt: new Date().toISOString(),
-    });
+    await setState(recording);
   });
+  applyPolicyWhenFetched(fetchPolicy(workspace), recording, active.id);
   serverMaxSeq = 0;
   lastSyncAt = Date.now();
   failures = 0;
@@ -1412,22 +1471,24 @@ async function continueSession(sessionId) {
   const scope = await scopeOf(ses.workspace);
   await refuseForeignTail(ses.id, scope);
   await api("PATCH", `/api/v1/sessions/${sessionId}`, { status: "recording" });
-  const policy = await fetchPolicy(ses.workspace || "");
-  await withLock(async () => {
-    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope }); // with its rec, as in Start
+  // Adopt the marker and generation atomically, preserving the durable tail's
+  // seq range. Policy settles asynchronously just as on a fresh Start.
+  const recording = await withLock(async () => {
+    await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
     const current = await getState();
     const pending = await vtdb.sessionStats(ses.id);
-    // The server can lag the durable tail, and a capture may have reserved
-    // its seq before writing to IDB. Continue must never reuse either range.
     const localSeq = current?.sessionId === ses.id ? current.seq || 0 : 0;
-    await setState({
+    const next = {
       generation: crypto.randomUUID(),
-      sessionId: ses.id, project: ses.project, environment: ses.environment, workspace: ses.workspace || "", policy,
+      sessionId: ses.id, project: ses.project, environment: ses.environment, workspace: ses.workspace || "",
       title: ses.title, startedAt: new Date().toISOString(),
       seq: Math.max(ses.maxSeq || 0, localSeq, pending.maxSeq),
       paused: false, tabs: {}, activeMs: 0, resumeAt: new Date().toISOString(),
-    });
+    };
+    await setState(next);
+    return next;
   });
+  applyPolicyWhenFetched(fetchPolicy(recording.workspace), recording, null);
   serverMaxSeq = Number(ses.maxSeq || 0);
   lastSyncAt = Date.now();
   failures = 0;
@@ -1754,7 +1815,7 @@ chrome.webNavigation.onCommitted.addListener(async (d) => {
   const known = rec.tabs[String(d.tabId)];
   if (known) {
     // Full navigation re-injects the content script.
-    await pushEvents([{ tabId: known.id, tabHost: known.host, kind: "nav", payload: { url: redactUrl(rec.policy, d.url), route: routeOf(d.url) } }]);
+    await pushEvents([{ tabId: known.id, tabHost: known.host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url) } }]);
     try {
       await chrome.scripting.executeScript({ target: { tabId: d.tabId }, files: CONTENT_FILES });
     } catch { /* chrome:// etc. */ }
@@ -1769,7 +1830,7 @@ chrome.webNavigation.onCommitted.addListener(async (d) => {
     const r = await api("GET", `/api/v1/projects/resolve?host=${encodeURIComponent(host)}`);
     if (r.matched && r.project === rec.project) {
       await attachTab(d.tabId, d.url);
-      await pushEvents([{ tabId: (await tabInfo(d.tabId)).id, tabHost: host, kind: "nav", payload: { url: redactUrl(rec.policy, d.url), route: routeOf(d.url) } }]);
+      await pushEvents([{ tabId: (await tabInfo(d.tabId)).id, tabHost: host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url) } }]);
       await shoot(d.tabId, { route: routeOf(d.url), url: d.url });
     }
   } catch { /* resolve down — tab simply doesn't join */ }
@@ -1781,7 +1842,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(async (d) => {
   const tab = await tabInfo(d.tabId);
   if (!tab) return;
   const rec = await getState();
-  await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "nav", payload: { url: redactUrl(rec && rec.policy, d.url), route: routeOf(d.url), spa: true } }]);
+  await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url), spa: true } }]);
   await shoot(d.tabId, { route: routeOf(d.url), url: d.url });
 });
 
@@ -1795,11 +1856,15 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const rec = await getState();
-  if (rec && rec.tabs[String(tabId)]) {
-    delete rec.tabs[String(tabId)];
-    await setState(rec);
-  }
+  const recording = await getState();
+  const laneId = recording?.tabs[String(tabId)]?.id;
+  if (!laneId) return;
+  await withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, recording) || current.tabs[String(tabId)]?.id !== laneId) return;
+    delete current.tabs[String(tabId)];
+    await setState(current);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2225,9 +2290,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     const tab = sender.tab ? await tabInfo(sender.tab.id) : null;
     switch (msg.type) {
+      // NB: every case must end in sendResponse — a throw before it would
+      // leave the sender's promise unsettled until Chrome collects the port
+      // (the content script's rrweb start waits on exactly that), hence the
+      // catch at the bottom of this IIFE.
       case "vt-click":
         if (tab) {
-          await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "click", payload: msg.payload }]);
+          // Content masks field values; the remaining label can still carry
+          // a secret. Apply the same text pass as the Expo press-label lane.
+          const rec = await getState();
+          const payload = { ...msg.payload, text: vtRedact.redactText(rulesOf(rec), (msg.payload && msg.payload.text) || "") };
+          await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "click", payload }]);
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url });
         }
         return sendResponse({ ok: true });
@@ -2255,14 +2328,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "vt-vitals":
         // Web Vitals per step (sessions-UI D8): one LCP/CLS/INP event per
         // loaded document; the timeline renders it as a ⚡ chip on the step.
-        if (tab) await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "vitals", payload: msg.payload }]);
+        if (tab) {
+          const rec = await getState();
+          const payload = { ...msg.payload, url: redactUrl(rec, (msg.payload && msg.payload.url) || "") };
+          await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "vitals", payload }]);
+        }
         return sendResponse({ ok: true });
       case "vt-rrweb": {
         const rec = await getState();
         // Accepted while `stopping` on purpose: detachAll's final batch is the
         // tail of the recording and must not be refused.
         if (rec && tab && !rec.paused && !rec.dead) {
-          const { parts, bodies, dropped } = splitRRWebEvents(msg.events);
+          // rrweb's Meta event stamps the page URL beside each full snapshot.
+          // It is outside rrweb's text/input masking, so scrub it before IDB.
+          const events = msg.events.map((ev) => ev && ev.type === 4 && ev.data && typeof ev.data.href === "string"
+            ? { ...ev, data: { ...ev.data, href: redactUrl(rec, ev.data.href) } } : ev);
+          const { parts, bodies, dropped } = splitRRWebEvents(events);
           // A dropped event (alone beyond the wire cap — realistically the
           // inlined full snapshot) can make the rest of the recording
           // unreplayable. Surface it ON the session timeline, not just in a
@@ -2294,13 +2375,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         return sendResponse({ ok: true });
       }
-      case "vt-policy": {
-        // The content script asks before starting rrweb: maskAllInputs is
-        // its fail-closed default, the policy only ADDS maskAllText or
-        // (self-host) fullFidelity.
-        const rec = await getState();
-        return sendResponse({ ok: true, policy: (rec && rec.policy) || null });
-      }
       case "vt-status": {
         const rec = await getState();
         // pair rides along so a freshly injected page paints the line
@@ -2308,6 +2382,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // ever the CURRENT session's state (session-keyed cache). pairPanel
         // is the websocket panel's whole snapshot, same keying.
         return sendResponse({ rec, elapsedMs: elapsedOf(rec), health: await health(), pair: pairStateFor(rec), pairPanel: pairPanelFor(rec) });
+      }
+      case "vt-policy": {
+        // The content script asks before starting rrweb. The KEY/URL defaults
+        // fail closed, but the DOM/pixel directives' default is the
+        // PERMISSIVE side (maskAllText TIGHTENS) — answering from an
+        // unsettled state would start rrweb unmasked in a masked workspace,
+        // permanently (rrweb configures once). Wait bounded for the in-flight
+        // fetch+apply chain; if STILL unsettled — which after the chain fix
+        // means a genuinely hung/dead policy endpoint — answer STRICT (mask
+        // everything, blur). That over-masks THAT session's whole DOM stream
+        // (rrweb never reconfigures), which is the safe direction; a healthy
+        // backend settles inside the wait and never takes this branch.
+        let rec = await getState();
+        if (rec && rec.policy === undefined) {
+          rec = await awaitPolicySettled(2000);
+        }
+        if (rec && rec.policy === undefined) {
+          return sendResponse({
+            ok: true, policy: null,
+            mask: { maskAllInputs: true, maskAllText: true, maskTextSelector: "*" },
+            pixel: "blur",
+          });
+        }
+        // `mask` is the ENGINE's directive mapping (maskDirectives) so the
+        // DOM semantics can never drift from the shared implementation;
+        // 'blur' ⇒ keyframes are 96px wide — the content script scales its
+        // click/snap rects into that pixel space.
+        return sendResponse({
+          ok: true,
+          policy: (rec && rec.policy) || null,
+          mask: vtRedact.maskDirectives(rulesOf(rec)),
+          pixel: vtRedact.pixelPolicy(rulesOf(rec)),
+        });
       }
       case "vt-health":
         return sendResponse(await health());
@@ -2429,7 +2536,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     }
     sendResponse({ ok: false, error: "unknown message" });
-  })();
+  })().catch((e) => {
+    // A throw before sendResponse would otherwise leave the sender's promise
+    // unsettled for a nondeterministic interval (until Chrome collects the
+    // dropped port) — settle it with an error instead.
+    console.warn("vitrinka: message handler failed", msg && msg.type, e);
+    try { sendResponse({ ok: false, error: String(e) }); } catch { /* port gone */ }
+  });
   return true; // async sendResponse
 });
 

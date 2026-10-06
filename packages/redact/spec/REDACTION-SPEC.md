@@ -16,18 +16,28 @@ data must survive).
 ## The policy document
 
 Clients fetch the workspace policy at session start from
-`GET /api/v1/recorder/policy` (same PAT-gated auth as the ingest surface):
+`GET /api/v1/recorder/policy` (same PAT-gated auth as the ingest surface).
+The response is an ENVELOPE — the policy document rides under a `policy` key
+(always present, even for the zero policy):
 
 ```jsonc
 {
-  "extraHeaders":  ["X-Tenant-Secret"],   // extra header names to scrub
-  "extraBodyKeys": ["internalId"],        // extra body keys, matched normalized
-  "patterns":      ["vk_[A-Za-z0-9]+"],   // regexes; every match → "[redacted]"
-  "maskAllText":   false,                  // DOM recorders mask ALL text;
-                                           // pixel recorders degrade to blur
-  "fullFidelity":  false                   // self-host escape hatch — no-op
+  "policy": {
+    "extraHeaders":  ["X-Tenant-Secret"],  // extra header names to scrub
+    "extraBodyKeys": ["internalId"],       // extra body keys, matched normalized
+    "patterns":      ["vk_[A-Za-z0-9]+"],  // regexes; every match → "[redacted]"
+    "maskAllText":   false,                 // DOM recorders mask ALL text;
+                                            // pixel recorders degrade to blur
+    "fullFidelity":  false                  // self-host escape hatch — no-op
+  },
+  "fullFidelityAllowed": false             // deployment gate state (editor UI)
 }
 ```
+
+A `2xx` whose body LACKS the `policy` key is out-of-contract and must be
+treated as UNKNOWN (like a transient failure: keep strict/default behavior
+and retry) — never as "no policy": resolving a malformed answer to the
+permissive side would fail open on `maskAllText`.
 
 Rules:
 

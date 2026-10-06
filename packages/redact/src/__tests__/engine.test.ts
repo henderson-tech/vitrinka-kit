@@ -58,6 +58,23 @@ describe('token matcher precision (beyond the server defaults)', () => {
 });
 
 describe('oversized JSON never bypasses via the parse cap', () => {
+  test('fallback never retains compound values of sensitive keys', () => {
+    const rules = compileRules({ extraBodyKeys: ['privateNote'] });
+    for (const body of [
+      '{"password":{"value":"compound-private"},"padding":"' + 'x'.repeat(257 * 1024) + '"}',
+      '{"token":["compound-private"],"unfinished":',
+      '{"privateNote":{"nested":["compound-private"]},"unfinished":',
+      '{"pass\\u0077ord":[{"value":"compound-private"}],"unfinished":',
+    ]) {
+      expect(redactBody(rules, body, 'application/json').includes('compound-private')).toBe(false);
+      expect(redactAndCap(rules, body, 512, 'application/json')?.includes('compound-private')).toBe(false);
+    }
+    const benign = '{"nested":{"value":"benign"},"password":"scalar-private","unfinished":';
+    const out = redactBody(rules, benign, 'application/json');
+    expect(out).toContain('benign');
+    expect(out).not.toContain('scalar-private');
+  });
+
   test('key fallback runs above the structural limit', () => {
     const body = `{"pad":"${'a'.repeat(257 * 1024)}","password":"hunter2","nested":{"access_token":"AT-BIG"}}`;
     const out = redactBody(DEFAULTS, body, 'application/json');
@@ -78,6 +95,13 @@ describe('redactAndCap ordering', () => {
     const body = `${'a'.repeat(100)} token=SECRET-TAIL`;
     const out = redactAndCap(DEFAULTS, body, 50, 'text/plain');
     expect(out).not.toContain('SECRET-TAIL');
+  });
+
+  test('oversized multipart omits even a parseable prefix with a private epilogue', () => {
+    const body = '--b\r\nContent-Disposition: form-data; name="note"\r\n\r\nok\r\n--b--\r\nprivate-epilogue' + 'x'.repeat(100);
+    const out = redactAndCap(DEFAULTS, body, 100, 'multipart/form-data; boundary=b');
+    expect(out).toContain('multipart body omitted');
+    expect(out).not.toContain('private-epilogue');
   });
 
   test('fullFidelity still caps (size is a transport concern, not a policy one)', () => {

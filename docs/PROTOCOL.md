@@ -153,16 +153,18 @@ conformance vectors in
   into parts, and a partial scan would leak exactly the fields the key scrub
   protects — the recorders fail closed instead.
 
-The Expo and web recorders apply this engine today; the browser extension's
-port ships in its next release (the vitrinka server additionally applies the
-same redaction at ingest for every client, so recordings from any client
-never store raw secrets). The web recorder additionally feeds the engine's
-`maskDirectives` to rrweb, so the DOM stream never carries input values and,
-under `maskAllText`, no text at all; console text runs through the same
-`redactText` pass as bodies. A click's text never shows more than the DOM
-stream does: never an input, textarea or select (value or text), nothing
-for an element at, inside or wrapping a `.rr-mask` / `.rr-block` element,
-none at all under `maskAllText` — and what remains passes `redactText`.
+All three clients apply this engine — Expo and web import it directly, and
+the browser extension carries a generated copy (`vendor/redact.js`, kept in
+sync by a CI drift check). The vitrinka server additionally applies the same
+redaction at ingest for every client as a backstop. Web and extension feed
+the engine's `maskDirectives` to rrweb: input values are masked by default and,
+under `maskAllText`, all text is masked; only the explicit self-hosted
+`fullFidelity` policy restores field values. Console text passes through
+`redactText`. A click's text never shows more than the DOM stream does:
+input, textarea and select values/text are masked by default, as is an
+element at, inside or wrapping `.rr-mask` / `.rr-block`, and all labels under
+`maskAllText`; remaining labels pass `redactText`. Navigation, screenshot,
+vitals and rrweb Meta page URLs are scrubbed by the extension before storage.
 
 At session start the recorder fetches your workspace's redaction policy
 (`GET /api/v1/recorder/policy`; the web pill's flight recorder fetches it
@@ -173,10 +175,14 @@ the built-in defaults above apply — **never** capture-everything. A
 serve it otherwise) restores unredacted capture.
 
 Screenshots carry real rendered pixels and are not content-filtered by
-default. Under a `maskAllText` policy the Expo recorder captures keyframes at
-a strongly reduced resolution (text unreadable, layout visible). The web
-recorder takes no screenshots at all. Otherwise: do not record against
-screens showing data you would not put on the session's board.
+default. Under a `maskAllText` policy Expo and extension capture keyframes at
+a strongly reduced resolution (text unreadable, layout visible; the extension
+drops a frame it cannot downscale rather than storing it raw). The web
+recorder takes no screenshots at all. Until the extension's policy settles,
+its DOM masks every input and all text, and its screenshots wait or are
+dropped; transient policy failures retry without reopening capture.
+Otherwise: do not record against screens showing data you would not put on
+the session's board.
 
 ## The HUD itself
 

@@ -139,7 +139,8 @@
       "surface": "body",
       "contentType": "multipart/form-data; boundary=b123",
       "input": "--b123\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nTRUNC-SECRET\r\n--b123\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\nPNGBYTES\r\n--b1",
-      "mustNotContain": ["TRUNC-SECRET", "PNGBYTES"]
+      "mustNotContain": ["TRUNC-SECRET", "PNGBYTES"],
+      "mustContain": ["[multipart body omitted:"]
     },
     {
       "name": "hash-route fragment: nested query key is inspected (set-only key)",

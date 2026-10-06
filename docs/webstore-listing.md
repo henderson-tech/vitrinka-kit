@@ -50,10 +50,12 @@ they become reviewable testing boards.
 - **Where it goes**: solely to the vitrinka server URL the user configures
   (their own infrastructure). The developer receives nothing; there is no
   analytics, telemetry, or third-party endpoint.
-- **Secrets**: network capture is a testing feature for the user's own apps;
-  the companion Expo recorder redacts secret-shaped keys, and the same
-  hardening is planned here (tracked in the public repo). Users are
-  instructed to record only against environments they own.
+- **Secrets**: capture is redacted by default — auth-bearing header values,
+  secret-shaped body keys and URL query/fragment secrets are scrubbed on the
+  user's machine before anything is stored or sent, and the DOM recording
+  masks input values (shared engine `@vitrinka/redact`, spec + conformance
+  vectors in the public repo). Users are still instructed to record only
+  against environments they own.
 
 ## Submission checklist
 

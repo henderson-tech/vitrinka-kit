@@ -29,7 +29,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "build:iife": "bun build src/iife.ts --format=iife --outfile dist/redact.iife.js --banner '// GENERATED from packages/redact — do not edit; rebuild with: bun run --filter @vitrinka/redact build:iife'",
+    "build:vendor": "tsc -p tsconfig.build.json && mkdir -p dist && { echo '// GENERATED from packages/redact (tsc output, deterministic) — do not edit; rebuild with: bun run --filter @vitrinka/redact build:vendor'; cat build/index.js; } > dist/redact.vendor.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "prepublishOnly": "tsc -p tsconfig.build.json"

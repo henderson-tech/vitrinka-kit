@@ -29,6 +29,26 @@ sidebar. Decisions: `docs/specs/2026-07-24-journey-recorder-decisions.md`.
 Loading `apps/extension/` straight from the checkout is the dev flow; testers
 install the released folder via `vitrinka setup extension setup` (see `INSTALL.md`).
 
+### Devbox verification
+
+The root `devbox.yaml` runs `apps/extension/e2e/fixture.ts` on the kit app's
+`web` port: a synthetic form and recorder API, not a source-directory server.
+Use the current address from `devbox url` for both the page and the recorder
+base URL, with workspace `qa` and a dummy token — never production credentials.
+The fixture keeps recordings in memory; `/__qa/state` exposes captured events
+and chunks, and `POST /__qa/mode` with `{"mode":"strict"}` or
+`{"mode":"failed"}` exercises text masking or policy failure (`default`
+restores the default policy). A packaged store archive is available only at
+`/__qa/store.zip`; unknown paths return 404.
+
+`devbox run --no-up test` runs the build, typecheck and unit gates without
+starting the fixture. Extension packaging (`apps/extension/dist.sh`) needs
+`zip` and `unzip`, declared under `system_packages.apt` in the recipe. A guest
+missing those tools needs the Devbox-reported provisioning fix, not a raw
+package installation. Browser verification additionally needs a Chrome
+session that permits this extension; an installation acknowledgement alone
+is not evidence that its service worker or capture ran.
+
 ## Updates (how the popup can install one)
 
 An unpacked extension never auto-updates, but Chrome re-reads the whole folder
@@ -160,15 +180,42 @@ manual banner — download, unzip over the folder, ↻.
 | screenshots | `captureVisibleTab` on click/nav/snap, throttled | active tab only; background tabs catch up on tab-switch |
 | clicks | content script (capture phase) | selector, text, element rect in image px |
 | navigation | `webNavigation` (full + SPA history) | no page-world patching needed |
-| network | `chrome.debugger` CDP, XHR/fetch/document + worker/SW targets | req+resp bodies capped 64 KiB, headers capped 8 KiB/side; WS connections logged (frames NOT captured yet); degrades gracefully when DevTools holds the tab |
-| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off, the recorder's own `[data-vitrinka-recorder]` surfaces blocked) | uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
+| network | `chrome.debugger` CDP, XHR/fetch/document + worker/SW targets | req+resp bodies redacted BEFORE the 64 KiB cap, headers capped 8 KiB/side with auth values scrubbed; oversized multipart bodies omitted; WS connections logged (frames NOT captured yet); degrades gracefully when DevTools holds the tab |
+| DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off, the recorder's own `[data-vitrinka-recorder]` surfaces blocked) | input values masked by default; uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
 | console errors | CDP `Runtime` (page world, incl. uncaught exceptions) | |
 | notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation, and an intake draft too when the tester picks `task` |
 
-Capture-everything is deliberate (D7), bounded by the workspace redaction
-policy the worker fetches at session start (`GET /api/v1/recorder/policy`,
-fail-closed `maskAllInputs`) — the policy, not the network, is what keeps a
-recording safe to take.
+Capture is **redacted by default** via the shared
+[`@vitrinka/redact`](https://github.com/henderson-tech/vitrinka-kit/tree/main/packages/redact)
+engine (`vendor/redact.js`, generated from Kit's `packages/redact/src/index.ts`): auth-bearing header values, sensitive
+JSON/form/multipart body keys, URL query/fragment secrets, and console text
+are scrubbed before storage, and rrweb records with input values masked.
+Click labels respect that masking and `.rr-mask` / `.rr-block` regions.
+At session start the extension fetches your workspace's redaction policy
+(`GET /api/v1/recorder/policy`), which can add extra rules or `maskAllText`.
+Until the policy settles, all DOM text is masked and screenshots wait or
+are dropped; transient failures keep this strict mode and retry. A confirmed
+absent policy uses the built-in defaults — never capture-everything.
+Self-hosted deployments can opt back into full-fidelity capture server-side.
+Under `maskAllText`, screenshots are reduced to 96px wide (layout visible,
+text unreadable); a frame that cannot be downscaled is dropped, never stored
+raw. The vitrinka server re-applies the same redaction at ingest as a backstop.
+Even so: record only against environments you own.
+
+### Source and generation
+
+The product repo `vitrinka` owns canonical `apps/extension`; its
+`tools/export-kit` exports every tracked extension file into `vitrinka-kit`,
+including the vendor and focused tests. The shared engine is authored in Kit,
+never in the vendored file: in a Kit worktree run
+`bun run --filter @vitrinka/redact build:vendor`, then copy
+`packages/redact/dist/redact.vendor.js` to the product worktree's
+`apps/extension/vendor/redact.js`. Kit's generation gate checks those bytes.
+Stage new extension files in the product worktree before exporting (the
+exporter reads `git ls-files`), then from that worktree run
+`go run ./tools/export-kit -kit <kit-worktree> -only extension`;
+add `-check` to check extension-only drift without touching plugin output.
+`bun run test:extension` runs the content and worker policy/capture tests.
 
 ## Known limits
 

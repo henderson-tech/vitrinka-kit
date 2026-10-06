@@ -1,24 +1,36 @@
 project: vitrinka-kit
 
-resources:
-  workspace: standard
-  test: small
-  memory: 2G
+system_packages:
+  apt:
+    - zip
+    - unzip
 
 apps:
   kit:
-    cmd: 'bun packages/web/e2e/fixture/serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:web}'
+    cmd: "bun apps/extension/e2e/fixture.ts --port {port:web}"
     ports: [web]
     sync: .
-    sync_ignores: [".env", ".env.*", "!.env.example", "test-results", "playwright-report", ".vitrinka"]
+    sync_ignores:
+      - .env
+      - .env.*
+      - "!.env.example"
+      - test-results
+      - playwright-report
+      - .vitrinka
     deps:
       key: [bun.lock, package.json, "packages/*/package.json"]
-      cmd: bun install --frozen-lockfile
+      cmd: "bun install --frozen-lockfile"
 
 scripts:
   test:
-    cmd: bun run build && bun run typecheck && bun run test
+    cmd: "bun run build && bun run typecheck && bun run test"
     up: false
+    profile: small
   e2e:
     cmd: bun run test:e2e:web
     up: false
+
+resources:
+  workspace: standard
+  memory: 2G
+  test: small

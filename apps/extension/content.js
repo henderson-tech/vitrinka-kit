@@ -56,26 +56,35 @@
     return parts.join(" > ");
   };
 
+  // Under a blur policy (maskAllText) keyframes are downscaled to 96px wide,
+  // so rects must land in THAT pixel space — device-pixel coordinates would
+  // sit far outside the image. Set from the vt-policy response; recomputed at
+  // use time so a window resize can't stale the factor.
+  let blurShots = true;
+  let maskInputs = true;
+  let maskText = true;
+  const clickText = (el) => {
+    // Field values lack the key context a free-text scrub needs to find secrets.
+    const input = /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    if (maskText || (maskInputs && input)) return "[redacted]";
+    if (el.closest(".rr-mask,.rr-block") || el.querySelector(".rr-mask,.rr-block")) return "[redacted]";
+    return (el.innerText || (input && !maskInputs ? el.value : "") || "").trim().slice(0, 80);
+  };
+  const imageScale = () => {
+    const s = window.devicePixelRatio || 1;
+    // CSS px → captured-image px: device scale normally; 96/viewport-width
+    // when keyframes are blurred to 96px wide.
+    if (!blurShots) return s;
+    return window.innerWidth > 0 ? 96 / window.innerWidth : s;
+  };
   const imageRect = (el) => {
     const r = el.getBoundingClientRect();
-    const s = window.devicePixelRatio || 1;
+    const s = imageScale();
     return { x: Math.round(r.x * s), y: Math.round(r.y * s), w: Math.round(r.width * s), h: Math.round(r.height * s) };
   };
 
-  // clickText never reads a field's value (rrweb masks every input, so the
-  // click lane must too) and says nothing for an element at, inside or
-  // wrapping .rr-mask/.rr-block — the text the DOM lane hides (t/4769) —
-  // nor any text at all under a maskAllText workspace policy.
-  let maskClickText = false;
-  const clickText = (el) => {
-    if (maskClickText) return "";
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return "";
-    if (el.closest(".rr-mask,.rr-block") || el.querySelector(".rr-mask,.rr-block")) return "";
-    return (el.innerText || "").trim().slice(0, 80);
-  };
-
   const onClick = (e) => {
-    if (annotating) return; // annotate mode owns the click
+    if (!self.live || annotating) return; // annotate mode owns the click
     const el = e.target instanceof Element ? (e.target.closest("a,button,[role=button],input,select,textarea,label") || e.target) : null;
     if (!el || el.closest(RECORDER_SEL)) return;
     send({
@@ -94,6 +103,7 @@
   // rrweb (D3): batch events to the SW every 2s; SW uploads them as chunks
 
   let rrBuf = [];
+  const emitRR = (ev) => { if (self.live) rrBuf.push(ev); };
   try {
     // rrweb ≥2.x UMD exposes a module object ({record}); ≤alpha.4 exposed the
     // bare function. Accept both so a bundle swap can't silently stop recording.
@@ -122,19 +132,23 @@
       // rrweb's replay loses every mutation after it on a seek.
       Promise.all([send({ type: "vt-policy" }), hudMounted]).then(([r]) => {
         try {
-          const pol = (r && r.policy) || null;
-          maskClickText = !!(pol && pol.maskAllText && !pol.fullFidelity);
+          if (!self.live) return; // stopped before the policy answered
+          // Only engine directives establish a policy. A missing/malformed
+          // response keeps BOTH inputs and text masked, never just the inputs.
+          const settled = r && r.ok === true && r.mask
+            && typeof r.mask.maskAllInputs === "boolean" && typeof r.mask.maskAllText === "boolean";
+          const mask = settled ? r.mask : { maskAllInputs: true, maskAllText: true };
+          blurShots = !settled || r.pixel === "blur";
+          maskInputs = mask.maskAllInputs;
+          maskText = mask.maskAllText;
           // blockSelector: the recorder's own surfaces never enter the
           // replay — rrweb leaves an empty placeholder for the 0×0 hosts.
-          const opts = { emit: (ev) => rrBuf.push(ev), inlineImages: false, collectFonts: true, blockSelector: RECORDER_SEL };
-          if (!(pol && pol.fullFidelity)) {
-            opts.maskAllInputs = true;
-            if (pol && pol.maskAllText) {
-              opts.maskAllText = true;      // rrweb ≥2.x spelling
-              opts.maskTextSelector = "*";  // alpha-era spelling
-            }
+          const opts = { emit: emitRR, inlineImages: false, collectFonts: true, blockSelector: RECORDER_SEL };
+          if (mask.maskAllInputs) opts.maskAllInputs = true;
+          if (mask.maskAllText) {
+            opts.maskAllText = true;                                  // rrweb ≥2.x spelling
+            opts.maskTextSelector = mask.maskTextSelector || "*";     // alpha-era spelling
           }
-          if (!self.live) return; // stopped before the policy answered
           const stopRr = rrRec(opts);
           if (typeof stopRr === "function") off(stopRr);
         } catch (e) { console.warn("vitrinka: rrweb failed to start", e); }
@@ -742,7 +756,7 @@
     },
     note(text) { send({ type: "vt-note", payload: { text, route: location.pathname } }); },
     annotate({ text, rect, selector, task }) {
-      const s = window.devicePixelRatio || 1;
+      const s = imageScale();
       send({ type: "vt-snap", route: location.pathname, payload: {
         rect: { x: Math.round(rect.x * s), y: Math.round(rect.y * s), w: Math.round(rect.w * s), h: Math.round(rect.h * s) },
         selector, note: text, task: !!task,
@@ -796,8 +810,20 @@
     placeObserver.disconnect();
   };
 
+  // The stopping pill still paints drain health and its late board link, but
+  // never handles capture/annotation commands after its capture listener ends.
+  const onSavedBoard = (msg) => {
+    if (msg.type === "vt-health") return adoptHealth(msg.health);
+    if (msg.type === "vt-hud") return adoptHud(msg.hud);
+    if (msg.type !== "vt-board" || !saved || msg.hud !== hudToken
+      || msg.sessionId !== saved.recent.sessionId || !msg.boardUrl) return;
+    saved = { ...saved, boardUrl: String(msg.boardUrl) };
+    changed();
+  };
+
   const onMessage = (msg, _sender, sendResponse) => {
-    if (msg.type === "vt-pick") chord("KeyA");
+    if (msg.type === "vt-policy-push") blurShots = msg.pixel === "blur";
+    else if (msg.type === "vt-pick") chord("KeyA");
     else if (msg.type === "vt-note-ui") chord("KeyN");
     else if (msg.type === "vt-paused") {
       if (live) live = { ...live, paused: !!msg.paused, activeMs: msg.elapsedMs || 0, resumedAt: msg.paused ? null : Date.now() };
@@ -816,6 +842,8 @@
     else if (msg.type === "vt-stop") {
       sendVitals(); // the final page's vitals ride out before the SW drains
       endCapture();
+      chrome.runtime.onMessage.removeListener(onMessage);
+      if (stoppingHere) chrome.runtime.onMessage.addListener(onSavedBoard);
       // The pair panel lives exactly as long as the recording; the HUD stays
       // only when it is the one stopping (its Saving → Saved faces).
       pairHost.remove();
@@ -835,6 +863,7 @@
   self.retire = () => {
     endCapture();
     chrome.runtime.onMessage.removeListener(onMessage);
+    chrome.runtime.onMessage.removeListener(onSavedBoard);
     removeUi();
   };
 
@@ -911,4 +940,3 @@
     unmountHud = globalThis.VitrinkaHud.mount(controller, { title: () => document.title, storage });
   })().catch((e) => console.warn("vitrinka: the HUD failed to mount", e)).finally(() => hudMountedDone());
 })();
-

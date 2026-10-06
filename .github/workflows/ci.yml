@@ -21,6 +21,12 @@ jobs:
       - run: bun run build
       - run: bun run typecheck
       - run: bun run test
+      # The extension's checked-in copy of the shared redaction engine must
+      # match a fresh build — vendor drift would silently fork the semantics.
+      - name: redaction vendor drift check
+        run: |
+          bun run --filter @vitrinka/redact build:vendor
+          diff packages/redact/dist/redact.vendor.js apps/extension/vendor/redact.js
 
   # The web recorder end to end: one headless Chromium against a node:http
   # page fixture + vitrinka stub (packages/web/e2e). Its own job so the unit
