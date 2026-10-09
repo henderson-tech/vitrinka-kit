@@ -10,16 +10,26 @@ apps:
     cmd: "bun apps/extension/e2e/fixture.ts --port {port:web}"
     ports: [web]
     sync: .
-    sync_ignores:
+    sync_ignores: &ignores
       - .env
       - .env.*
       - "!.env.example"
       - test-results
       - playwright-report
       - .vitrinka
-    deps:
+    deps: &deps
       key: [bun.lock, package.json, "packages/*/package.json"]
       cmd: "bun install --frozen-lockfile"
+  # The web-recorder fixture the browser suite drives (packages/web/e2e), for
+  # hand-testing the shared HUD: `devbox url` → open it, start a recording.
+  # The fixture bundles against the workspace's built @vitrinka/redact and
+  # @vitrinka/link (their exports point at build/), so those build first.
+  hud:
+    cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun packages/web/e2e/fixture/serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:hud}"
+    ports: [hud]
+    sync: .
+    sync_ignores: *ignores
+    deps: *deps
 
 scripts:
   test:

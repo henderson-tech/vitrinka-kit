@@ -164,6 +164,22 @@ describe('flight recorder', () => {
 });
 
 describe('report', () => {
+  it('carries attachments in an idle report, uploading them before the note references their seqs', async () => {
+    stub.script.policy = { attachments: true };
+    wantFlight();
+    await syncFlight();
+    pushFlightRRWeb(meta(Date.now()));
+    pushFlightRRWeb(full(Date.now()));
+    holdReport(true);
+    await sendReport({ text: 'reference', rect: null, selector: '', attachments: [{ name: 'expected.png', blob: new Blob(['pixels'], { type: 'image/png' }), w: 40, h: 20 }] });
+    const rows = stub.calls.filter(c => c.path.endsWith('/events')).flatMap(c => (c.body as { events: { seq: number; kind: string; payload: Record<string, unknown>; blobKey?: string }[] }).events);
+    const attachment = rows.find(e => e.kind === 'attachment')!;
+    const note = rows.find(e => e.kind === 'note')!;
+    expect(attachment).toMatchObject({ blobKey: `image-${attachment.seq}`, payload: { name: 'expected.png', mime: 'image/png', bytes: 6, w: 40, h: 20 } });
+    expect(note.payload.attachments).toEqual([attachment.seq]);
+    expect(attachment.seq).toBeLessThan(note.seq);
+    expect(stub.calls.find(c => c.path.includes('/shot?seq='))?.headers['content-type']).toBe('image/png');
+  });
   it('files create → lane events with their original ts → rrweb chunk → task annotation → done', async () => {
     setSystemTime(new Date(T0));
     wantFlight();

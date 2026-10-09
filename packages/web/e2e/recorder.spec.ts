@@ -117,6 +117,104 @@ test('records a journey: create · click · nav · note · region annotation · 
   expect(events.some((e) => e.kind === 'net' && String(e.payload?.url).startsWith(stubUrl))).toBe(false);
 });
 
+async function openResizeNote(page: Page) {
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+  const text = page.getByPlaceholder("what's wrong / what to refine…");
+  await expect(text).toBeFocused();
+  await expect.poll(() => text.evaluate((el) => el.closest('.pop')!.classList.contains('is-open'))).toBe(true);
+  await text.evaluate(async (el) => { await Promise.all(el.closest('.pop')!.getAnimations().map((animation) => animation.finished)); });
+  return text;
+}
+
+const sheetMetrics = (text: Locator) => text.evaluate((el) => {
+  const cs = getComputedStyle(el);
+  const box = el.getBoundingClientRect();
+  return { height: box.height, cap: parseFloat(cs.lineHeight) * 20 + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom),
+    client: el.clientHeight, scroll: el.scrollHeight, overflow: cs.overflowY };
+});
+
+test('note textarea grows to twenty rows then scrolls', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(pageUrl);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const text = await openResizeNote(page);
+  const initial = await sheetMetrics(text);
+  await text.fill(Array.from({ length: 10 }, (_, i) => `Line ${i}`).join('\n'));
+  expect((await sheetMetrics(text)).height).toBeGreaterThan(initial.height);
+  await text.fill(Array.from({ length: 25 }, (_, i) => `Line ${i}`).join('\n'));
+  const capped = await sheetMetrics(text);
+  await expect.poll(async () => { const m = await sheetMetrics(text); return m.height - m.cap; }).toBeCloseTo(0, 0);
+  expect(capped.scroll).toBeGreaterThan(capped.client);
+  expect(capped.overflow).toBe('auto');
+});
+
+test('grip drag changes both dimensions once and survives a page reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(pageUrl);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  let text = await openResizeNote(page);
+  const draft = Array.from({ length: 30 }, (_, i) => `Line ${i}`).join('\n');
+  await text.fill(draft);
+  const grip = page.getByRole('button', { name: 'Resize note', exact: true });
+  const before = (await text.boundingBox())!;
+  const corner = (await grip.boundingBox())!;
+  await page.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(corner.x + corner.width / 2 - 100, corner.y + corner.height / 2 - 60, { steps: 6 });
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs'))).toBeNull();
+  await page.mouse.up();
+  const after = (await text.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width + 90);
+  expect(after.height).toBeGreaterThan(before.height + 50);
+  const stored = await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs'));
+  expect(JSON.parse(stored!).sheetW).toBe(540);
+  await page.reload();
+  text = await openResizeNote(page);
+  await text.fill(draft);
+  expect((await text.boundingBox())!.width).toBeCloseTo(after.width, 0);
+  expect((await text.boundingBox())!.height).toBeCloseTo(after.height, 0);
+});
+
+test('grip keyboard resizes and Enter restores defaults', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(pageUrl);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const text = await openResizeNote(page);
+  const before = (await text.boundingBox())!;
+  const grip = page.getByRole('button', { name: 'Resize note', exact: true });
+  await grip.focus();
+  await grip.press('ArrowLeft');
+  expect((await text.boundingBox())!.width).toBeCloseTo(before.width + 16, 0);
+  await grip.press('Shift+ArrowUp');
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!).sheetH).toBe(128);
+  await grip.press('Enter');
+  expect((await text.boundingBox())!.width).toBeCloseTo(before.width, 0);
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!)).toMatchObject({ sheetW: 0, sheetH: 0 });
+});
+
+test('a drag shows the cap it sets, then a short draft fits itself again under it', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(pageUrl);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const text = await openResizeNote(page);
+  await text.fill('One line');
+  const before = (await text.boundingBox())!.height;
+  const corner = (await page.getByRole('button', { name: 'Resize note', exact: true }).boundingBox())!;
+  const at = { x: corner.x + corner.width / 2, y: corner.y + corner.height / 2 };
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  await page.mouse.move(at.x, at.y - 120, { steps: 6 });
+  const height = async () => (await text.boundingBox())!.height;
+  await expect.poll(height).toBeCloseTo(before + 120, 0);
+  await page.mouse.up();
+  await expect.poll(height).toBeCloseTo(before, 0);
+  const cap = JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!).sheetH;
+  expect(cap).toBeCloseTo(before + 120, 0);
+  await text.fill(Array.from({ length: 30 }, (_, i) => `Line ${i}`).join('\n'));
+  expect((await text.boundingBox())!.height).toBeCloseTo(cap, 0);
+});
+
 test('links the device from the pill, then records with the minted token', async ({ page }) => {
   seen.length = 0;
   await page.goto(`${pageUrl}/?nokey=1`);
@@ -156,6 +254,127 @@ test('links the device from the pill, then records with the minted token', async
   await confirm.getByRole('button', { name: 'Unlink' }).click();
   await expect(page.getByRole('button', { name: 'Link recorder' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
+});
+
+const referenceImage = { name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64') };
+async function openNote(page: Page) {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+}
+async function pickImage(page: Page, files = [referenceImage]) {
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Attach image', exact: true }).click();
+  await (await chooser).setFiles(files);
+}
+
+test('picks an image-only note and delivers typed upload, attachment row and note seq reference', async ({ page }) => {
+  seen.length = 0;
+  await openNote(page);
+  await pickImage(page);
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => seen.some(s => s.path.includes('/shot?seq='))).toBe(true);
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string }[] }).events).some(e => e.kind === 'attachment')).toBe(true);
+  const rows = seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string; seq: number; blobKey?: string; payload: Record<string, unknown> }[] }).events);
+  const attachment = rows.find(e => e.kind === 'attachment')!;
+  const note = rows.find(e => e.kind === 'note' && Array.isArray(e.payload.attachments))!;
+  const upload = seen.find(s => s.path.endsWith(`/shot?seq=${attachment.seq}`))!;
+  expect(upload.headers['content-type']).toBe(attachment.payload.mime);
+  expect(attachment).toMatchObject({ blobKey: `image-${attachment.seq}`, payload: { name: 'reference.png', w: 1, h: 1 } });
+  expect(attachment.payload.bytes).toBeGreaterThan(0);
+  expect(note.payload).toMatchObject({ text: '', attachments: [attachment.seq] });
+  expect(attachment.seq).toBeLessThan(note.seq);
+});
+
+for (const source of ['paste', 'drop'] as const) {
+  test(`attaches an image from ${source}`, async ({ page }) => {
+    await openNote(page);
+    const textarea = page.getByRole('textbox');
+    await textarea.evaluate((el, input) => {
+      const bytes = Uint8Array.from(atob(input.base64), c => c.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], 'reference.png', { type: 'image/png' }));
+      el.dispatchEvent(input.source === 'paste'
+        ? new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+        : new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+    }, { source, base64: referenceImage.buffer.toString('base64') });
+    await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  });
+}
+
+test('queued image bytes survive an actual IndexedDB reload', async ({ page }) => {
+  seen.length = 0;
+  await page.route('**/shot?seq=*', route => route.abort());
+  await openNote(page);
+  await pickImage(page);
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open('vitrinka.recorder.blobs');
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+    try {
+      return await new Promise<number>((resolve, reject) => {
+        const r = db.transaction('blobs').objectStore('blobs').count();
+        r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+      });
+    } finally { db.close(); }
+  })).toBeGreaterThan(0);
+  await page.reload();
+  await page.unroute('**/shot?seq=*');
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string }[] }).events).some(e => e.kind === 'attachment'), { timeout: 15_000 }).toBe(true);
+});
+
+test('hides the attachment picker when the policy omits the capability', async ({ page }) => {
+  delete servers.policy.attachments;
+  try {
+    await openNote(page);
+    await expect(page.getByRole('button', { name: 'Attach image' })).toHaveCount(0);
+  } finally { servers.policy.attachments = true; }
+});
+
+test('an image still preparing when the sheet closes holds Send in the reopened sheet, then rides the note', async ({ page }) => {
+  seen.length = 0;
+  await openNote(page);
+  // Every decode waits for the test: the image is still preparing when the sheet closes.
+  await page.evaluate(() => {
+    const decode = window.createImageBitmap.bind(window);
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    Object.assign(window, { releaseDecode: release });
+    window.createImageBitmap = (async (image: ImageBitmapSource, options?: ImageBitmapOptions) => {
+      await held;
+      return decode(image, options);
+    }) as typeof window.createImageBitmap;
+  });
+  await pickImage(page);
+  const preparing = page.getByRole('listitem', { name: 'Preparing image' });
+  await expect(preparing).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+  // Gone for good (past its closing frames), so the reopened sheet is a new one.
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+  await expect(preparing).toBeVisible();
+  const send = page.getByRole('button', { name: 'Send', exact: true });
+  await expect(send).toHaveAttribute('aria-disabled', 'true');
+  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await expect(send).not.toHaveAttribute('aria-disabled', 'true');
+  await send.click();
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string; payload: { attachments?: number[] } }[] }).events)
+    .some(e => e.kind === 'note' && e.payload.attachments?.length === 1)).toBe(true);
+});
+
+test('removes picked images and caps the sheet at four', async ({ page }) => {
+  await openNote(page);
+  await pickImage(page, Array.from({ length: 5 }, (_, i) => ({ ...referenceImage, name: `reference-${i}.png` })));
+  await expect(page.getByRole('button', { name: /^Remove reference-/ })).toHaveCount(4);
+  await page.getByRole('button', { name: 'Remove reference-0.png' }).click();
+  await expect(page.getByRole('button', { name: /^Remove reference-/ })).toHaveCount(3);
 });
 
 /** Drag the element's centre to (x, y) with a real pointer, then let the spring settle. */
@@ -668,7 +887,12 @@ test('size and details: the menu scales the HUD, shows technical details, and bo
   await expect(detail).toContainText('events');
   await page.reload();
   await expect(page.locator('.hud').first()).toHaveAttribute('data-size', 'lg');
-  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs'))) ?? '{}')).toEqual({ size: 'lg', verbose: true });
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs'))) ?? '{}')).toEqual({
+    size: 'lg',
+    verbose: true,
+    sheetW: 0,
+    sheetH: 0,
+  });
   await expect(page.locator('[data-e2e="recorder-detail"]')).toContainText('sess-e2e');
 });
 
@@ -896,5 +1120,30 @@ test.describe('on a phone', () => {
     const b = (await sheet.boundingBox())!;
     expect(b.width).toBeGreaterThan(360);
     expect(844 - (b.y + b.height)).toBeLessThan(24);
+  });
+
+  test('the note grip drags the cap alone: the bottom sheet keeps its width', async ({ page }) => {
+    await page.goto(`${pageUrl}/`);
+    await page.getByRole('button', { name: 'Start recording' }).tap();
+    await page.getByRole('button', { name: 'Recorder controls' }).tap();
+    await page.getByRole('button', { name: 'Note', exact: true }).tap();
+    const text = page.getByPlaceholder("what's wrong / what to refine…");
+    await expect.poll(() => text.evaluate((el) => el.closest('.pop')!.classList.contains('is-open'))).toBe(true);
+    await text.evaluate(async (el) => {
+      await Promise.all(el.closest('.pop')!.getAnimations().map((a) => a.finished));
+    });
+    await text.fill(Array.from({ length: 30 }, (_, i) => `Line ${i}`).join('\n'));
+    const before = (await text.boundingBox())!;
+    const g = (await page.getByRole('button', { name: 'Resize note', exact: true }).boundingBox())!;
+    const from = { x: g.x + g.width / 2, y: g.y + g.height / 2 };
+    // Up the screen grows the cap; the sideways part of the drag changes nothing.
+    await touchDrag(page, from, { x: from.x + 60, y: from.y - 80 });
+    const after = (await text.boundingBox())!;
+    expect(after.height).toBeCloseTo(before.height + 80, 0);
+    expect(after.width).toBeCloseTo(before.width, 0);
+    expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!)).toMatchObject({
+      sheetW: 0,
+      sheetH: Math.round(before.height + 80),
+    });
   });
 });

@@ -19,6 +19,8 @@ const SHIELDED = [
   'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout', 'click', 'dblclick', 'auxclick',
   'contextmenu', 'touchstart', 'touchend', 'touchmove', 'touchcancel', 'wheel',
   'focusin', 'focusout', 'keydown', 'keyup', 'keypress',
+  // An image pasted or dropped onto a sheet is the HUD's, never the page's upload.
+  'paste', 'dragenter', 'dragover', 'dragleave', 'drop',
 ] as const;
 
 export function shield(el: HTMLElement): void {

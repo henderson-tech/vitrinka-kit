@@ -3,7 +3,7 @@
  * driven ONLY through a `HudController` (controller.ts) — the in-page
  * recorder's, or another host's. Owns the dock (where the HUD rests), the
  * pill's inline flows (flow.ts), the sheet (open/title/ctx/pick + the
- * surviving draft) and where it opens, the ⋯ menu, the tooltip and details
+ * surviving draft and its images) and where it opens, the ⋯ menu, the tooltip and details
  * floats, annotate mode, the bug report (its sheet, "Mark on screen" through
  * annotate mode, its send flow), the keyboard shortcuts, the Esc-anywhere /
  * click-outside close and the status line a screen reader hears while the
@@ -24,7 +24,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { RecorderStorage } from '../storage';
-import type { HudController, HudLinkFlow, HudReport } from './controller';
+import type { HudAttachment, HudController, HudLinkFlow, HudReport } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
 import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
@@ -42,8 +42,9 @@ import {
 import { type LinkPhase, LinkSheet } from './LinkSheet';
 import { listen } from './listen';
 import { Menu } from './Menu';
-import { alignFor, towardCentre } from './place';
+import { alignFor, type FloatSide, towardCentre } from './place';
 import { RecorderPill } from './RecorderPill';
+import { gripFor } from './resize';
 import { Sheet } from './Sheet';
 import { colOf, rowOf } from './spots';
 import { fmtAgo, healthLine } from './status';
@@ -110,6 +111,12 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [draft, setDraft] = useState('');
   const [reportDraft, setReportDraft] = useState('');
+  // The drafts' images survive a cancel like their text (canAttach only).
+  const [images, setImages] = useState<readonly HudAttachment[]>([]);
+  const [reportImages, setReportImages] = useState<readonly HudAttachment[]>([]);
+  // Images still preparing belong to the draft too: a sheet reopened mid-way waits for them.
+  const [preparing, setPreparing] = useState(0);
+  const [reportPreparing, setReportPreparing] = useState(0);
   // Annotate mode is picking the report's mark (it returns to the report sheet).
   const [marking, setMarking] = useState(false);
   const markRef = useRef<Pick | null>(null);
@@ -248,6 +255,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       sent.then(
         (res) => {
           setReportDraft('');
+          setReportImages([]);
           settle({ type: 'saved', ...res });
         },
         (e: unknown) => {
@@ -265,6 +273,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         controller.report?.(r).then(
           () => {
             setReportDraft('');
+            setReportImages([]);
             saidSaved();
           },
           (e: unknown) => console.warn('vitrinka: report —', errorText(e)),
@@ -282,21 +291,28 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       const s = sheet;
       setSheet(null);
       if (!s) return;
+      // Images ride only while the host takes them (a policy switched off mid-draft drops them).
+      const held = controller.getSnapshot().canAttach === true ? (s.report ? reportImages : images) : [];
+      const attachments = held.length ? { attachments: held } : {};
       if (s.report) {
-        fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '' });
+        fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '', ...attachments });
         return;
       }
       if (s.pick) {
-        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task });
+        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task, ...attachments });
         setDraft('');
+        setImages([]);
         saidSaved();
-      } else if (text) {
-        controller.note(text);
+      } else if (text || held.length) {
+        // An image can BE the note: text may be empty when it carries one.
+        if (held.length) controller.note(text, held);
+        else controller.note(text);
         setDraft('');
+        setImages([]);
         saidSaved();
       }
     },
-    [sheet, controller, saidSaved, fileReport],
+    [sheet, controller, saidSaved, fileReport, images, reportImages],
   );
   const onStart = useCallback(() => {
     if (!controller.getSnapshot().linked) {
@@ -487,8 +503,10 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const layerOpen = sheet !== null || link !== null;
   const vvTick = useViewportTick(layerOpen && phone);
   // On desktop the placement is measured, so a viewport resize or a grown
-  // sheet (the textarea resizes) must place it again.
+  // sheet (the textarea grows, the grip resizes) must place it again — the
+  // sheet's own report (onLayout) does it before that frame paints.
   const [sizeTick, setSizeTick] = useState(0);
+  const placeAgain = useCallback(() => setSizeTick((n) => n + 1), []);
   useEffect(() => {
     if (!layerOpen || phone) return;
     const bump = () => setSizeTick((n) => n + 1);
@@ -501,13 +519,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       removeEventListener('resize', bump);
     };
   }, [layerOpen, phone, sheetP.mounted, linkP.mounted]);
-  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom right' });
+  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string; side: FloatSide; room: number }>({
+    style: {},
+    origin: 'bottom right',
+    side: 'top',
+    room: 0,
+  });
   useLayoutEffect(() => {
     const el = dock.ref.current;
     if (!layerOpen || !el) return;
     const o = hostOrigin(sheet && portal ? portal.mount : hostMount);
     if (phone) {
-      setLayer({ style: phoneLayer(o), origin: 'bottom center' });
+      setLayer({ style: phoneLayer(o), origin: 'bottom center', side: 'top', room: 0 });
       return;
     }
     const pop = layerRef.current?.firstElementChild as HTMLElement | null;
@@ -551,8 +574,22 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
             onDraft={shownSheet.report ? setReportDraft : setDraft}
             onSend={onSend}
             onClose={closeSheet}
+            kind={shownSheet.report ? 'report' : shownSheet.pick ? 'annotation' : 'note'}
+            // `|| 0`: a host's snapshot from before the sheet size lacks the fields.
+            sheetW={snap.prefs.sheetW || 0}
+            sheetH={snap.prefs.sheetH || 0}
+            room={layer.room}
+            // A phone's bottom sheet spans the viewport: its grip sizes the cap alone.
+            grip={gripFor(layer.side, align, phone ? 'y' : 'xy')}
+            onResize={(sheetW, sheetH) => void controller.setPrefs({ sheetW, sheetH })}
+            onLayout={placeAgain}
             {...(shownSheet.report
               ? { placeholder: 'What went wrong?', required: true, onMark: markOnScreen, marked: shownSheet.pick !== null }
+              : {})}
+            {...(snap.canAttach === true
+              ? shownSheet.report
+                ? { images: reportImages, onImages: setReportImages, preparing: reportPreparing, onPreparing: setReportPreparing }
+                : { images, onImages: setImages, preparing, onPreparing: setPreparing }
               : {})}
           />
         </div>

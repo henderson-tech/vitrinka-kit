@@ -26,7 +26,7 @@ export type Outcome = { ok: true; body?: unknown } | { ok: false; status: number
 export interface Stub {
   calls: Call[];
   /** Scripted outcomes per route family; consumed in order, then ok. */
-  script: { events: Outcome[]; chunks: Outcome[]; sessions: Outcome[]; patch: Outcome[] };
+  script: { events: Outcome[]; chunks: Outcome[]; sessions: Outcome[]; patch: Outcome[]; policy?: { attachments: boolean } };
   /** When set, events POSTs and chunk uploads park here until released. */
   gate: Promise<void> | null;
   restore: () => void;
@@ -67,7 +67,7 @@ export function installStub(): Stub {
       }
     }
     stub.calls.push({ method: init.method ?? 'GET', path, headers, body, init });
-    if (path === '/api/v1/recorder/policy') return answer(undefined, { policy: null });
+    if (path === '/api/v1/recorder/policy') return answer(undefined, { policy: null, ...stub.script.policy });
     if (path === '/api/v1/sessions' && init.method === 'POST') {
       const b = body as { title?: string; environment?: string };
       return answer(stub.script.sessions.shift(), {
@@ -83,6 +83,10 @@ export function installStub(): Stub {
     if (path.endsWith('/events')) {
       if (stub.gate) await stub.gate;
       return answer(stub.script.events.shift(), {});
+    }
+    if (path.includes('/shot?seq=')) {
+      if (stub.gate) await stub.gate;
+      return answer(stub.script.chunks.shift(), { blobKey: `image-${path.split('seq=')[1]}` });
     }
     if (path.includes('/chunk?seq=')) {
       if (stub.gate) await stub.gate;

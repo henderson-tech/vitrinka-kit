@@ -7,10 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { api } from '../api';
 import { bearerToken, clearLink, configureRecorder, LINK_KEY, readLink, storeLink, vitrinkaLinked } from '../config';
-import { installUnauthorizedHandler, linkDevice } from '../link';
+import { forgetLink, installUnauthorizedHandler, linkDevice } from '../link';
 import { getState, setState } from '../queue';
+import { addNote } from '../session';
 import { getRecorderStorage } from '../storage';
-import { BASE, freshRecorder, installStub, liveSession, type Stub } from './stub';
+import { __resetBlobStoreForTests, configureRecorderBlobStore, memoryBlobStore } from '../storage/blobs';
+import { BASE, fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
 beforeEach(() => {
@@ -18,7 +20,10 @@ beforeEach(() => {
   freshRecorder();
   configureRecorder({ url: BASE });
 });
-afterEach(() => stub.restore());
+afterEach(() => {
+  stub.restore();
+  __resetBlobStoreForTests();
+});
 
 describe('device link', () => {
   it('uses the stored link as the bearer; an explicit key wins', () => {
@@ -44,6 +49,20 @@ describe('device link', () => {
     expect(readLink()).toBeNull();
     expect(getState()).toBeNull();
     off();
+  });
+
+  it('Unlink deletes the journaled images of the session it ends locally', async () => {
+    fakeLocation();
+    const store = memoryBlobStore();
+    configureRecorderBlobStore({ ...store, durable: true });
+    setState({ ...liveSession(), attachments: true });
+    addNote('reference', [{ name: 'reference.png', blob: new Blob(['pixels'], { type: 'image/png' }), w: 1, h: 1 }]);
+    await Bun.sleep(0);
+    expect(await store.keys()).toHaveLength(1);
+    forgetLink();
+    await Bun.sleep(0);
+    expect(getState()).toBeNull();
+    expect(await store.keys()).toEqual([]);
   });
 
   it('preselects the /w/<slug> of its url and discards a token approved into another workspace', async () => {

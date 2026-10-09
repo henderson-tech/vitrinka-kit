@@ -15,8 +15,10 @@ import type { RedactionPolicy } from '@vitrinka/redact';
 
 import type { SessionDone } from '../protocol';
 import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
+import { type StagedImage, stageAttachments } from './attachments';
 import { redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
+import type { HudAttachment } from './hud/controller';
 import {
   adoptStoredState,
   armReconcile,
@@ -26,6 +28,7 @@ import {
   getState,
   markStopping,
   persistNow,
+  pruneBlobJournal,
   pushEvent,
   queuedCount,
   REC_KEY,
@@ -47,7 +50,7 @@ export { onBeforeStop } from './queue';
 export type { SessionDone } from '../protocol';
 
 /** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.3.4';
+export const RECORDER_VERSION = '0.4.0';
 export const RECORDER_ID = `web/${RECORDER_VERSION}`;
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
@@ -63,7 +66,8 @@ export interface SessionOut {
 
 /**
  * Re-apply a RECOVERED session's redaction policy after a reload — and
- * re-FETCH it when the original fetch never settled (`policy === undefined`).
+ * re-FETCH it when the original fetch never settled (`policy === undefined`),
+ * with the `attachments` answer the same read carries.
  */
 let policyRecoveryInFlight = false;
 
@@ -75,12 +79,13 @@ export function recoverRedactionPolicy(): void {
   if (policyRecoveryInFlight) return;
   policyRecoveryInFlight = true;
   void fetchPolicy()
-    .then((policy) => {
+    .then(({ policy, attachments }) => {
       const live = getState();
       if (live?.sessionId !== rec.sessionId) return;
       if (live.policy !== undefined) return;
       setRedactionPolicy(policy);
-      setState({ ...live, policy });
+      setState({ ...live, policy, attachments });
+      notify();
     })
     .finally(() => {
       policyRecoveryInFlight = false;
@@ -190,11 +195,13 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
     ...(opts.environment ? { environment: opts.environment } : {}),
     ...(opts.driver ? { meta: { driver: opts.driver } } : {}),
   });
-  void policyPromise.then((policy) => {
+  void policyPromise.then(({ policy, attachments }) => {
     const rec = getState();
     if (rec?.sessionId !== ses.id) return;
     setRedactionPolicy(policy);
-    setState({ ...rec, policy });
+    setState({ ...rec, policy, attachments });
+    // The sheets offer images from here on (canAttach).
+    notify();
   });
   setState({
     sessionId: ses.id,
@@ -210,6 +217,8 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   resetQueues();
   resetHealth();
   resetIdle();
+  // Images an earlier session left in the blob journal (a tab closed mid-upload) never go now.
+  void pruneBlobJournal();
   noteRecent({
     sessionId: ses.id,
     title: ses.title,
@@ -267,9 +276,29 @@ export async function togglePause(): Promise<boolean> {
 
 const route = () => ({ tabId: currentRoute.tabId, tabHost: currentRoute.tabHost });
 
-/** A plain note — `{text, route}`, the extension's shape. */
-export function addNote(text: string): void {
-  pushEvent('note', { text, route: currentRoute.pathname }, route());
+/**
+ * The images a note may carry: none unless this session's policy read said
+ * `attachments: true` (the workspace switch, D6) — the HUD offers none then,
+ * and another caller's are not uploaded against it.
+ */
+function imagesOf(list: readonly HudAttachment[] | undefined): StagedImage[] {
+  if (!list?.length) return [];
+  if (getState()?.attachments !== true) {
+    console.warn('vitrinka: this session takes no attachments — the note is sent without its images');
+    return [];
+  }
+  return stageAttachments(list);
+}
+
+/**
+ * A plain note — `{text, route}`, the extension's shape. With attachments
+ * (recorder attachments) each image becomes an `attachment` event whose seq
+ * is allocated just before the note's, in this tab's lane, and the note
+ * lists them: `{text, route, attachments: [seq…]}`; `text` may then be
+ * empty. Their bytes upload through `/shot` before their rows ride (queue.ts).
+ */
+export function addNote(text: string, attachments?: readonly HudAttachment[]): void {
+  pushEvent('note', { text, route: currentRoute.pathname }, route(), imagesOf(attachments));
 }
 
 /** A rect in CSS pixels (viewport coordinates). */
@@ -296,13 +325,13 @@ export function imagePixels(r: ViewRect): ViewRect {
  * annotate: true}` (+ `task` when the tester chose the task destination);
  * vitrinka projects it into a board annotation. `selector` is '' for a free
  * region. The rect is in device pixels. An empty note is still a valid
- * annotation, matching the extension.
+ * annotation, matching the extension. `attachments` ride as for `addNote`.
  */
 export function addAnnotation(
   text: string,
   rect: ViewRect,
   selector: string,
-  opts: { task?: boolean } = {},
+  opts: { task?: boolean; attachments?: readonly HudAttachment[] } = {},
 ): void {
   pushEvent(
     'note',
@@ -315,6 +344,7 @@ export function addAnnotation(
       ...(opts.task ? { task: true } : {}),
     },
     route(),
+    imagesOf(opts.attachments),
   );
 }
 
@@ -352,6 +382,7 @@ async function finishStop(rec: SessionState, durationMs: number, peers: readonly
     setState(null);
     setRedactionPolicy(null);
     resetQueues();
+    void pruneBlobJournal(rec.sessionId);
     notify();
     throw new Error(
       `${reason || 'session rejected by the server'} — recording ended locally` +
@@ -402,6 +433,8 @@ async function finishStop(rec: SessionState, durationMs: number, peers: readonly
     setRedactionPolicy(null);
     resetQueues();
   }
+  // Every image of it is the server's (or never will be): the journal lets go of the session.
+  void pruneBlobJournal(rec.sessionId);
   notify();
   return done;
 }

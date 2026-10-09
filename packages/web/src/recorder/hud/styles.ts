@@ -375,6 +375,8 @@ button.tb:focus-visible { outline:2px solid var(--rec); outline-offset:-2px; }
   padding:0 8px calc(8px + env(safe-area-inset-bottom, 0px)); pointer-events:none; }
 .phone > * { pointer-events:auto; }
 .pop { width:min(calc(288px * var(--s)), calc(100vw - 24px)); padding:calc(12px * var(--s)); border-radius:calc(14px * var(--s)); font-size:var(--fs); }
+/* the composer: 440px at every HUD size, or the width the tester dragged (--sheet-w, resize.ts) */
+.pop.compose { position:relative; width:min(var(--sheet-w, 440px), calc(100vw - 24px)); }
 .phone .pop { width:100%; border-radius:18px; padding:14px; }
 .pop-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .title { display:flex; align-items:center; gap:7px; font-size:calc(var(--fs) + .5px); font-weight:600; color:var(--fg); }
@@ -383,7 +385,7 @@ button.tb:focus-visible { outline:2px solid var(--rec); outline-offset:-2px; }
   display:inline-grid; place-items:center; font-size:12px; }
 .closeb:focus-visible, .sendb:focus-visible, .retry:focus-visible, .dest button:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
 @media (hover: hover) { .closeb:hover { color:var(--fg); background:var(--ink-2); } }
-textarea { width:100%; margin-top:10px; padding:9px 11px; min-height:calc(64px * var(--s)); resize:vertical; background:rgba(0,0,0,.28);
+textarea { width:100%; margin-top:10px; padding:9px 11px; min-height:calc(64px * var(--s)); resize:none; overflow-y:hidden; background:rgba(0,0,0,.28);
   border:0; box-shadow:inset 0 0 0 1px var(--edge); border-radius:9px; color:var(--fg);
   font:400 calc(14px * var(--s))/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 @media (pointer: coarse) { textarea { font-size:16px; } .hints { display:none; } }
@@ -402,6 +404,41 @@ textarea:focus { outline:none; box-shadow:inset 0 0 0 1px var(--fg-3); }
 @media (hover: hover) { .sendb:hover { background:#ff5670; } }
 .sendb[aria-disabled="true"] { opacity:.45; cursor:default; background:var(--rec); }
 .hints { margin-top:9px; font-size:var(--fs-s); line-height:1; color:var(--fg-3); }
+/* attachments: the paperclip beside Send, the thumbnail strip, the drop target; a refusal takes the ctx slot */
+.acts { display:inline-flex; align-items:center; gap:6px; }
+.clipb { all:unset; box-sizing:border-box; cursor:pointer; display:inline-grid; place-items:center; width:calc(28px * var(--s)); height:calc(28px * var(--s));
+  border-radius:8px; color:var(--fg-2); font-size:calc(var(--ic) + 1px); transition: background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out); }
+@media (hover: hover) { .clipb:hover { color:var(--fg); background:var(--ink-2); } }
+.clipb[aria-disabled="true"] { opacity:.45; cursor:default; }
+.clipb:focus-visible, .attx:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
+.ctx.bad { color:var(--warn); }
+.atts { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 0; padding:0; list-style:none; }
+.att { position:relative; width:calc(52px * var(--s)); height:calc(52px * var(--s)); border-radius:8px; overflow:hidden;
+  background:rgba(0,0,0,.28); box-shadow:inset 0 0 0 1px var(--edge); display:grid; place-items:center; color:var(--fg-3); }
+.att img { width:100%; height:100%; object-fit:cover; display:block; }
+.attx { all:unset; box-sizing:border-box; cursor:pointer; position:absolute; top:3px; right:3px; width:18px; height:18px; border-radius:50%;
+  display:grid; place-items:center; font-size:9px; color:#fff; background:rgba(0,0,0,.62); box-shadow:0 0 0 1px rgba(255,255,255,.18); }
+@media (hover: hover) { .attx:hover { background:rgba(0,0,0,.85); } }
+@media (pointer: coarse) { .attx { width:24px; height:24px; top:2px; right:2px; font-size:11px; } }
+.pop.dropping { outline:2px dashed var(--fg-2); outline-offset:-5px; }
+/* the resize grip on the composer's corner away from the dock (resize.ts); its hit area reaches outward, never over the ✕ */
+.grip { all:unset; box-sizing:border-box; position:absolute; width:14px; height:14px; display:grid; place-items:center; border-radius:4px;
+  font-size:12px; color:var(--fg-3); touch-action:none; --reach:-6px; transition: color var(--duration-quick) var(--ease-out); }
+.grip::after { content:""; position:absolute; }
+.grip[data-corner="tl"] { top:3px; left:3px; cursor:nwse-resize; }
+.grip[data-corner="tr"] { top:3px; right:3px; cursor:nesw-resize; }
+.grip[data-corner="bl"] { bottom:3px; left:3px; cursor:nesw-resize; }
+.grip[data-corner="br"] { bottom:3px; right:3px; cursor:nwse-resize; }
+.grip[data-corner="tl"]::after { inset:var(--reach) 0 0 var(--reach); }
+.grip[data-corner="tr"]::after { inset:var(--reach) var(--reach) 0 0; }
+.grip[data-corner="bl"]::after { inset:0 0 var(--reach) var(--reach); }
+.grip[data-corner="br"]::after { inset:0 var(--reach) var(--reach) 0; }
+.grip[data-corner="tl"] svg { transform:rotate(180deg); }
+.grip[data-corner="tr"] svg { transform:rotate(-90deg); }
+.grip[data-corner="bl"] svg { transform:rotate(90deg); }
+@media (hover: hover) { .grip:hover { color:var(--fg); } }
+@media (pointer: coarse) { .grip { --reach:-14px; } }
+.grip:focus-visible { outline:2px solid var(--rec); outline-offset:1px; }
 `;
 
 /**

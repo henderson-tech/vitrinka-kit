@@ -1,5 +1,65 @@
 # @vitrinka/web
 
+## 0.4.0
+
+- **Notes, annotations and bug reports carry images.** Testers asked to
+  attach a reference of "how it should be" while recording. The sheet now
+  takes images three ways: the **Attach image** paperclip beside Send,
+  an image pasted into the text box (a text paste stays a text paste), and
+  image files dropped onto the sheet, which highlights while you drag.
+  Thumbnails line up above the footer, each with a **Remove** ×. A note
+  carries up to 4 and may have no text; a bug report still needs its
+  description. The images survive a cancel like the draft's text. On the
+  board they become the tester's own thread message under the note.
+- **Images are re-encoded before they leave the browser.** WebP at 0.85,
+  JPEG where the browser cannot write WebP, PNG when JPEG would lose
+  transparency. The long edge is at most 2560 px and the file at most
+  12 MiB; an animated image keeps its first frame. EXIF and GPS metadata are
+  gone. A file that is not an image is refused with the reason in the
+  footer's context slot, so the footer never moves.
+- **Only where the server allows it.** The paperclip shows when
+  `GET /api/v1/recorder/policy` answers `attachments: true`. A server before
+  attachments omits the field, and a workspace can switch them off. The
+  recorder then sends notes as before, text only.
+- **Wire.** Each image uploads to `POST /sessions/:id/shot?seq=N` with its
+  own Content-Type. An `attachment` event `{name, mime, bytes, w, h}` then
+  carries the returned `blobKey`. Its seq is allocated with the note's,
+  just below it, and the note lists the image seqs as `attachments`. An idle
+  bug report carries its images into its short session the same way. The
+  `protocol` module adds `AttachmentPayload`, `NotePayload` and
+  `RecorderPolicyResponse`.
+- **A queued image survives a reload.** Its bytes wait in an IndexedDB
+  blob journal (`vitrinka.recorder.blobs`) until the server acknowledged its
+  event. A reload, or another tab finishing a closed tab's tail, uploads it
+  before its event is delivered, and Stop waits for it like the rest of the
+  tail. The queue holds at most 64 MiB (200 images) across notes; past that
+  the oldest image is dropped with a console warning and its note lands
+  without it.
+- `HudController`: `HudSnapshot.canAttach`, `note(text, attachments?)`,
+  and `attachments` on `HudAnnotation` and `HudReport`. `HudAttachment` is
+  exported from `@vitrinka/web/hud`. A host without `canAttach` gets the text-only
+  HUD it had.
+- The HUD's propagation shield also stops `paste` and the drag events, so a
+  page's own upload handler never takes an image meant for the sheet.
+- **A roomier sheet you can resize.** The note, annotate and bug-report
+  sheet is now 440 px wide at every HUD size (was 288 at size M). Its text
+  box grows with the draft up to 20 rows, then scrolls; the footer row keeps
+  its layout and the sheet stays beside the pill, inside the viewport. A grip
+  on the corner away from the pill (**Resize note**, **Resize annotation**,
+  **Resize report**) drags the width (320 to 960 px) and the text box's cap
+  live; on a phone's full-width bottom sheet it drags the cap alone. Its
+  arrow keys step 16 px (Shift: 64), and Enter or a double-click restores
+  the default.
+- **The sheet size is a HUD preference.** `HudPrefs` gains `sheetW` and
+  `sheetH` (CSS px, 0 = the default) and `DEFAULT_PREFS` carries 0 for both.
+  A resize calls `setPrefs({sheetW, sheetH})` once, on release. The in-page
+  recorder applies it at once, keeps it in its storage, and sends it to
+  `PATCH /api/v1/recorder/me` in a request of its own. A server that
+  predates the fields answers that request 422. The size then stays on the
+  device for the page's lifetime, with no retry and no error, and size and
+  details still sync. A linked user's server copy wins on load, as for size
+  and details. An answer without the fields never resets the device's size.
+
 ## 0.3.4
 
 - **Two tabs no longer collide on event sequence numbers.** Events and rrweb

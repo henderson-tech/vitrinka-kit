@@ -78,6 +78,24 @@ export function ArrowUpIcon(): ReactElement {
   );
 }
 
+export function PaperclipIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+/** The sheet's resize grip, drawn for the bottom-right corner (CSS turns it to the others). */
+export function GripIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="M20 9 9 20" />
+      <path d="M20 15l-5 5" />
+    </svg>
+  );
+}
+
 export function MoreIcon(): ReactElement {
   return (
     <svg {...base}>
