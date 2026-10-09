@@ -2,13 +2,23 @@ import { afterEach, beforeEach, expect, it } from 'bun:test';
 import type { RecorderEvent } from '../../protocol';
 import { stageAttachments } from '../attachments';
 import { addNote } from '../session';
-import { __dropCachesForTests, __imagesForTests, flush, persistNow, setState } from '../queue';
+import { __dropCachesForTests, __imagesForTests, __resetForTests, flush, persistNow, setState } from '../queue';
+import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage, type RecorderStorage } from '../storage';
 import { configureRecorderBlobStore, memoryBlobStore, __resetBlobStoreForTests } from '../storage/blobs';
 import { fakeLocation, freshRecorder, installStub, liveSession, type Stub } from './stub';
 
 let stub: Stub;
 const image = () => ({ name: 'reference.png', blob: new Blob(['pixels'], { type: 'image/png' }), w: 40, h: 20 });
 const events = () => stub.calls.filter(c => c.path.endsWith('/events')).flatMap(c => (c.body as { events: RecorderEvent[] }).events);
+/** A store shared across tabs (it locks), so every capture keeps a journal another tab can recover. */
+function sharedStore(): RecorderStorage {
+  const storage = memoryRecorderStorage();
+  __resetStorageForTests();
+  configureRecorderStorage({ ...storage, withLock: async (_key, run) => { run(); } });
+  __resetForTests();
+  setState({ ...liveSession(), attachments: true });
+  return storage;
+}
 beforeEach(() => {
   stub = installStub();
   freshRecorder();
@@ -82,6 +92,24 @@ it('gives an image up only after the journal refuses five reads in a row', async
   expect(__imagesForTests()).toHaveLength(0);
   expect(events().some(e => e.kind === 'attachment')).toBe(false);
   expect(events().some(e => e.kind === 'note')).toBe(true);
+});
+
+it('publishes a note\'s capture journal only once its image bytes are in the blob journal', async () => {
+  const storage = sharedStore();
+  const store = memoryBlobStore();
+  let land = () => {};
+  const landed = new Promise<void>(resolve => { land = resolve; });
+  configureRecorderBlobStore({ ...store, durable: true, put: async (key, blob) => { await landed; await store.put(key, blob); } });
+  addNote('reference', [image()]);
+  await Bun.sleep(0);
+  const journals = () => storage.keys!().filter(key => key.startsWith('allocation.'));
+  // Another tab recovering it now would read no bytes and drop the image as lost.
+  expect(journals()).toEqual([]);
+  land();
+  await Bun.sleep(0);
+  expect(journals()).toHaveLength(1);
+  expect(await flush()).toBe(true);
+  expect(events().some(e => e.kind === 'attachment')).toBe(true);
 });
 
 it('does not upload attachments when capability is absent', async () => {

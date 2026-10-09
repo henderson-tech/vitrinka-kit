@@ -21,8 +21,10 @@
  *   Their bytes wait in the blob journal (./storage/blobs — IndexedDB), so a
  *   queued image survives a reload and is uploaded before its row is
  *   delivered; they leave it once the server acknowledged the row. The
- *   capture journal of such a note lives until every one of its seqs is
- *   acknowledged, so a reload or another tab can finish the lot.
+ *   capture journal of such a note is written only once those bytes are in
+ *   (another tab must never recover an image it cannot read yet) and lives
+ *   until every one of its seqs is acknowledged, so a reload or another tab
+ *   can finish the lot.
  * - A permanent server verdict (4xx minus 408/429) drops the item loudly;
  *   transient failures stop the pass and the next flush retries.
  * - A reload keeps the undelivered event tail (KV store is durable).
@@ -432,10 +434,13 @@ function getImages(): PendingImage[] {
   return imageCache;
 }
 
-/** Always persisted: metadata only. */
+/**
+ * Always persisted: metadata only — and only of images whose bytes are in
+ * the blob journal, the one place the next document can read them from.
+ */
 function persistImages(): void {
   if (tailDropped) return;
-  const images = getImages();
+  const images = getImages().filter((image) => !unjournaled.has(image.blob));
   if (images.length === 0) kv().remove('images');
   else safeSet('images', JSON.stringify(images));
 }
@@ -449,30 +454,44 @@ function setImages(images: PendingImage[]): void {
 /**
  * Hold a note's images for the queue: their bytes in memory for this
  * document and in the blob journal for a reload or another tab. Returns
- * the drafts the capture journal records (journal key + payload).
+ * the drafts the capture journal records (journal key + payload), and
+ * `journaled` — true once every image's bytes are durably in the journal:
+ * only then may anything outside this document be told about them.
  */
-function stageImages(sessionId: string, images: readonly StagedImage[]): ImageDraft[] {
+function stageImages(sessionId: string, images: readonly StagedImage[]): { drafts: ImageDraft[]; journaled: Promise<boolean> } {
   const store = getRecorderBlobStore();
   if (!store.durable && !volatileWarned) {
     volatileWarned = true;
     console.warn('vitrinka: no IndexedDB — an attached image will not survive a reload');
   }
   safeSet(BLOBS_KEY, '1');
-  return images.map(({ blob, payload }) => {
+  const writes: Promise<boolean>[] = [];
+  const drafts = images.map(({ blob, payload }) => {
     const key = `${sessionId}/${RECORDER_DOCUMENT_KEY}.${++imageNo}`;
     imageBlobs.set(key, blob);
     unjournaled.add(key);
-    void store.put(key, blob).then(
+    writes.push(store.put(key, blob).then(
       () => {
-        if (store.durable) unjournaled.delete(key);
         // Released (or acknowledged) while the write was out: nothing will read it back.
         const needed = imageBlobs.has(key) || getImages().some((image) => image.blob === key) || [...rowBlobs.values()].includes(key);
-        if (!needed) forgetBlob(key);
+        if (!needed) {
+          unjournaled.delete(key);
+          forgetBlob(key);
+          return false;
+        }
+        if (!store.durable) return false;
+        unjournaled.delete(key);
+        if (getImages().some((image) => image.blob === key)) persistImages();
+        return true;
       },
-      (error: unknown) => console.warn('vitrinka: an attached image could not be journaled — it will not survive a reload', error),
-    );
+      (error: unknown) => {
+        console.warn('vitrinka: an attached image could not be journaled — it will not survive a reload', error);
+        return false;
+      },
+    ));
     return { blob: key, payload };
   });
+  return { drafts, journaled: Promise.all(writes).then((durable) => durable.every(Boolean)) };
 }
 
 /** Delete one image's bytes from the blob journal. */
@@ -875,23 +894,43 @@ function allocatePending(): Promise<void> {
   return allocationBusy;
 }
 
-/** Accept now, persist now, stamp under the shared lock later. */
-function queueCapture(draft: CaptureDraft): boolean {
+/**
+ * Accept now, persist now, stamp under the shared lock later. A note with
+ * images (`journaled`) persists its journal only once their bytes are in
+ * the blob journal: another tab recovering it sooner would read no bytes
+ * and drop them as lost. Until then (for good, when the bytes never get
+ * there) only this document can deliver it.
+ */
+function queueCapture(draft: CaptureDraft, journaled?: Promise<boolean>): boolean {
   const accepted = getState();
   if (!accepted || accepted.paused || accepted.dead) return false;
   recoverAllocations();
   if (kv().withLock) {
     const key = `${ALLOCATION_PREFIX}${RECORDER_DOCUMENT_KEY}.${++captureNo}`;
     const raw = JSON.stringify({ draft });
-    const item: PendingAllocation = { key, draft, persisted: safeSet(key, raw), bytes: utf8Bytes(raw) };
+    const item: PendingAllocation = { key, draft, persisted: !journaled && safeSet(key, raw), bytes: utf8Bytes(raw) };
     addAllocation(item);
     void allocatePending();
+    void journaled?.then((durable) => {
+      if (durable) publishAllocation(item);
+    });
   } else {
     const allocation = allocSeq(seqCount(draft));
     if (allocation) appendCapture(draft, allocation.seq);
     else releaseImages(draftImageKeys(draft), true);
   }
   return true;
+}
+
+/**
+ * Persist a capture's journal late (its images' bytes just landed), with
+ * its seq when it has one. A capture delivered, dropped or reset meanwhile
+ * is no longer held here, and nothing is written.
+ */
+function publishAllocation(item: PendingAllocation): void {
+  const allocated = allocatedCaptures.get(item.key);
+  if (allocated) allocated.persisted = safeSet(item.key, JSON.stringify({ draft: item.draft, seq: item.seq }));
+  else if (pendingAllocations.has(item)) item.persisted = safeSet(item.key, JSON.stringify({ draft: item.draft }));
 }
 
 /**
@@ -967,16 +1006,19 @@ export function pushEvent(
   if (rec.paused || rec.dead) return null;
   const ts = new Date().toISOString();
   const { tabId, tabHost } = route;
-  const drafts = images.length ? stageImages(rec.sessionId, images) : [];
-  queueCapture({
-    sessionId: rec.sessionId,
-    ts,
-    tabId,
-    tabHost,
-    kind: 'event',
-    event: { kind, payload },
-    ...(drafts.length ? { images: drafts } : {}),
-  });
+  const staged = images.length ? stageImages(rec.sessionId, images) : null;
+  queueCapture(
+    {
+      sessionId: rec.sessionId,
+      ts,
+      tabId,
+      tabHost,
+      kind: 'event',
+      event: { kind, payload },
+      ...(staged ? { images: staged.drafts } : {}),
+    },
+    staged?.journaled,
+  );
   noteActivity();
   return ts;
 }
