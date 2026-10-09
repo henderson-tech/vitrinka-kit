@@ -40,6 +40,11 @@ interface Decoded {
 /** null until the first encode says whether this browser writes WebP. */
 let webp: boolean | null = null;
 
+/** Test-only: forget what the first encode learned about WebP. */
+export function __resetEncoderForTests(): void {
+  webp = null;
+}
+
 /** The name a pasted image carries: the clipboard's generic one becomes "pasted image.<ext>". */
 export function pastedName(file: File): string {
   if (file.name && !/^(image|untitled)\.\w+$/i.test(file.name)) return file.name;
