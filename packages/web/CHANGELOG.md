@@ -32,7 +32,9 @@
   blob journal (`vitrinka.recorder.blobs`) until the server acknowledged its
   event. A reload, or another tab finishing a closed tab's tail, uploads it
   before its event is delivered, and Stop waits for it like the rest of the
-  tail.
+  tail. The queue holds at most 64 MiB (200 images) across notes; past that
+  the oldest image is dropped with a console warning and its note lands
+  without it.
 - `HudController`: `HudSnapshot.canAttach`, `note(text, attachments?)`,
   and `attachments` on `HudAnnotation` and `HudReport`. `HudAttachment` is
   exported from `@vitrinka/web/hud`. A host without `canAttach` gets the text-only

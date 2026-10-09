@@ -340,7 +340,9 @@ another tab finishing a closed tab's tail — uploads each queued image to
 it waits for the rest of the tail. The bytes leave the journal once the
 server acknowledged the image's event, or when its session ends. Without
 IndexedDB the images still upload from the open tab; only the reload
-guarantee is lost, and the recorder says so.
+guarantee is lost, and the recorder says so. The queue holds at most
+64 MiB (200 images) across notes: past that the oldest image is dropped
+with a console warning, and its note lands without it.
 
 ## Development
 

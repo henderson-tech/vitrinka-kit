@@ -424,6 +424,13 @@ const rowBlobs = new Map<number, string>();
 /** Journal reads refused in a row, by key: a journal that never answers must not hold Stop forever. */
 const readFailures = new Map<string, number>();
 const READ_ATTEMPTS = 5;
+/**
+ * The queued images' budget across notes (one note holds ≤ 10): past either
+ * bound the oldest goes loudly and its note lands without it — a tester
+ * attaching on while offline never grows memory and the journal unbounded.
+ */
+const MAX_IMAGES = 200;
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 let imageNo = 0;
 let volatileWarned = false;
 /** KV mark: the blob journal may hold something (spares IndexedDB for testers who never attach). */
@@ -778,6 +785,14 @@ function appendCapture(draft: CaptureDraft, seq: number): void {
         }
         pending.push({ seq: at, ts, tabId, tabHost, sessionId, blob: image.blob, payload: image.payload });
       });
+      let bytes = pending.reduce((sum, p) => sum + p.payload.bytes, 0);
+      while (pending.length > MAX_IMAGES || bytes > MAX_IMAGE_BYTES) {
+        const dropped = pending.shift()!;
+        bytes -= dropped.payload.bytes;
+        clearStoredCaptures(dropped.sessionId, new Set([dropped.seq]));
+        releaseImages([dropped.blob], true);
+        console.warn(`vitrinka: attached image queue full — dropped ${dropped.payload.name} (seq ${dropped.seq}); its note lands without it`);
+      }
       setImages(pending);
     }
     if (buffer.length > MAX_BUFFER) {

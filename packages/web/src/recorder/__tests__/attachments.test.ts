@@ -127,6 +127,16 @@ it('deletes an uploaded image\'s bytes once its row is acknowledged after a relo
   expect(await store.keys()).toEqual([]);
 });
 
+it('bounds the queued image bytes: past the budget the oldest image goes loudly, its journaled bytes with it', async () => {
+  const store = memoryBlobStore();
+  configureRecorderBlobStore({ ...store, durable: true });
+  const big = (i: number) => ({ name: `big-${i}.png`, blob: new Blob([new Uint8Array(12 * 1024 * 1024)], { type: 'image/png' }), w: 1, h: 1 });
+  for (let i = 0; i < 6; i++) addNote(`note ${i}`, [big(i)]);
+  await Bun.sleep(0);
+  expect(__imagesForTests().map(i => i.name)).toEqual(['big-1.png', 'big-2.png', 'big-3.png', 'big-4.png', 'big-5.png']);
+  expect((await store.keys()).sort()).toEqual(__imagesForTests().map(i => i.blob).sort());
+});
+
 it('does not upload attachments when capability is absent', async () => {
   setState(liveSession());
   addNote('text only', [image()]);
