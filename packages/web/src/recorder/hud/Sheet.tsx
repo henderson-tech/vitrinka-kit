@@ -13,7 +13,8 @@
  * paperclip beside Send picks them, an image paste on the textarea and a
  * drop onto the sheet add them (attach.ts normalizes each), a strip of
  * thumbnails above the footer removes them, at most `MAX_ATTACHMENTS`. Like
- * the text, the caller owns them, so a cancel keeps them. A refusal (not an
+ * the text, the caller owns them — and the count still preparing — so a
+ * cancel keeps them and a reopened sheet still waits. A refusal (not an
  * image, the cap) shows in the footer's context slot — one line, so the
  * footer never moves.
  */
@@ -90,6 +91,12 @@ export interface SheetProps {
   /** The draft's images; absent = the host takes none (no paperclip, paste or drop). */
   images?: readonly HudAttachment[];
   onImages?: Dispatch<SetStateAction<readonly HudAttachment[]>>;
+  /**
+   * The draft's files still being normalized; Send waits for them. Owned
+   * with the images, so a sheet closed and reopened mid-way still waits.
+   */
+  preparing?: number;
+  onPreparing?: Dispatch<SetStateAction<number>>;
 }
 
 export function Sheet({
@@ -108,12 +115,12 @@ export function Sheet({
   marked = false,
   images,
   onImages,
+  preparing: busy = 0,
+  onPreparing,
 }: SheetProps): ReactElement {
   const ta = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const [task, setTask] = useState(false);
-  // Files still being normalized; Send waits for them.
-  const [busy, setBusy] = useState(0);
   const [refusal, setRefusal] = useState('');
   const [dropping, setDropping] = useState(false);
   useEffect(() => {
@@ -138,13 +145,15 @@ export function Sheet({
     onSend(draft.trim(), task);
   };
   // Normalize in order (the strip keeps the order they came in); the cap is
-  // re-checked as each lands, so two quick adds never pass it.
+  // re-checked as each lands, so two quick adds never pass it. The work can
+  // outlive this sheet (a cancel mid-way): its count and its result go to
+  // the caller's draft, never to this sheet's state.
   const attach = (files: readonly File[], pasted = false) => {
-    if (!onImages || !files.length) return;
+    if (!onImages || !onPreparing || !files.length) return;
     const take = files.slice(0, Math.max(0, MAX_ATTACHMENTS - held - busy));
     setRefusal(take.length < files.length ? `${MAX_ATTACHMENTS} images at most` : '');
     if (!take.length) return;
-    setBusy((n) => n + take.length);
+    onPreparing((n) => n + take.length);
     void (async () => {
       for (const f of take) {
         try {
@@ -153,7 +162,7 @@ export function Sheet({
         } catch (e) {
           setRefusal(errorText(e));
         } finally {
-          setBusy((n) => n - 1);
+          onPreparing((n) => n - 1);
         }
       }
     })();

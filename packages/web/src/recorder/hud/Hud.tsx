@@ -113,6 +113,9 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   // The drafts' images survive a cancel like their text (canAttach only).
   const [images, setImages] = useState<readonly HudAttachment[]>([]);
   const [reportImages, setReportImages] = useState<readonly HudAttachment[]>([]);
+  // Images still preparing belong to the draft too: a sheet reopened mid-way waits for them.
+  const [preparing, setPreparing] = useState(0);
+  const [reportPreparing, setReportPreparing] = useState(0);
   // Annotate mode is picking the report's mark (it returns to the report sheet).
   const [marking, setMarking] = useState(false);
   const markRef = useRef<Pick | null>(null);
@@ -568,8 +571,8 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
               : {})}
             {...(snap.canAttach === true
               ? shownSheet.report
-                ? { images: reportImages, onImages: setReportImages }
-                : { images, onImages: setImages }
+                ? { images: reportImages, onImages: setReportImages, preparing: reportPreparing, onPreparing: setReportPreparing }
+                : { images, onImages: setImages, preparing, onPreparing: setPreparing }
               : {})}
           />
         </div>

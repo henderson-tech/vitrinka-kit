@@ -238,6 +238,39 @@ test('hides the attachment picker when the policy omits the capability', async (
   } finally { servers.policy.attachments = true; }
 });
 
+test('an image still preparing when the sheet closes holds Send in the reopened sheet, then rides the note', async ({ page }) => {
+  seen.length = 0;
+  await openNote(page);
+  // Every decode waits for the test: the image is still preparing when the sheet closes.
+  await page.evaluate(() => {
+    const decode = window.createImageBitmap.bind(window);
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    Object.assign(window, { releaseDecode: release });
+    window.createImageBitmap = (async (image: ImageBitmapSource, options?: ImageBitmapOptions) => {
+      await held;
+      return decode(image, options);
+    }) as typeof window.createImageBitmap;
+  });
+  await pickImage(page);
+  const preparing = page.getByRole('listitem', { name: 'Preparing image' });
+  await expect(preparing).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+  // Gone for good (past its closing frames), so the reopened sheet is a new one.
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+  await expect(preparing).toBeVisible();
+  const send = page.getByRole('button', { name: 'Send', exact: true });
+  await expect(send).toHaveAttribute('aria-disabled', 'true');
+  await page.evaluate(() => (window as unknown as { releaseDecode: () => void }).releaseDecode());
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await expect(send).not.toHaveAttribute('aria-disabled', 'true');
+  await send.click();
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string; payload: { attachments?: number[] } }[] }).events)
+    .some(e => e.kind === 'note' && e.payload.attachments?.length === 1)).toBe(true);
+});
+
 test('removes picked images and caps the sheet at four', async ({ page }) => {
   await openNote(page);
   await pickImage(page, Array.from({ length: 5 }, (_, i) => ({ ...referenceImage, name: `reference-${i}.png` })));
