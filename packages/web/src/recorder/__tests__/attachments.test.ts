@@ -112,6 +112,21 @@ it('publishes a note\'s capture journal only once its image bytes are in the blo
   expect(events().some(e => e.kind === 'attachment')).toBe(true);
 });
 
+it('deletes an uploaded image\'s bytes once its row is acknowledged after a reload', async () => {
+  sharedStore();
+  const store = memoryBlobStore();
+  configureRecorderBlobStore({ ...store, durable: true });
+  addNote('reference', [image()]);
+  stub.script.events.push({ ok: false, status: 503 });
+  expect(await flush()).toBe(false);
+  expect(stub.calls.some(c => c.path.includes('/shot?seq='))).toBe(true);
+  persistNow();
+  __dropCachesForTests();
+  expect(await flush()).toBe(true);
+  expect(stub.calls.filter(c => c.path.includes('/shot?seq='))).toHaveLength(1);
+  expect(await store.keys()).toEqual([]);
+});
+
 it('does not upload attachments when capability is absent', async () => {
   setState(liveSession());
   addNote('text only', [image()]);

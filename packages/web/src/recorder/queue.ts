@@ -769,8 +769,13 @@ function appendCapture(draft: CaptureDraft, seq: number): void {
       const pending = getImages();
       images.forEach((image, i) => {
         const at = seq + i;
-        // Already queued, or already uploaded (its row waits in the buffer).
-        if (pending.some((p) => p.seq === at) || buffer.some((e) => e.seq === at)) return;
+        if (pending.some((p) => p.seq === at)) return;
+        // Already uploaded, its row waits in the buffer (a reload restored it):
+        // its bytes still leave the journal on that row's ack.
+        if (buffer.some((e) => e.seq === at)) {
+          rowBlobs.set(at, image.blob);
+          return;
+        }
         pending.push({ seq: at, ts, tabId, tabHost, sessionId, blob: image.blob, payload: image.payload });
       });
       setImages(pending);
