@@ -124,22 +124,31 @@ export function hostOrigin(mount: HTMLElement): { x: number; y: number } {
  * A popover anchored to the dock: toward the page centre (sideways from a
  * vertical or tucked dock), flush with the dock's outer edge, flipped and
  * shifted so the measured `size` never leaves the viewport; it grows from
- * the point nearest the dock.
+ * the point nearest the dock. `side` is where it opened, `room` the tallest
+ * it may stand there without covering the dock or leaving the viewport.
  */
 export function anchoredLayer(
   dock: Box,
   size: { w: number; h: number },
   place: Place,
   origin: { x: number; y: number },
-): { style: CSSProperties; origin: string } {
+): { style: CSSProperties; origin: string; side: FloatSide; room: number } {
+  const gap = 8;
+  const margin = 8;
   const p = placeFloating(
     { x: dock.left, y: dock.top, w: dock.right - dock.left, h: dock.bottom - dock.top },
     size,
     { w: innerWidth, h: innerHeight },
     towardCentre(place),
-    { align: alignFor(place), gap: 8, margin: 8 },
+    { align: alignFor(place), gap, margin },
   );
-  return { style: { left: p.x - origin.x, top: p.y - origin.y }, origin: p.origin };
+  const room =
+    p.side === 'top'
+      ? dock.top - gap - margin
+      : p.side === 'bottom'
+        ? innerHeight - dock.bottom - gap - margin
+        : innerHeight - 2 * margin;
+  return { style: { left: p.x - origin.x, top: p.y - origin.y }, origin: p.origin, side: p.side, room };
 }
 
 /** A phone bottom sheet: the full visual viewport, content pinned to its bottom edge. */

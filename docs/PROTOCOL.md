@@ -18,7 +18,7 @@ these routes:
 ```
 GET   /api/v1/recorder/policy      workspace redaction policy + the attachments switch (session start; the web pill's flight recorder)
 GET   /api/v1/recorder/me          who the token is + HUD prefs (web HUD)
-PATCH /api/v1/recorder/me          HUD prefs {size, verbose} (web HUD, linked devices)
+PATCH /api/v1/recorder/me          HUD prefs {size, verbose} or {sheetW, sheetH} (web HUD, linked devices)
 POST  /api/v1/sessions             create a recording session
 POST  /api/v1/sessions/:id/events  the event stream (batched)
 POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension); images a tester attached (below)
@@ -233,7 +233,9 @@ recorder's `vitrinka:`-prefixed logs.
 
 The HUD sends nothing beyond the routes above. `/recorder/me` carries the
 token's account (workspace, user email and name, or the key's label and
-project) and two display preferences (`size`, `verbose`). Those preferences
+project) and four display preferences (`size`, `verbose`, and the sheet's
+`sheetW`/`sheetH` in CSS px, sent in a PATCH of their own that a server
+predating them answers 422). Those preferences
 and the device's last five recordings (id, title, start time, length,
 status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 

@@ -21,6 +21,10 @@ export interface HudPrefs {
   size: HudSize;
   /** Technical details (events, queue, last sync, session id, version). */
   verbose: boolean;
+  /** The note / annotate / report sheet's width, CSS px; 0 = the HUD's default. */
+  sheetW: number;
+  /** The cap its text box grows to before it scrolls, CSS px; 0 = the HUD's default (20 rows). */
+  sheetH: number;
 }
 
 /** Who the recorder token belongs to (`GET /api/v1/recorder/me`). */
@@ -189,7 +193,12 @@ export interface HudController {
   unlink(): void;
   /** Refresh `account` (and server prefs); null when unknown. Never rejects. */
   getMe(): Promise<HudAccount | null>;
-  /** Apply locally at once, then persist where the server keeps prefs. Never rejects. */
+  /**
+   * Apply locally at once, then persist where the server keeps prefs. Never
+   * rejects. The sheet size (`sheetW`/`sheetH`, one call per resize) goes in
+   * its own PATCH: a server that predates it answers 422, and the size then
+   * stays on the device without costing size/verbose their server copy.
+   */
   setPrefs(patch: Partial<HudPrefs>): Promise<void>;
   /** Fill missing board links of recents from the server. Never rejects. */
   refreshRecents(): Promise<void>;
@@ -208,4 +217,4 @@ export interface HudController {
   report?(r: HudReport): Promise<HudSaved>;
 }
 
-export const DEFAULT_PREFS: HudPrefs = { size: 'md', verbose: false };
+export const DEFAULT_PREFS: HudPrefs = { size: 'md', verbose: false, sheetW: 0, sheetH: 0 };

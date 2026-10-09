@@ -42,8 +42,9 @@ import {
 import { type LinkPhase, LinkSheet } from './LinkSheet';
 import { listen } from './listen';
 import { Menu } from './Menu';
-import { alignFor, towardCentre } from './place';
+import { alignFor, type FloatSide, towardCentre } from './place';
 import { RecorderPill } from './RecorderPill';
+import { gripFor } from './resize';
 import { Sheet } from './Sheet';
 import { colOf, rowOf } from './spots';
 import { fmtAgo, healthLine } from './status';
@@ -502,8 +503,10 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const layerOpen = sheet !== null || link !== null;
   const vvTick = useViewportTick(layerOpen && phone);
   // On desktop the placement is measured, so a viewport resize or a grown
-  // sheet (the textarea resizes) must place it again.
+  // sheet (the textarea grows, the grip resizes) must place it again — the
+  // sheet's own report (onLayout) does it before that frame paints.
   const [sizeTick, setSizeTick] = useState(0);
+  const placeAgain = useCallback(() => setSizeTick((n) => n + 1), []);
   useEffect(() => {
     if (!layerOpen || phone) return;
     const bump = () => setSizeTick((n) => n + 1);
@@ -516,13 +519,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       removeEventListener('resize', bump);
     };
   }, [layerOpen, phone, sheetP.mounted, linkP.mounted]);
-  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string }>({ style: {}, origin: 'bottom right' });
+  const [layer, setLayer] = useState<{ style: CSSProperties; origin: string; side: FloatSide; room: number }>({
+    style: {},
+    origin: 'bottom right',
+    side: 'top',
+    room: 0,
+  });
   useLayoutEffect(() => {
     const el = dock.ref.current;
     if (!layerOpen || !el) return;
     const o = hostOrigin(sheet && portal ? portal.mount : hostMount);
     if (phone) {
-      setLayer({ style: phoneLayer(o), origin: 'bottom center' });
+      setLayer({ style: phoneLayer(o), origin: 'bottom center', side: 'top', room: 0 });
       return;
     }
     const pop = layerRef.current?.firstElementChild as HTMLElement | null;
@@ -566,6 +574,15 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
             onDraft={shownSheet.report ? setReportDraft : setDraft}
             onSend={onSend}
             onClose={closeSheet}
+            kind={shownSheet.report ? 'report' : shownSheet.pick ? 'annotation' : 'note'}
+            // `|| 0`: a host's snapshot from before the sheet size lacks the fields.
+            sheetW={snap.prefs.sheetW || 0}
+            sheetH={snap.prefs.sheetH || 0}
+            room={layer.room}
+            // A phone's bottom sheet spans the viewport: its grip sizes the cap alone.
+            grip={gripFor(layer.side, align, phone ? 'y' : 'xy')}
+            onResize={(sheetW, sheetH) => void controller.setPrefs({ sheetW, sheetH })}
+            onLayout={placeAgain}
             {...(shownSheet.report
               ? { placeholder: 'What went wrong?', required: true, onMark: markOnScreen, marked: shownSheet.pick !== null }
               : {})}

@@ -41,6 +41,24 @@
   HUD it had.
 - The HUD's propagation shield also stops `paste` and the drag events, so a
   page's own upload handler never takes an image meant for the sheet.
+- **A roomier sheet you can resize.** The note, annotate and bug-report
+  sheet is now 440 px wide at every HUD size (was 288 at size M). Its text
+  box grows with the draft up to 20 rows, then scrolls; the footer row keeps
+  its layout and the sheet stays beside the pill, inside the viewport. A grip
+  on the corner away from the pill (**Resize note**, **Resize annotation**,
+  **Resize report**) drags the width (320 to 960 px) and the text box's cap
+  live; on a phone's full-width bottom sheet it drags the cap alone. Its
+  arrow keys step 16 px (Shift: 64), and Enter or a double-click restores
+  the default.
+- **The sheet size is a HUD preference.** `HudPrefs` gains `sheetW` and
+  `sheetH` (CSS px, 0 = the default) and `DEFAULT_PREFS` carries 0 for both.
+  A resize calls `setPrefs({sheetW, sheetH})` once, on release. The in-page
+  recorder applies it at once, keeps it in its storage, and sends it to
+  `PATCH /api/v1/recorder/me` in a request of its own. A server that
+  predates the fields answers that request 422. The size then stays on the
+  device for the page's lifetime, with no retry and no error, and size and
+  details still sync. A linked user's server copy wins on load, as for size
+  and details. An answer without the fields never resets the device's size.
 
 ## 0.3.4
 

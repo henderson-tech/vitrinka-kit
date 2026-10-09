@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { configureRecorder } from '../config';
-import { cachedPrefs, fetchMe, savePrefs } from '../me';
+import { __resetMeForTests, cachedPrefs, fetchMe, savePrefs } from '../me';
 import { getRecorderStorage } from '../storage';
 import { BASE, freshRecorder } from './stub';
 
@@ -56,24 +56,24 @@ describe('recorder/me', () => {
     const account = await fetchMe();
     expect(calls[0]).toMatchObject({ method: 'GET', path: '/api/v1/recorder/me', auth: 'Bearer vkr_test' });
     expect(account?.user?.email).toBe('lukas@example.test');
-    expect(cachedPrefs()).toEqual({ size: 'lg', verbose: true });
+    expect(cachedPrefs()).toEqual({ size: 'lg', verbose: true, sheetW: 0, sheetH: 0 });
     answers.push(me({ size: 'sm', verbose: true }));
-    expect(await savePrefs({ size: 'sm' })).toEqual({ size: 'sm', verbose: true });
+    expect(await savePrefs({ size: 'sm' })).toEqual({ size: 'sm', verbose: true, sheetW: 0, sheetH: 0 });
     expect(calls[1]).toMatchObject({ method: 'PATCH', body: { prefs: { size: 'sm' } } });
-    expect(JSON.parse(getRecorderStorage().getString('prefs') ?? '{}')).toEqual({ size: 'sm', verbose: true });
+    expect(JSON.parse(getRecorderStorage().getString('prefs') ?? '{}')).toEqual({ size: 'sm', verbose: true, sheetW: 0, sheetH: 0 });
   });
 
   it('a key build keeps prefs local: null prefs leave the cache, a PATCH 409 keeps the change', async () => {
     getRecorderStorage().set('prefs', JSON.stringify({ size: 'sm', verbose: false }));
     answers.push(me(null, 'key'));
     expect((await fetchMe())?.kind).toBe('key');
-    expect(cachedPrefs()).toEqual({ size: 'sm', verbose: false });
+    expect(cachedPrefs()).toEqual({ size: 'sm', verbose: false, sheetW: 0, sheetH: 0 });
     // The cached key account skips the PATCH; an unknown one that answers 409 keeps it too.
-    expect(await savePrefs({ verbose: true })).toEqual({ size: 'sm', verbose: true });
+    expect(await savePrefs({ verbose: true })).toEqual({ size: 'sm', verbose: true, sheetW: 0, sheetH: 0 });
     expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0);
     freshRecorder();
     answers.push({ status: 409, body: { error: 'key build' } });
-    expect(await savePrefs({ size: 'lg' })).toEqual({ size: 'lg', verbose: false });
+    expect(await savePrefs({ size: 'lg' })).toEqual({ size: 'lg', verbose: false, sheetW: 0, sheetH: 0 });
   });
 
   it('a 404 or an offline server falls back to the device silently, warning once', async () => {
@@ -81,8 +81,8 @@ describe('recorder/me', () => {
     getRecorderStorage().set('prefs', JSON.stringify({ size: 'lg', verbose: false }));
     answers.push({ status: 404 });
     expect(await fetchMe()).toBeNull();
-    expect(cachedPrefs()).toEqual({ size: 'lg', verbose: false });
-    expect(await savePrefs({ verbose: true })).toEqual({ size: 'lg', verbose: true });
+    expect(cachedPrefs()).toEqual({ size: 'lg', verbose: false, sheetW: 0, sheetH: 0 });
+    expect(await savePrefs({ verbose: true })).toEqual({ size: 'lg', verbose: true, sheetW: 0, sheetH: 0 });
     expect(calls).toHaveLength(1); // the route is known missing: no PATCH
     freshRecorder();
     answers.push('network');
@@ -112,6 +112,50 @@ describe('recorder/me', () => {
     slowGet.release();
     expect((await get)?.user?.email).toBe('lukas@example.test'); // the account still lands
     expect(cachedPrefs().size).toBe('md');
+  });
+
+  it('normalizes sheet dimensions from storage and takes a linked server copy', async () => {
+    for (const value of [-1, '440', null, undefined]) {
+      getRecorderStorage().set('prefs', JSON.stringify({ sheetW: value, sheetH: value }));
+      __resetMeForTests();
+      expect(cachedPrefs()).toMatchObject({ sheetW: 0, sheetH: 0 });
+    }
+    answers.push(me({ sheetW: 520, sheetH: 460 }));
+    await fetchMe();
+    expect(cachedPrefs()).toMatchObject({ sheetW: 520, sheetH: 460 });
+  });
+
+  it('applies sheet prefs before PATCH settles, stores them for reload, and splits mixed edits', async () => {
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    answers.push({ ...me({ size: 'lg', sheetW: 540, sheetH: 470 }), gate });
+    answers.push(me({ size: 'lg', sheetW: 540, sheetH: 470 }));
+    const saving = savePrefs({ size: 'lg', sheetW: 540, sheetH: 470 });
+    expect(cachedPrefs()).toMatchObject({ size: 'lg', sheetW: 540, sheetH: 470 });
+    expect(JSON.parse(getRecorderStorage().getString('prefs')!)).toMatchObject({ sheetW: 540, sheetH: 470 });
+    release();
+    await saving;
+    expect(calls.map((call) => call.body)).toEqual([
+      { prefs: { size: 'lg' } }, { prefs: { sheetW: 540, sheetH: 470 } },
+    ]);
+    __resetMeForTests();
+    expect(cachedPrefs()).toMatchObject({ size: 'lg', sheetW: 540, sheetH: 470 });
+  });
+
+  it('latches a sheet 422 locally without retries or losing size and verbose sync', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      answers.push({ status: 422, body: { error: 'unknown prefs.sheetW' } });
+      await savePrefs({ sheetW: 540, sheetH: 470 });
+      await savePrefs({ sheetW: 560, sheetH: 490 });
+      expect(calls).toHaveLength(1);
+      answers.push(me({ size: 'lg', verbose: true }));
+      await savePrefs({ size: 'lg', verbose: true });
+      expect(calls[1]!.body).toEqual({ prefs: { size: 'lg', verbose: true } });
+      answers.push(me({ size: 'lg', verbose: true }));
+      await fetchMe();
+      expect(cachedPrefs()).toEqual({ size: 'lg', verbose: true, sheetW: 560, sheetH: 490 });
+    } finally { warn.mockRestore(); }
   });
 
   it('asks nothing when the device is not linked', async () => {

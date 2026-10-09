@@ -86,6 +86,16 @@ export function PaperclipIcon(): ReactElement {
   );
 }
 
+/** The sheet's resize grip, drawn for the bottom-right corner (CSS turns it to the others). */
+export function GripIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="M20 9 9 20" />
+      <path d="M20 15l-5 5" />
+    </svg>
+  );
+}
+
 export function MoreIcon(): ReactElement {
   return (
     <svg {...base}>

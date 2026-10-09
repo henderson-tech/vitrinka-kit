@@ -1,7 +1,9 @@
 /**
- * The composer sheet — the extension's hud.html, as a component: ≤ 288px
- * anchored to the dock (a bottom sheet on phones), a 14px textarea (16px on
- * touch, so iOS never zooms), ✕ in the title row, a three-column footer
+ * The composer sheet — the extension's hud.html, as a component: 440px wide
+ * by default, anchored to the dock (a bottom sheet on phones), a 14px textarea
+ * (16px on touch, so iOS never zooms) that grows with the draft up to a cap
+ * and then scrolls, a resize grip on the corner away from the dock (width
+ * and cap are HUD prefs — resize.ts), ✕ in the title row, a three-column footer
  * (board|task · context · ↑ Send) and the hint line (hidden on touch). Enter sends, ⇧Enter newlines, Esc
  * cancels. The DRAFT is owned by the caller so a cancel keeps it until the
  * next send (recorder-hud-polish D3); the board|task choice resets on every
@@ -32,7 +34,8 @@ import {
 
 import { MAX_ATTACHMENTS, normalizeAttachment, pastedName } from './attach';
 import type { HudAttachment } from './controller';
-import { ArrowUpIcon, CloseIcon, PaperclipIcon, SpinnerIcon } from './icons';
+import { ArrowUpIcon, CloseIcon, GripIcon, PaperclipIcon, SpinnerIcon } from './icons';
+import { type Grip, useSheetSize } from './resize';
 
 /** How long a refusal holds the context slot. */
 const REFUSAL_MS = 5000;
@@ -97,6 +100,19 @@ export interface SheetProps {
    */
   preparing?: number;
   onPreparing?: Dispatch<SetStateAction<number>>;
+  /** What it composes — names the grip ("Resize note"). */
+  kind?: 'note' | 'annotation' | 'report';
+  /** The size prefs, CSS px (0 = the default): the width, and the cap the text box grows to. */
+  sheetW?: number;
+  sheetH?: number;
+  /** The tallest the sheet may stand where it opens (viewport px); 0 = the viewport. */
+  room?: number;
+  /** The corner the resize grip sits on and what it sizes; absent = no grip. */
+  grip?: Grip | null;
+  /** A resize ended (once per drag or key-up): persist the new size; 0, 0 = the default. */
+  onResize?: (sheetW: number, sheetH: number) => void;
+  /** The sheet's box changed size: place it again before it paints. */
+  onLayout?: () => void;
 }
 
 export function Sheet({
@@ -117,9 +133,18 @@ export function Sheet({
   onImages,
   preparing: busy = 0,
   onPreparing,
+  kind = 'note',
+  sheetW = 0,
+  sheetH = 0,
+  room = 0,
+  grip = null,
+  onResize,
+  onLayout,
 }: SheetProps): ReactElement {
+  const pop = useRef<HTMLDivElement>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
+  const size = useSheetSize({ sheet: pop, text: ta, width: sheetW, cap: sheetH, room, grip, onResize, onLayout });
   const [task, setTask] = useState(false);
   const [refusal, setRefusal] = useState('');
   const [dropping, setDropping] = useState(false);
@@ -226,8 +251,9 @@ export function Sheet({
   };
   return (
     <div
-      className={`pop ${className}${dropping ? ' dropping' : ''}`}
-      style={{ transformOrigin: origin }}
+      ref={pop}
+      className={`pop compose ${className}${dropping ? ' dropping' : ''}`}
+      style={{ transformOrigin: origin, ...size.style }}
       role="dialog"
       aria-labelledby="vt-pop-title"
       onKeyDown={onKey}
@@ -316,6 +342,17 @@ export function Sheet({
         </span>
       ) : null}
       <div className="hints">↩ send · ⇧↩ newline · esc cancel</div>
+      {size.grip ? (
+        <button
+          type="button"
+          className="grip"
+          data-corner={size.grip.corner}
+          aria-label={`Resize ${kind}`}
+          {...size.grip.handlers}
+        >
+          <GripIcon />
+        </button>
+      ) : null}
     </div>
   );
 }

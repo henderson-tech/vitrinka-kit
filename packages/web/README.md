@@ -159,6 +159,16 @@ device only. Technical details shows events captured, queue and pending
 chunks, the last sync and its state, the server's seq, the session id and
 the recorder version.
 
+The note, annotate and bug-report sheet is 440 px wide at every HUD size,
+and its text box grows with what you type up to 20 rows, then scrolls. Drag
+the grip on the sheet's free corner (the one away from the pill) to change
+the width and that cap; on a phone the sheet spans the screen, so its grip
+changes the cap alone. With the grip focused, the arrow keys move it 16 px
+(Shift: 64 px), and Enter or a double-click restores the default. The size is a
+preference too (`sheetW`, `sheetH` in CSS px, 0 = the default). It is sent
+in a PATCH of its own when you let go. A server that predates it answers 422,
+and the size then stays on the device while size and details still sync.
+
 The sheet renders inside the topmost open dialog when one exists, so a
 Radix focus trap or a `<dialog>.showModal()` never fights it, and nothing
 you do on the pill reaches the page (a "close on outside click" never fires
