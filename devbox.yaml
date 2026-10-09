@@ -17,7 +17,7 @@ apps:
       - test-results
       - playwright-report
       - .vitrinka
-    deps:
+    deps: &deps
       key: [bun.lock, package.json, "packages/*/package.json"]
       cmd: "bun install --frozen-lockfile"
   # The web-recorder fixture the browser suite drives (packages/web/e2e), for
@@ -25,6 +25,7 @@ apps:
   hud:
     cmd: 'bun packages/web/e2e/fixture/serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:hud}'
     ports: [hud]
+    deps: *deps
 
 scripts:
   test:
