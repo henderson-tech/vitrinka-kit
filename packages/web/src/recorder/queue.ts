@@ -14,6 +14,15 @@
  *   originally allocated seq (gap-fill), retried oldest-first AHEAD of the
  *   event flush. Chunks are kept in memory (they can be megabytes; the KV
  *   store is small) and persisted best-effort under a byte budget.
+ * - A note's attached images (recorder attachments) ride the same way: the
+ *   note and its images take ONE allocation — the images' seqs first, the
+ *   note's last, its payload listing theirs — and each image uploads to
+ *   `/shot?seq=N` before its `attachment` row (blobKey) joins the stream.
+ *   Their bytes wait in the blob journal (./storage/blobs — IndexedDB), so a
+ *   queued image survives a reload and is uploaded before its row is
+ *   delivered; they leave it once the server acknowledged the row. The
+ *   capture journal of such a note lives until every one of its seqs is
+ *   acknowledged, so a reload or another tab can finish the lot.
  * - A permanent server verdict (4xx minus 408/429) drops the item loudly;
  *   transient failures stop the pass and the next flush retries.
  * - A reload keeps the undelivered event tail (KV store is durable).
@@ -28,11 +37,13 @@
  */
 import type { RedactionPolicy } from '@vitrinka/redact';
 
-import type { RecorderEvent } from '../protocol';
-import { api, permanentStatus, uploadChunk, VitrinkaApiError } from './api';
+import type { AttachmentPayload, RecorderEvent } from '../protocol';
+import { api, permanentStatus, uploadChunk, uploadImage, VitrinkaApiError } from './api';
+import type { StagedImage } from './attachments';
 import { pushFlightEvent } from './flight';
 import { notify } from './state';
 import { getRecorderStorage } from './storage';
+import { getRecorderBlobStore } from './storage/blobs';
 
 const FLUSH_MS = 2000;
 const MAX_BUFFER = 20000;
@@ -103,6 +114,11 @@ export interface SessionState {
    */
   policy?: RedactionPolicy | null;
   /**
+   * The same read's `attachments` (recorder attachments D6): the sheets take
+   * images only on true. Durable with the session, like `policy`.
+   */
+  attachments?: boolean;
+  /**
    * When (ISO) another tab last renewed its claim to be stopping this
    * session: the copy it stores reads as paused with its clock frozen at the
    * Stop, so every other tab stops capturing and painting rec at once, not
@@ -137,6 +153,18 @@ interface PendingChunk {
   count: number;
   /** The serialized JSON array — uploaded verbatim. */
   body: string;
+}
+
+/** An attached image waiting for its `/shot` upload; its row joins the stream after. */
+interface PendingImage {
+  seq: number;
+  ts: string;
+  tabId: string;
+  tabHost: string;
+  sessionId: string;
+  /** Its bytes' key in the blob journal. */
+  blob: string;
+  payload: AttachmentPayload;
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -274,6 +302,7 @@ export function adoptStoredState(raw: string | null): StoredChange {
     next.seq = Math.max(next.seq, cur.seq);
     // A policy this tab already holds outlives a record written before it.
     if (next.policy === undefined && cur.policy !== undefined) next.policy = cur.policy;
+    if (next.attachments === undefined && cur.attachments !== undefined) next.attachments = cur.attachments;
     // A session this tab is stopping comes back as the frozen copy it wrote
     // (another tab wrote its cache back): this tab's clock and capture stay live.
     if (stoppingHere?.sessionId === next.sessionId) {
@@ -318,6 +347,7 @@ export function persistNow(): void {
   }
   persistBuffer();
   persistChunks();
+  persistImages();
 }
 
 function persistBuffer(): void {
@@ -379,10 +409,117 @@ function setChunks(chunks: PendingChunk[]): void {
   persistChunks();
 }
 
+// -- attached images ---------------------------------------------------------
+
+/** The pending images' metadata (small: their bytes are in the blob journal). */
+let imageCache: PendingImage[] | undefined;
+/** Bytes this document holds itself, by journal key — no journal read to upload them. */
+const imageBlobs = new Map<string, Blob>();
+/** Journal keys whose bytes are not (yet) known to be in a durable journal. */
+const unjournaled = new Set<string>();
+/** Uploaded images whose row awaits the server's ack: row seq → journal key, deleted on ack. */
+const rowBlobs = new Map<number, string>();
+/** Journal reads refused in a row, by key: a journal that never answers must not hold Stop forever. */
+const readFailures = new Map<string, number>();
+const READ_ATTEMPTS = 5;
+let imageNo = 0;
+let volatileWarned = false;
+/** KV mark: the blob journal may hold something (spares IndexedDB for testers who never attach). */
+const BLOBS_KEY = 'blobs';
+
+function getImages(): PendingImage[] {
+  imageCache ??= readJson<PendingImage[]>('images', []);
+  return imageCache;
+}
+
+/** Always persisted: metadata only. */
+function persistImages(): void {
+  if (tailDropped) return;
+  const images = getImages();
+  if (images.length === 0) kv().remove('images');
+  else safeSet('images', JSON.stringify(images));
+}
+
+function setImages(images: PendingImage[]): void {
+  imageCache = images;
+  tailDropped = false;
+  persistImages();
+}
+
+/**
+ * Hold a note's images for the queue: their bytes in memory for this
+ * document and in the blob journal for a reload or another tab. Returns
+ * the drafts the capture journal records (journal key + payload).
+ */
+function stageImages(sessionId: string, images: readonly StagedImage[]): ImageDraft[] {
+  const store = getRecorderBlobStore();
+  if (!store.durable && !volatileWarned) {
+    volatileWarned = true;
+    console.warn('vitrinka: no IndexedDB — an attached image will not survive a reload');
+  }
+  safeSet(BLOBS_KEY, '1');
+  return images.map(({ blob, payload }) => {
+    const key = `${sessionId}/${RECORDER_DOCUMENT_KEY}.${++imageNo}`;
+    imageBlobs.set(key, blob);
+    unjournaled.add(key);
+    void store.put(key, blob).then(
+      () => {
+        if (store.durable) unjournaled.delete(key);
+        // Released (or acknowledged) while the write was out: nothing will read it back.
+        const needed = imageBlobs.has(key) || getImages().some((image) => image.blob === key) || [...rowBlobs.values()].includes(key);
+        if (!needed) forgetBlob(key);
+      },
+      (error: unknown) => console.warn('vitrinka: an attached image could not be journaled — it will not survive a reload', error),
+    );
+    return { blob: key, payload };
+  });
+}
+
+/** Delete one image's bytes from the blob journal. */
+function forgetBlob(key: string): void {
+  void getRecorderBlobStore()
+    .delete(key)
+    .catch((error: unknown) => console.warn('vitrinka: blob journal delete failed', error));
+}
+
+/** Let go of images nothing here will upload; `journal` also deletes their bytes there. */
+function releaseImages(keys: Iterable<string>, journal: boolean): void {
+  for (const key of keys) {
+    imageBlobs.delete(key);
+    unjournaled.delete(key);
+    readFailures.delete(key);
+    if (journal) forgetBlob(key);
+  }
+}
+
+const draftImageKeys = (draft: CaptureDraft): string[] => (draft.kind === 'event' ? (draft.images ?? []).map((i) => i.blob) : []);
+
+/**
+ * Delete journaled images nothing will upload: `ended`'s (a session just
+ * stopped), or, without it, every session's but the live one.
+ */
+export async function pruneBlobJournal(ended?: string): Promise<void> {
+  if (!kv().getString(BLOBS_KEY)) return;
+  const store = getRecorderBlobStore();
+  const live = getState()?.sessionId;
+  try {
+    const keys = await store.keys();
+    let kept = 0;
+    for (const key of keys) {
+      const drop = ended ? key.startsWith(`${ended}/`) : !live || !key.startsWith(`${live}/`);
+      if (drop) await store.delete(key);
+      else kept++;
+    }
+    if (kept === 0 && !getState()) kv().remove(BLOBS_KEY);
+  } catch (error) {
+    console.warn('vitrinka: blob journal cleanup failed', error);
+  }
+}
+
 export function queuedCount(): number {
   recoverAllocations();
   pruneAcknowledgedCaptures();
-  return getBuffer().length + getChunks().length + pendingAllocations.size;
+  return getBuffer().length + getChunks().length + getImages().length + pendingAllocations.size;
 }
 
 // -- health + server reconciliation (extension D4/D5/D9) ---------------------
@@ -535,17 +672,31 @@ function allocSeq(count: number): { seq: number; sessionId: string } | null {
 export const RECORDER_DOCUMENT_KEY = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
 const ALLOCATION_PREFIX = 'allocation.';
 let captureNo = 0;
+/** One attached image as the capture journal records it: its bytes stay in the blob journal. */
+interface ImageDraft { blob: string; payload: AttachmentPayload }
 type CaptureDraft = { sessionId: string; ts: string; tabId: string; tabHost: string } & (
-  | { kind: 'event'; event: { kind: string; payload?: Record<string, unknown> } }
+  /** `images`: a note's attachments — their seqs come first, the event's last. */
+  | { kind: 'event'; event: { kind: string; payload?: Record<string, unknown> }; images?: readonly ImageDraft[] }
   | { kind: 'chunk'; part: { count: number; body: string } }
 );
+/** `seq` is the FIRST of the draft's seqs (`seqCount` of them). */
 interface StoredAllocation { draft: CaptureDraft; seq?: number }
 interface PendingAllocation extends StoredAllocation { key: string; persisted: boolean; bytes: number }
 const pendingAllocations = new Set<PendingAllocation>();
 const MAX_ALLOCATION_BYTES = 16 * 1024 * 1024;
 let allocationBytes = 0;
 let allocationChunks = 0;
-const allocatedCaptures = new Map<string, { sessionId: string; seq: number; persisted: boolean }>();
+/** Per capture journal: the seqs it still waits on; the journal goes once none is left. */
+const allocatedCaptures = new Map<string, { sessionId: string; seqs: Set<number>; persisted: boolean }>();
+
+/** How many seqs a capture takes: one, or a note's images + the note. */
+function seqCount(draft: CaptureDraft): number {
+  return draft.kind === 'event' ? 1 + (draft.images?.length ?? 0) : 1;
+}
+
+function seqsFrom(first: number, draft: CaptureDraft): Set<number> {
+  return new Set(Array.from({ length: seqCount(draft) }, (_, i) => first + i));
+}
 let allocationsRecovered = false;
 let allocationBusy: Promise<void> | null = null;
 
@@ -563,6 +714,7 @@ function addAllocation(item: PendingAllocation): void {
     const oldest = pendingAllocations.values().next().value!;
     removeAllocation(oldest);
     kv().remove(oldest.key);
+    releaseImages(draftImageKeys(oldest.draft), true);
     const error = new Error('vitrinka: pending allocation budget full — oldest capture dropped');
     noteFailure(error);
     console.warn(error.message);
@@ -583,11 +735,27 @@ function recoverAllocations(refresh = false): void {
   }
 }
 
+/** `seq` is the capture's first: a note's images take it and the next ones, the note the last. */
 function appendCapture(draft: CaptureDraft, seq: number): void {
   const { ts, tabId, tabHost, sessionId } = draft;
   if (draft.kind === 'event') {
+    const images = draft.images ?? [];
+    const own = seq + images.length;
+    const event = images.length
+      ? { ...draft.event, payload: { ...draft.event.payload, attachments: images.map((_, i) => seq + i) } }
+      : draft.event;
     const buffer = getBuffer();
-    if (!buffer.some((event) => event.seq === seq)) buffer.push({ seq, ts, tabId, tabHost, ...draft.event });
+    if (!buffer.some((e) => e.seq === own)) buffer.push({ seq: own, ts, tabId, tabHost, ...event });
+    if (images.length) {
+      const pending = getImages();
+      images.forEach((image, i) => {
+        const at = seq + i;
+        // Already queued, or already uploaded (its row waits in the buffer).
+        if (pending.some((p) => p.seq === at) || buffer.some((e) => e.seq === at)) return;
+        pending.push({ seq: at, ts, tabId, tabHost, sessionId, blob: image.blob, payload: image.payload });
+      });
+      setImages(pending);
+    }
     if (buffer.length > MAX_BUFFER) {
       const dropped = buffer.splice(0, buffer.length - MAX_BUFFER);
       clearStoredCaptures(sessionId, new Set(dropped.map((event) => event.seq)));
@@ -610,9 +778,13 @@ function appendCapture(draft: CaptureDraft, seq: number): void {
   scheduleFlush();
 }
 
+/** `seqs` were acknowledged (or dropped): a journal none of whose seqs is left goes. */
 function clearStoredCaptures(sessionId: string, seqs: ReadonlySet<number>): void {
   for (const [key, item] of allocatedCaptures) {
-    if (item.sessionId === sessionId && seqs.has(item.seq)) {
+    if (item.sessionId !== sessionId) continue;
+    // A journal holds one seq, or a note's few: walk its own, never the batch.
+    for (const seq of item.seqs) if (seqs.has(seq)) item.seqs.delete(seq);
+    if (item.seqs.size === 0) {
       kv().remove(key);
       allocatedCaptures.delete(key);
       const documentKey = key.slice(ALLOCATION_PREFIX.length, key.lastIndexOf('.'));
@@ -628,25 +800,34 @@ function pruneAcknowledgedCaptures(): void {
   const delivered = new Set<number>();
   for (const [key, item] of allocatedCaptures) {
     if (item.persisted && !kv().getString(key)) {
-      delivered.add(item.seq);
+      for (const seq of item.seqs) delivered.add(seq);
       allocatedCaptures.delete(key);
     }
   }
   if (!delivered.size) return;
   setBuffer(getBuffer().filter((event) => !delivered.has(event.seq)));
   setChunks(getChunks().filter((chunk) => !delivered.has(chunk.seq)));
+  const images = getImages();
+  if (images.some((image) => delivered.has(image.seq))) {
+    // The helper uploaded them and deletes their bytes on its own ack.
+    releaseImages(images.filter((image) => delivered.has(image.seq)).map((image) => image.blob), false);
+    setImages(images.filter((image) => !delivered.has(image.seq)));
+  }
 }
 
 /** A departing document can be acknowledged by a helper only with a full journal. */
 export function tailIsDurable(): boolean {
   if (!kv().keys) return false;
-  const durableSeqs = new Set([...allocatedCaptures].filter(([key]) => kv().getString(key)).map(([, item]) => item.seq));
+  const durableSeqs = new Set([...allocatedCaptures].filter(([key]) => kv().getString(key)).flatMap(([, item]) => [...item.seqs]));
   for (const item of pendingAllocations) {
-    if (item.persisted && item.seq !== undefined && kv().getString(item.key)) durableSeqs.add(item.seq);
+    if (item.persisted && item.seq !== undefined && kv().getString(item.key)) for (const seq of seqsFrom(item.seq, item.draft)) durableSeqs.add(seq);
   }
-  return [...pendingAllocations].every((item) => item.persisted && !!kv().getString(item.key))
+  // An image's bytes must be in the blob journal too, or a helper has nothing to upload.
+  const bytesDurable = (key: string) => !unjournaled.has(key);
+  return [...pendingAllocations].every((item) => item.persisted && !!kv().getString(item.key) && draftImageKeys(item.draft).every(bytesDurable))
     && getBuffer().every((event) => durableSeqs.has(event.seq))
-    && getChunks().every((chunk) => durableSeqs.has(chunk.seq));
+    && getChunks().every((chunk) => durableSeqs.has(chunk.seq))
+    && getImages().every((image) => durableSeqs.has(image.seq) && bytesDurable(image.blob));
 }
 
 /** One worker per document: evicted drafts cannot stay held by queued lock callbacks. */
@@ -660,18 +841,26 @@ function allocatePending(): Promise<void> {
         if (item.persisted) {
           const saved = readJson<StoredAllocation | null>(item.key, null);
           // Another tab already delivered this journal; never allocate it twice.
-          if (!saved) { removeAllocation(item); return; }
+          if (!saved) {
+            removeAllocation(item);
+            releaseImages(draftImageKeys(item.draft), false);
+            return;
+          }
           item.seq = saved.seq;
         }
         adoptStoredState(storage.getString(REC_KEY) ?? null);
-        if (getState()?.sessionId !== item.draft.sessionId) { removeAllocation(item); return; }
-        const seq = item.seq ?? allocSeq(1)?.seq;
+        if (getState()?.sessionId !== item.draft.sessionId) {
+          removeAllocation(item);
+          releaseImages(draftImageKeys(item.draft), true);
+          return;
+        }
+        const seq = item.seq ?? allocSeq(seqCount(item.draft))?.seq;
         if (seq === undefined) return;
         item.seq = seq;
         // Keep the payload AND its identity until the server acknowledges it.
         // A recovering document reuses this seq even when the old tab is alive.
         if (item.persisted) storage.set(item.key, JSON.stringify({ draft: item.draft, seq }));
-        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seq, persisted: item.persisted });
+        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seqs: seqsFrom(seq, item.draft), persisted: item.persisted });
         appendCapture(item.draft, seq);
         removeAllocation(item);
       });
@@ -698,8 +887,9 @@ function queueCapture(draft: CaptureDraft): boolean {
     addAllocation(item);
     void allocatePending();
   } else {
-    const allocation = allocSeq(1);
+    const allocation = allocSeq(seqCount(draft));
     if (allocation) appendCapture(draft, allocation.seq);
+    else releaseImages(draftImageKeys(draft), true);
   }
   return true;
 }
@@ -763,19 +953,30 @@ export function isSessionLive(id: string): boolean {
  * kind+payload plus the route they observed. With no session the event goes
  * to the flight recorder when the idle pill keeps one (memory only — never
  * storage, never the network), else it is dropped. Returns the stamped ts
- * (null when dropped).
+ * (null when dropped). `images` (a note's attachments, live sessions only)
+ * take the seqs just before the event's, which lists them as `attachments`.
  */
 export function pushEvent(
   kind: string,
   payload: Record<string, unknown> | undefined,
   route: { tabId: string; tabHost: string },
+  images: readonly StagedImage[] = [],
 ): string | null {
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
   if (rec.paused || rec.dead) return null;
   const ts = new Date().toISOString();
   const { tabId, tabHost } = route;
-  queueCapture({ sessionId: rec.sessionId, ts, tabId, tabHost, kind: 'event', event: { kind, payload } });
+  const drafts = images.length ? stageImages(rec.sessionId, images) : [];
+  queueCapture({
+    sessionId: rec.sessionId,
+    ts,
+    tabId,
+    tabHost,
+    kind: 'event',
+    event: { kind, payload },
+    ...(drafts.length ? { images: drafts } : {}),
+  });
   noteActivity();
   return ts;
 }
@@ -932,6 +1133,96 @@ async function drainPending(limit = 5): Promise<boolean> {
   return getChunks().length === 0;
 }
 
+/**
+ * Upload queued images oldest-first, the chunks' way: `/shot?seq=N` with the
+ * bytes this document holds, else the blob journal's; only then does the
+ * `attachment` row (payload, blobKey) join the stream under its original seq.
+ * An image whose bytes are gone (never journaled before a reload) or that the
+ * server refuses for good is dropped loudly — its note lands without it. A
+ * refused journal READ is not gone bytes: it stops the pass like a transient
+ * upload failure, and only READ_ATTEMPTS refusals in a row give the image up.
+ * Returns true when no image is left.
+ */
+async function drainImages(limit = 4): Promise<boolean> {
+  const images = getImages();
+  if (images.length === 0) return true;
+  const rec = getState();
+  let done = 0;
+  const gone = new Set<number>();
+  const lost: string[] = [];
+  for (const item of images) {
+    if (done >= limit) break;
+    done++;
+    if (!rec || item.sessionId !== rec.sessionId) {
+      console.warn(`vitrinka: dropping attachment seq ${item.seq} from ended session ${item.sessionId}`);
+      gone.add(item.seq);
+      lost.push(item.blob);
+      continue;
+    }
+    let blob = imageBlobs.get(item.blob) ?? null;
+    if (!blob) {
+      try {
+        blob = await getRecorderBlobStore().get(item.blob);
+        readFailures.delete(item.blob);
+      } catch (e) {
+        if (movedOn(rec)) return getImages().length === 0;
+        const tries = (readFailures.get(item.blob) ?? 0) + 1;
+        console.warn(`vitrinka: blob journal read failed (${tries}/${READ_ATTEMPTS})`, e);
+        if (tries < READ_ATTEMPTS) {
+          readFailures.set(item.blob, tries);
+          noteFailure(e);
+          break; // transient — the bytes stay queued and journaled, the next flush retries
+        }
+      }
+      if (movedOn(rec)) return getImages().length === 0;
+    }
+    if (!blob) {
+      console.warn(`vitrinka: attachment seq ${item.seq} (${item.payload.name}) lost its bytes — its note lands without it`);
+      clearStoredCaptures(item.sessionId, new Set([item.seq]));
+      gone.add(item.seq);
+      lost.push(item.blob);
+      continue;
+    }
+    try {
+      const up = await uploadImage(rec.sessionId, item.seq, blob);
+      if (movedOn(rec)) return getImages().length === 0;
+      pushRawEvent({
+        seq: item.seq,
+        ts: item.ts,
+        tabId: item.tabId,
+        tabHost: item.tabHost,
+        kind: 'attachment',
+        payload: { ...item.payload },
+        blobKey: up.blobKey,
+      });
+      // The bytes stay journaled until the row is acknowledged (a helper tab may still need them).
+      imageBlobs.delete(item.blob);
+      rowBlobs.set(item.seq, item.blob);
+      noteSync();
+      gone.add(item.seq);
+    } catch (e) {
+      if (movedOn(rec)) return getImages().length === 0;
+      if (e instanceof VitrinkaApiError && permanentStatus(e.status)) {
+        console.warn(`vitrinka: attachment seq ${item.seq} rejected permanently (${e.status}) — dropped`);
+        clearStoredCaptures(item.sessionId, new Set([item.seq]));
+        gone.add(item.seq);
+        lost.push(item.blob);
+        continue;
+      }
+      noteFailure(e);
+      console.warn('vitrinka: attachment upload failed', e);
+      break; // transient — stop the pass, the next flush retries
+    }
+  }
+  if (gone.size) {
+    // The rows land in storage before the pending entries leave it.
+    persistBuffer();
+    setImages(getImages().filter((image) => !gone.has(image.seq)));
+  }
+  releaseImages(lost, true);
+  return getImages().length === 0;
+}
+
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function scheduleFlush(): void {
@@ -960,7 +1251,10 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   recoverAllocations(true);
   if (pendingAllocations.size) await allocatePending();
   if (pendingAllocations.size) return false;
-  const pendingClear = await drainPending();
+  const chunksClear = await drainPending();
+  // A leaving page cannot finish an image upload; the blob journal keeps it for the next document.
+  const imagesClear = opts.keepalive ? getImages().length === 0 : await drainImages();
+  const pendingClear = chunksClear && imagesClear;
   if (!pendingClear) scheduleFlush();
   const rec = getState();
   const buffer = getBuffer();
@@ -1025,11 +1319,18 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   clearStoredCaptures(rec.sessionId, sent);
   const rest = getBuffer().filter((e) => !sent.has(e.seq));
   setBuffer(rest);
+  // An acknowledged attachment row: its bytes are the server's now.
+  for (const seq of sent) {
+    const key = rowBlobs.get(seq);
+    if (key === undefined) continue;
+    rowBlobs.delete(seq);
+    forgetBlob(key);
+  }
   if (rest.length) scheduleFlush();
   return true;
 }
 
-/** Drain until buffer + chunks are empty or the deadline passes. */
+/** Drain until buffer, chunks and images are empty or the deadline passes. */
 export async function drainBuffer(deadlineMs = 60000): Promise<boolean> {
   const t0 = Date.now();
   while (Date.now() - t0 < deadlineMs) {
@@ -1053,6 +1354,12 @@ export function resetQueues(): void {
   allocationBytes = allocationChunks = 0;
   setBuffer([]);
   setChunks([]);
+  // The journaled bytes go with pruneBlobJournal (the lifecycle knows which session ended).
+  imageBlobs.clear();
+  unjournaled.clear();
+  rowBlobs.clear();
+  readFailures.clear();
+  setImages([]);
 }
 
 /**
@@ -1067,6 +1374,10 @@ function dropLocalTail(): void {
   bufferCache = [];
   chunkCache = [];
   chunkBytes = 0;
+  imageCache = [];
+  imageBlobs.clear();
+  unjournaled.clear();
+  rowBlobs.clear();
   pendingAllocations.clear();
   allocationBytes = allocationChunks = 0;
   allocatedCaptures.clear();
@@ -1080,6 +1391,8 @@ export function __resetForTests(): void {
   kv().remove('rec');
   kv().remove('buffer');
   kv().remove('chunks');
+  kv().remove('images');
+  kv().remove(BLOBS_KEY);
   kv().remove('seq');
   for (const key of kv().keys?.() ?? []) if (key.startsWith(ALLOCATION_PREFIX)) kv().remove(key);
   resetIdle();
@@ -1093,6 +1406,11 @@ export function __bufferForTests(): RecorderEvent[] {
 /** Test-only: the pending chunks (in order). */
 export function __chunksForTests(): { seq: number; count: number; sessionId: string }[] {
   return getChunks().map((c) => ({ seq: c.seq, count: c.count, sessionId: c.sessionId }));
+}
+
+/** Test-only: the images waiting for upload (in order), with their blob journal keys. */
+export function __imagesForTests(): { seq: number; sessionId: string; blob: string; name: string }[] {
+  return getImages().map((i) => ({ seq: i.seq, sessionId: i.sessionId, blob: i.blob, name: i.payload.name }));
 }
 
 /** Test-only: drop the in-memory caches while LEAVING storage intact (a reload). */
@@ -1119,6 +1437,12 @@ export function __dropCachesForTests(): void {
   bufferCache = undefined;
   chunkCache = undefined;
   chunkBytes = 0;
+  // A reload keeps only what storage and the blob journal hold.
+  imageCache = undefined;
+  imageBlobs.clear();
+  unjournaled.clear();
+  rowBlobs.clear();
+  readFailures.clear();
   disarmReconcile();
   lastSyncAt = 0;
   lastError = '';

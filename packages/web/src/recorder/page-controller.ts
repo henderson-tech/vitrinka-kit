@@ -14,7 +14,7 @@ import { forgetLink, linkDevice } from './link';
 import { cachedAccount, cachedPrefs, fetchMe, savePrefs } from './me';
 import { getState, health } from './queue';
 import { boardUrlOf, readRecents, refreshRecents } from './recents';
-import { canReport, holdReport, sendReport } from './report';
+import { canAttach, canReport, holdReport, sendReport } from './report';
 import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from './session';
 import { annotateState, setAnnotating, subscribe } from './state';
 
@@ -61,6 +61,7 @@ function build(): HudSnapshot {
     workspaceUrl: cfg.url,
     version: RECORDER_ID,
     canReport: canReport(),
+    canAttach: canAttach(),
   };
 }
 
@@ -92,8 +93,9 @@ export function createPageController(): HudController {
       const url = boardUrlOf(done) ?? boardUrl;
       return { ...(url ? { boardUrl: url } : {}), ...(sessionId ? { sessionId } : {}) };
     },
-    note: (text) => addNote(text),
-    annotate: ({ text, rect, selector, task }) => addAnnotation(text, rect, selector, { task }),
+    note: (text, attachments) => addNote(text, attachments),
+    annotate: ({ text, rect, selector, task, attachments }) =>
+      addAnnotation(text, rect, selector, { task, ...(attachments ? { attachments } : {}) }),
     setAnnotating,
     async link(): Promise<HudLinkFlow> {
       const flow = await linkDevice();

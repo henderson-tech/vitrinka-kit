@@ -16,12 +16,12 @@ any host other than that server. The wire types live in
 these routes:
 
 ```
-GET   /api/v1/recorder/policy      workspace redaction policy (session start; the web pill's flight recorder)
+GET   /api/v1/recorder/policy      workspace redaction policy + the attachments switch (session start; the web pill's flight recorder)
 GET   /api/v1/recorder/me          who the token is + HUD prefs (web HUD)
 PATCH /api/v1/recorder/me          HUD prefs {size, verbose} (web HUD, linked devices)
 POST  /api/v1/sessions             create a recording session
 POST  /api/v1/sessions/:id/events  the event stream (batched)
-POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension)
+POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension); images a tester attached (below)
 POST  /api/v1/sessions/:id/chunk   rrweb DOM-stream chunks (extension, web)
 GET   /api/v1/sessions/:id         reconcile: what the server holds
 PATCH /api/v1/sessions/:id         status (recording | paused | done)
@@ -87,7 +87,7 @@ Only during a session you explicitly start:
 | Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) |
 | Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads |
 | Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections |
-| Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD |
+| Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD, and images you attach to them (below) |
 
 Every web session's create carries `meta.recorder` (`web/<version>`),
 `meta.platform` (`web`), `meta.userAgent`, `meta.appVersion` when the host
@@ -119,12 +119,47 @@ recording running:
   2. the buffered events with their **original** timestamps (seq 1…n), led
      by a `nav` to the page the first snapshot shows;
   3. the rrweb windows as chunks (`/chunk?seq=N`, then their `rrweb` rows);
-  4. the description as a note `{text, rect, selector, annotate: true, task:
-     true, route}` stamped at Send — `rect` is the region marked on screen
-     (device pixels), else the whole viewport;
-  5. `PATCH /api/v1/sessions/:id {status: "done"}`.
+  4. the images attached to the report, if any (`/shot?seq=N`, then their
+     `attachment` rows — see Attached images);
+  5. the description as a note `{text, rect, selector, annotate: true, task:
+     true, route}` (+ `attachments`) stamped at Send — `rect` is the region
+     marked on screen (device pixels), else the whole viewport;
+  6. `PATCH /api/v1/sessions/:id {status: "done"}`.
 - **During a recording**, Report adds that task annotation to the running
   session instead; no second session, no clip.
+
+### Attached images (web HUD)
+
+A tester can attach reference images ("how it should be") to a note, an
+element/region annotation or a bug report: pasted into the sheet, dropped
+onto it, or picked with its paperclip. Only images the tester deliberately
+attaches are sent; nothing is picked up on its own.
+
+- **Only where the server allows it.** The HUD offers attachments only when
+  the policy read answers `attachments: true`
+  (`GET /api/v1/recorder/policy` → `{policy, fullFidelityAllowed,
+  attachments}`): the field is absent on servers before attachments and
+  `false` when the workspace switched them off (`noAttachments`). The web
+  recorder never uploads an image that read did not allow.
+- **Re-encoded on the device first.** Each image is decoded and re-encoded
+  in the browser before anything is stored or sent — WebP at quality 0.85,
+  JPEG where the browser cannot write WebP, PNG when JPEG would lose its
+  transparency — so its EXIF and GPS metadata never leave the device. The
+  long edge is at most 2560 px and the file at most 12 MiB (it is scaled down
+  until it fits); an animated image keeps its first frame; a file that is not
+  an image is refused in the sheet. At most 4 images per note.
+- **What is sent**, per image: its bytes through
+  `POST /api/v1/sessions/:id/shot?seq=N` (the image's own Content-Type),
+  then an `attachment` event `{name, mime, bytes, w, h}` carrying the
+  returned `blobKey`, in the note's tab lane, its seq just below the note's.
+  The note lists them as `attachments: [seq, …]` and may then have empty
+  text. `name` is the file's own name ("pasted image.png" for a paste).
+- **Not masked.** A reference image is the tester's upload, not captured
+  screen: `maskAllText` does not blur it. The workspace's lever is the
+  switch above.
+- **On the device**, an image waiting for its upload is kept in IndexedDB
+  (database `vitrinka.recorder.blobs`) so it survives a reload, and deleted
+  once the server acknowledged its event, or when its session ends.
 
 ## Redaction
 
@@ -206,6 +241,7 @@ status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 
 Recorded sessions live on your vitrinka server under its access rules; the
 recorders keep only an undelivered upload tail on-device (removed once
-delivered or when the session is discarded). The web pill's flight-recorder
+delivered or when the session is discarded) — for the web recorder that
+includes attached images waiting in IndexedDB. The web pill's flight-recorder
 buffer is never on-device storage: it lives in the page's memory for at
 most its two windows.

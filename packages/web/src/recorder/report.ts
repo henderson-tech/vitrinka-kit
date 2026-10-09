@@ -14,7 +14,9 @@
  *   `{meta.kind: "report", devicePixelRatio}` → the lane events with their
  *   ORIGINAL timestamps (led by a nav to the page the first snapshot shows,
  *   as a recording is led by its start nav) → the rrweb windows as chunks →
- *   the description as a task annotation stamped at Send → PATCH done.
+ *   the attached images (`/shot`, then their `attachment` rows, seqs just
+ *   below the note's) → the description as a task annotation stamped at Send
+ *   → PATCH done.
  *   Straight through the API client, never the durable queue: nothing is
  *   persisted before Send, and a report never becomes "the" recording. A
  *   failed step keeps the job, and Retry resumes it in the same session (the
@@ -22,8 +24,9 @@
  * - Report while recording: the description is a task annotation in the live
  *   session; no clip.
  */
-import type { RecorderEvent, SessionDone } from '../protocol';
-import { api, fetchPolicy, uploadChunk } from './api';
+import type { AttachmentPayload, RecorderEvent, SessionDone } from '../protocol';
+import { api, fetchPolicy, uploadChunk, uploadImage } from './api';
+import { stageAttachments } from './attachments';
 import { setRedactionPolicy } from './capture/redact';
 import { checkoutRRWeb } from './capture/rrweb';
 import { recorderConfig, vitrinkaLinked } from './config';
@@ -31,6 +34,7 @@ import { clipHasSnapshot, type FlightClip, flightActive, startFlightBuffer, stop
 import { EVENTS_PER_POST, getState, MAX_BATCH_BYTES, splitRRWebEvents, utf8Bytes } from './queue';
 import { awaitBoard, boardUrlOf, noteRecent } from './recents';
 import { addAnnotation, createSession, imagePixels, type ViewRect } from './session';
+import type { HudAttachment } from './hud/controller';
 import { currentRoute, notify } from './state';
 
 // -- the gate ----------------------------------------------------------------
@@ -39,6 +43,8 @@ let pills = 0;
 let armed = false;
 let generation = 0;
 let arming: Promise<void> = Promise.resolve();
+/** The armed buffer's policy read answered `attachments: true`. */
+let flightAttachments = false;
 
 /** A mounted pill wants the flight recorder; returns the release. */
 export function wantFlight(): () => void {
@@ -68,15 +74,17 @@ export function syncFlight(): Promise<void> {
     const gen = ++generation;
     setRedactionPolicy(null);
     // fetchPolicy never rejects: null is the engine's safe defaults.
-    arming = fetchPolicy().then((policy) => {
+    arming = fetchPolicy().then(({ policy, attachments }) => {
       if (!armed || gen !== generation) return;
       setRedactionPolicy(policy);
+      flightAttachments = attachments;
       startFlightBuffer();
       notify();
     });
   } else if (!want && armed) {
     armed = false;
     generation++;
+    flightAttachments = false;
     stopFlightBuffer();
     // A session that just started owns the rules now; only an idle page resets them.
     if (getState() === null) setRedactionPolicy(null);
@@ -91,6 +99,17 @@ export function canReport(): boolean {
   return flightWanted() && flightActive();
 }
 
+/**
+ * Do the sheets take images now (recorder attachments D6)? Recording: the
+ * session's policy read said so. Idle: the flight recorder's did — only the
+ * bug report sheet opens then.
+ */
+export function canAttach(): boolean {
+  const rec = getState();
+  if (rec) return rec.attachments === true;
+  return flightAttachments && canReport();
+}
+
 // -- the report --------------------------------------------------------------
 
 export interface ReportNote {
@@ -100,6 +119,8 @@ export interface ReportNote {
   rect: ViewRect | null;
   /** The marked element's selector; '' for a region or no mark. */
   selector: string;
+  /** Images the reporter attached (the HUD's, already normalized). */
+  attachments?: readonly HudAttachment[];
 }
 
 interface ReportChunk {
@@ -111,11 +132,22 @@ interface ReportChunk {
   body: string;
 }
 
+interface ReportImage {
+  seq: number;
+  ts: string;
+  tabId: string;
+  tabHost: string;
+  blob: Blob;
+  payload: AttachmentPayload;
+}
+
 interface ReportJob {
   title: string;
   /** The start nav and the lane events, seq 1..n. */
   events: RecorderEvent[];
   chunks: ReportChunk[];
+  /** The attached images, seqs just below the note's. */
+  images: ReportImage[];
   note: RecorderEvent;
   durationMs: number;
   sessionId: string;
@@ -196,13 +228,25 @@ function buildJob(clip: FlightClip, note: ReportNote): ReportJob {
   }
   const lastLane = clip.lanes.at(-1);
   if (lastLane) endMs = Math.max(endMs, Date.parse(lastLane.ts));
+  const sentAt = new Date().toISOString();
+  // Stamped at Send like the note, in its lane; only when the workspace takes them.
+  const images: ReportImage[] = (flightAttachments ? stageAttachments(note.attachments) : []).map((image) => ({
+    seq: ++seq,
+    ts: sentAt,
+    ...tab,
+    ...image,
+  }));
+  if (!flightAttachments && note.attachments?.length) {
+    console.warn('vitrinka: this workspace takes no attachments — the report is sent without its images');
+  }
   return {
     title: reportTitle(note.text),
     events,
     chunks,
+    images,
     note: {
       seq: ++seq,
-      ts: new Date().toISOString(),
+      ts: sentAt,
       ...tab,
       kind: 'note',
       payload: {
@@ -212,6 +256,7 @@ function buildJob(clip: FlightClip, note: ReportNote): ReportJob {
         annotate: true,
         task: true,
         route: currentRoute.pathname,
+        ...(images.length ? { attachments: images.map((image) => image.seq) } : {}),
       },
     },
     durationMs: startMs !== undefined ? Math.max(0, endMs - startMs) : 0,
@@ -255,6 +300,15 @@ const steps: readonly ((j: ReportJob) => Promise<void>)[] = [
     }
     await postEvents(j.sessionId, rows);
   },
+  async (j) => {
+    // The images the same way, through the screenshot leaf: bytes first, then their rows.
+    const rows: RecorderEvent[] = [];
+    for (const im of j.images) {
+      const up = await uploadImage(j.sessionId, im.seq, im.blob);
+      rows.push({ seq: im.seq, ts: im.ts, tabId: im.tabId, tabHost: im.tabHost, kind: 'attachment', payload: { ...im.payload }, blobKey: up.blobKey });
+    }
+    await postEvents(j.sessionId, rows);
+  },
   (j) => postEvents(j.sessionId, [j.note]),
   async (j) => {
     const done = await api<SessionDone>('PATCH', `/api/v1/sessions/${j.sessionId}`, { status: 'done' });
@@ -272,7 +326,10 @@ export async function sendReport(note: ReportNote): Promise<{ boardUrl?: string;
   const rec = getState();
   if (rec) {
     if (rec.paused || rec.dead) throw new Error('the recording is not capturing — resume it to report');
-    addAnnotation(note.text, note.rect ?? viewportRect(), note.selector, { task: true });
+    addAnnotation(note.text, note.rect ?? viewportRect(), note.selector, {
+      task: true,
+      ...(note.attachments?.length ? { attachments: note.attachments } : {}),
+    });
     return rec.boardUrl ? { boardUrl: rec.boardUrl } : {};
   }
   if (sending) throw new Error('a report is already being sent');
@@ -308,6 +365,7 @@ export async function sendReport(note: ReportNote): Promise<{ boardUrl?: string;
 export function dropFlight(): void {
   armed = false;
   generation++;
+  flightAttachments = false;
   arming = Promise.resolve();
   held = null;
   if (!sending) job = null;

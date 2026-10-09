@@ -31,8 +31,9 @@ export interface RecorderStorage {
   keys?(): string[];
 }
 
-// Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · link (the
-// recorder) and dock · prefs · me · recents (the HUD).
+// Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · images ·
+// blobs · link (the recorder) and dock · prefs · me · recents (the HUD). An
+// attached image's bytes live in the blob journal (./blobs, IndexedDB).
 const PREFIX = 'vitrinka.recorder.';
 
 let current: RecorderStorage | null = null;

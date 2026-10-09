@@ -402,6 +402,23 @@ textarea:focus { outline:none; box-shadow:inset 0 0 0 1px var(--fg-3); }
 @media (hover: hover) { .sendb:hover { background:#ff5670; } }
 .sendb[aria-disabled="true"] { opacity:.45; cursor:default; background:var(--rec); }
 .hints { margin-top:9px; font-size:var(--fs-s); line-height:1; color:var(--fg-3); }
+/* attachments: the paperclip beside Send, the thumbnail strip, the drop target; a refusal takes the ctx slot */
+.acts { display:inline-flex; align-items:center; gap:6px; }
+.clipb { all:unset; box-sizing:border-box; cursor:pointer; display:inline-grid; place-items:center; width:calc(28px * var(--s)); height:calc(28px * var(--s));
+  border-radius:8px; color:var(--fg-2); font-size:calc(var(--ic) + 1px); transition: background-color var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out); }
+@media (hover: hover) { .clipb:hover { color:var(--fg); background:var(--ink-2); } }
+.clipb[aria-disabled="true"] { opacity:.45; cursor:default; }
+.clipb:focus-visible, .attx:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
+.ctx.bad { color:var(--warn); }
+.atts { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 0; padding:0; list-style:none; }
+.att { position:relative; width:calc(52px * var(--s)); height:calc(52px * var(--s)); border-radius:8px; overflow:hidden;
+  background:rgba(0,0,0,.28); box-shadow:inset 0 0 0 1px var(--edge); display:grid; place-items:center; color:var(--fg-3); }
+.att img { width:100%; height:100%; object-fit:cover; display:block; }
+.attx { all:unset; box-sizing:border-box; cursor:pointer; position:absolute; top:3px; right:3px; width:18px; height:18px; border-radius:50%;
+  display:grid; place-items:center; font-size:9px; color:#fff; background:rgba(0,0,0,.62); box-shadow:0 0 0 1px rgba(255,255,255,.18); }
+@media (hover: hover) { .attx:hover { background:rgba(0,0,0,.85); } }
+@media (pointer: coarse) { .attx { width:24px; height:24px; top:2px; right:2px; font-size:11px; } }
+.pop.dropping { outline:2px dashed var(--fg-2); outline-offset:-5px; }
 `;
 
 /**

@@ -3,7 +3,7 @@
  * driven ONLY through a `HudController` (controller.ts) — the in-page
  * recorder's, or another host's. Owns the dock (where the HUD rests), the
  * pill's inline flows (flow.ts), the sheet (open/title/ctx/pick + the
- * surviving draft) and where it opens, the ⋯ menu, the tooltip and details
+ * surviving draft and its images) and where it opens, the ⋯ menu, the tooltip and details
  * floats, annotate mode, the bug report (its sheet, "Mark on screen" through
  * annotate mode, its send flow), the keyboard shortcuts, the Esc-anywhere /
  * click-outside close and the status line a screen reader hears while the
@@ -24,7 +24,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { RecorderStorage } from '../storage';
-import type { HudController, HudLinkFlow, HudReport } from './controller';
+import type { HudAttachment, HudController, HudLinkFlow, HudReport } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
 import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
@@ -110,6 +110,9 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [draft, setDraft] = useState('');
   const [reportDraft, setReportDraft] = useState('');
+  // The drafts' images survive a cancel like their text (canAttach only).
+  const [images, setImages] = useState<readonly HudAttachment[]>([]);
+  const [reportImages, setReportImages] = useState<readonly HudAttachment[]>([]);
   // Annotate mode is picking the report's mark (it returns to the report sheet).
   const [marking, setMarking] = useState(false);
   const markRef = useRef<Pick | null>(null);
@@ -248,6 +251,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       sent.then(
         (res) => {
           setReportDraft('');
+          setReportImages([]);
           settle({ type: 'saved', ...res });
         },
         (e: unknown) => {
@@ -265,6 +269,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         controller.report?.(r).then(
           () => {
             setReportDraft('');
+            setReportImages([]);
             saidSaved();
           },
           (e: unknown) => console.warn('vitrinka: report —', errorText(e)),
@@ -282,21 +287,28 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       const s = sheet;
       setSheet(null);
       if (!s) return;
+      // Images ride only while the host takes them (a policy switched off mid-draft drops them).
+      const held = controller.getSnapshot().canAttach === true ? (s.report ? reportImages : images) : [];
+      const attachments = held.length ? { attachments: held } : {};
       if (s.report) {
-        fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '' });
+        fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '', ...attachments });
         return;
       }
       if (s.pick) {
-        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task });
+        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task, ...attachments });
         setDraft('');
+        setImages([]);
         saidSaved();
-      } else if (text) {
-        controller.note(text);
+      } else if (text || held.length) {
+        // An image can BE the note: text may be empty when it carries one.
+        if (held.length) controller.note(text, held);
+        else controller.note(text);
         setDraft('');
+        setImages([]);
         saidSaved();
       }
     },
-    [sheet, controller, saidSaved, fileReport],
+    [sheet, controller, saidSaved, fileReport, images, reportImages],
   );
   const onStart = useCallback(() => {
     if (!controller.getSnapshot().linked) {
@@ -553,6 +565,11 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
             onClose={closeSheet}
             {...(shownSheet.report
               ? { placeholder: 'What went wrong?', required: true, onMark: markOnScreen, marked: shownSheet.pick !== null }
+              : {})}
+            {...(snap.canAttach === true
+              ? shownSheet.report
+                ? { images: reportImages, onImages: setReportImages }
+                : { images, onImages: setImages }
               : {})}
           />
         </div>

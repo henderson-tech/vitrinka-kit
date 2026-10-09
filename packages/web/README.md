@@ -128,7 +128,7 @@ controls**) that unfolds into the tools on hover, focus or tap and folds back
 |---|---|---|
 | sync chip | | `synced` · `sending N` · `offline · N` · `ended` — readable without hovering |
 | ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
-| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft survives a cancel); the pill says **Saved** |
+| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft and its images survive a cancel); the pill says **Saved**. Images: see [Attach images](#attach-images) |
 | ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it: `board` (an annotation on the board) or `task` (also filed as an intake draft) |
 | ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Saved · Open board** until you dismiss it |
 | ⋯ | | the linked account · **Report a bug** (below) · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
@@ -187,8 +187,9 @@ went wrong (required) and offers **Mark on screen** — annotate mode's
 element pick or region drag. Send files one short session under the pill's
 credential: title `Bug report: <first line>`, `meta.kind: "report"` and
 `meta.devicePixelRatio`; the buffered events with their original
-timestamps; the rrweb windows as chunks; your description as an annotation
-with `task: true` (the marked region, else the whole viewport); then done.
+timestamps; the rrweb windows as chunks; any images you attached; your
+description as an annotation with `task: true` (the marked region, else the
+whole viewport); then done.
 vitrinka renders stills from the clip, pins the annotation on the board and
 files it as an intake draft. The pill says **Sending…**, then **Sent · Open
 board** (it is in Recents too); a failure offers **Retry**, which resumes
@@ -204,6 +205,32 @@ the running session instead.
 
 Then nothing is captured until a recording starts, and Report a bug is
 offered only during one.
+
+## Attach images
+
+A note, an annotation and a bug report can carry reference images — "how
+it should be" beside what it does. In the sheet: the **Attach image**
+paperclip beside Send picks them, pasting an image into the text box adds
+it (a text paste stays a text paste), and dropping image files onto the
+sheet adds them (it highlights while you drag). They line up as thumbnails
+above the footer, each with a **Remove** ×. Up to 4 per note; a note with
+images may have no text, a bug report still needs its description. Like
+the text, the images survive a cancel until the next send.
+
+Each image is re-encoded in the browser before it is stored or sent: WebP
+at 0.85 (JPEG where the browser cannot write WebP, PNG when JPEG would lose
+transparency), long edge ≤ 2560 px, ≤ 12 MiB, the first frame of an
+animated one. EXIF and GPS metadata never leave the device. A file that is
+not an image, or one still too large, is refused with the reason in the
+sheet's footer.
+
+The paperclip shows only when your vitrinka server answers
+`attachments: true` to the policy read (`GET /api/v1/recorder/policy`): a
+server before attachments leaves it out, and a workspace can switch
+attachments off. On the board, each note's images become your own thread
+message under it — image tiles and the lightbox. Images are not masked by a
+`maskAllText` policy: they are your deliberate upload, not captured screen.
+What goes over the wire: [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md#attached-images-web-hud).
 
 ## Driving it from code
 
@@ -234,11 +261,15 @@ const unmount = mountRecorderHud(controller, { title: () => document.title });
   `subscribe(fn)` calls back after a change. The snapshot holds `linked`,
   `canUnlink`, `annotating`, `recording` (session, clock, sync), `account`,
   `prefs`, `recents`, `workspaceUrl`, `version` and, optionally,
-  `canReport`.
+  `canReport` and `canAttach`.
 - Actions: `start`, `togglePause`, `stop` (resolves `{boardUrl?}`, rejects
   while the server is unreachable), `note`, `annotate`, `setAnnotating`,
   `link`, `unlink`, `getMe`, `setPrefs` and `refreshRecents`; optionally
   `holdReport` and `report` — without them the menu has no **Report a bug**.
+- With `canAttach: true` the sheets take images: `note(text, attachments)`,
+  `annotate({…, attachments})` and `report({…, attachments})` hand over
+  `HudAttachment`s (`{name, blob, w, h}`) the HUD has already re-encoded —
+  png, webp or jpeg, ≤ 2560 px, ≤ 12 MiB. Uploading them is the host's job.
 
 The full contract is in `src/recorder/hud/controller.ts`.
 
@@ -259,7 +290,8 @@ same mount as one self-contained script with React bundled in:
 | navigation | `nav` | `{url, route, spa}` — `url` scrubbed of query/fragment secrets, the start URL included |
 | network | `net` | `{method, url, status, ms, reqHeaders, resHeaders, reqBody, resBody, via}` — redacted, capped at 64 KiB per body; the recorder's own uploads are never recorded |
 | console | `console` | `{level: 'error', text}` |
-| notes | `note` | `{text, route}`; annotations add `{rect, selector, annotate: true, task?}` |
+| notes | `note` | `{text, route}`; annotations add `{rect, selector, annotate: true, task?}`; a note with images adds `attachments: [seq…]` |
+| images | `attachment` | `{name, mime, bytes, w, h}` + `blobKey` — the image itself is uploaded to `/shot?seq=N` first; its seq sits just below its note's |
 
 Data goes to your vitrinka server only. Details, the redaction rules and the
 policy fetch: [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md).
@@ -299,6 +331,16 @@ blocked. Returning from the browser's back-forward cache re-registers the tab.
 Pending allocations have a 16 MiB byte budget, 20,000-event count limit and
 200-chunk limit; overflow drops the oldest capture with a warning and health
 failure, matching the queue's existing bounded retry behavior.
+
+Attached images are too big for `localStorage`: their bytes wait in an
+IndexedDB blob journal (`vitrinka.recorder.blobs`) while the queue keeps
+their metadata. A note and its images take one allocation, so a reload — or
+another tab finishing a closed tab's tail — uploads each queued image to
+`/shot` before its `attachment` event is delivered. Stop waits for them as
+it waits for the rest of the tail. The bytes leave the journal once the
+server acknowledged the image's event, or when its session ends. Without
+IndexedDB the images still upload from the open tab; only the reload
+guarantee is lost, and the recorder says so.
 
 ## Development
 

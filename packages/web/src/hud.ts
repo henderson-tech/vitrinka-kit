@@ -9,6 +9,7 @@ export {
   DEFAULT_PREFS,
   type HudAccount,
   type HudAnnotation,
+  type HudAttachment,
   type HudController,
   type HudLinkCode,
   type HudLinkFlow,

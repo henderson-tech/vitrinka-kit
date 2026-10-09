@@ -29,6 +29,7 @@ export interface Servers {
   pageUrl: string;
   stubUrl: string;
   seen: Seen[];
+  policy: { attachments?: boolean };
   /** What `/recorder/me` answers as the user's prefs (PATCH merges into it). */
   me: { prefs: MePrefs };
   /** Hold the next stop's PATCH done until released (the saving state stays visible). */
@@ -83,6 +84,7 @@ export async function startServers(entry = 'fixture/app.tsx', options: { host?: 
   const tmp = mkdtempSync(join(tmpdir(), 'vt-web-e2e-'));
   const script = bundle(entry, tmp);
   const seen: Seen[] = [];
+  const policy: { attachments?: boolean } = { attachments: true };
   const me = { prefs: { size: 'md', verbose: false } as MePrefs };
   let claims = 0;
   let stubUrl = '';
@@ -119,7 +121,7 @@ export async function startServers(entry = 'fixture/app.tsx', options: { host?: 
       if (++claims < 2) return void res.writeHead(202).end();
       return void res.end(JSON.stringify({ token: 'vkr_test', kind: 'recorder', workspace: 'acme', label: 'e2e', expires_in: 2592000 }));
     }
-    if (path === '/api/v1/recorder/policy') return void res.end(JSON.stringify({ policy: null }));
+    if (path === '/api/v1/recorder/policy') return void res.end(JSON.stringify({ policy: null, ...policy }));
     if (path === '/api/v1/recorder/me') {
       // The fixture's baked key is an admin recorder key: no user, no server prefs.
       if (headers.authorization === 'Bearer vkr_e2e') {
@@ -153,6 +155,7 @@ export async function startServers(entry = 'fixture/app.tsx', options: { host?: 
         }),
       );
     }
+    if (path.includes('/shot?seq=')) return void res.end(JSON.stringify({ blobKey: `image-${path.split('seq=')[1]}` }));
     if (path.includes('/chunk?seq=')) return void res.end(JSON.stringify({ blobKey: `blob-${path.split('seq=')[1]}` }));
     if (path.endsWith('/events') || path.endsWith('/tags')) return void res.end('{}');
     if (req.method === 'PATCH') {
@@ -198,6 +201,7 @@ export async function startServers(entry = 'fixture/app.tsx', options: { host?: 
     pageUrl,
     stubUrl,
     seen,
+    policy,
     me,
     holdStop: () => {
       let release = () => undefined as void;

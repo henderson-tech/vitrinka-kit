@@ -158,6 +158,94 @@ test('links the device from the pill, then records with the minted token', async
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
 });
 
+const referenceImage = { name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64') };
+async function openNote(page: Page) {
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+}
+async function pickImage(page: Page, files = [referenceImage]) {
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Attach image', exact: true }).click();
+  await (await chooser).setFiles(files);
+}
+
+test('picks an image-only note and delivers typed upload, attachment row and note seq reference', async ({ page }) => {
+  seen.length = 0;
+  await openNote(page);
+  await pickImage(page);
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => seen.some(s => s.path.includes('/shot?seq='))).toBe(true);
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string }[] }).events).some(e => e.kind === 'attachment')).toBe(true);
+  const rows = seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string; seq: number; blobKey?: string; payload: Record<string, unknown> }[] }).events);
+  const attachment = rows.find(e => e.kind === 'attachment')!;
+  const note = rows.find(e => e.kind === 'note' && Array.isArray(e.payload.attachments))!;
+  const upload = seen.find(s => s.path.endsWith(`/shot?seq=${attachment.seq}`))!;
+  expect(upload.headers['content-type']).toBe(attachment.payload.mime);
+  expect(attachment).toMatchObject({ blobKey: `image-${attachment.seq}`, payload: { name: 'reference.png', w: 1, h: 1 } });
+  expect(attachment.payload.bytes).toBeGreaterThan(0);
+  expect(note.payload).toMatchObject({ text: '', attachments: [attachment.seq] });
+  expect(attachment.seq).toBeLessThan(note.seq);
+});
+
+for (const source of ['paste', 'drop'] as const) {
+  test(`attaches an image from ${source}`, async ({ page }) => {
+    await openNote(page);
+    const textarea = page.getByRole('textbox');
+    await textarea.evaluate((el, input) => {
+      const bytes = Uint8Array.from(atob(input.base64), c => c.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], 'reference.png', { type: 'image/png' }));
+      el.dispatchEvent(input.source === 'paste'
+        ? new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+        : new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+    }, { source, base64: referenceImage.buffer.toString('base64') });
+    await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  });
+}
+
+test('queued image bytes survive an actual IndexedDB reload', async ({ page }) => {
+  seen.length = 0;
+  await page.route('**/shot?seq=*', route => route.abort());
+  await openNote(page);
+  await pickImage(page);
+  await expect(page.getByRole('button', { name: 'Remove reference.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open('vitrinka.recorder.blobs');
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+    try {
+      return await new Promise<number>((resolve, reject) => {
+        const r = db.transaction('blobs').objectStore('blobs').count();
+        r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+      });
+    } finally { db.close(); }
+  })).toBeGreaterThan(0);
+  await page.reload();
+  await page.unroute('**/shot?seq=*');
+  await expect.poll(() => seen.filter(s => s.path.endsWith('/events')).flatMap(s => (s.body as { events: { kind: string }[] }).events).some(e => e.kind === 'attachment'), { timeout: 15_000 }).toBe(true);
+});
+
+test('hides the attachment picker when the policy omits the capability', async ({ page }) => {
+  delete servers.policy.attachments;
+  try {
+    await openNote(page);
+    await expect(page.getByRole('button', { name: 'Attach image' })).toHaveCount(0);
+  } finally { servers.policy.attachments = true; }
+});
+
+test('removes picked images and caps the sheet at four', async ({ page }) => {
+  await openNote(page);
+  await pickImage(page, Array.from({ length: 5 }, (_, i) => ({ ...referenceImage, name: `reference-${i}.png` })));
+  await expect(page.getByRole('button', { name: /^Remove reference-/ })).toHaveCount(4);
+  await page.getByRole('button', { name: 'Remove reference-0.png' }).click();
+  await expect(page.getByRole('button', { name: /^Remove reference-/ })).toHaveCount(3);
+});
+
 /** Drag the element's centre to (x, y) with a real pointer, then let the spring settle. */
 async function dragTo(page: Page, el: Locator, x: number, y: number): Promise<void> {
   // A face change tweens the handle into place: grab it once it holds still.

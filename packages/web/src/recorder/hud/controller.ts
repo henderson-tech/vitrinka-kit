@@ -39,7 +39,7 @@ export type HudSyncState = 'ok' | 'backlog' | 'offline' | 'dead';
 export interface HudSync {
   state: HudSyncState;
   synced: boolean;
-  /** Items (events + rrweb chunks) not yet delivered. */
+  /** Items (events + rrweb chunks + attached images) not yet delivered. */
   queued: number;
   /** Of those, rrweb chunks. */
   chunks: number;
@@ -102,6 +102,23 @@ export interface HudSnapshot {
    * session, or, idle, with the last minute the host keeps. Absent = never.
    */
   canReport?: boolean;
+  /**
+   * The sheets take images (paperclip, paste, drop) — the server answered
+   * `attachments: true` to the policy read. Absent or false = text only.
+   */
+  canAttach?: boolean;
+}
+
+/** One image a tester attached, already normalized by the HUD:
+ *  re-encoded (EXIF/GPS gone), long edge ≤ 2560 px, ≤ 12 MiB. */
+export interface HudAttachment {
+  /** The original file name ("pasted image.png" for a paste). */
+  name: string;
+  /** image/webp, image/jpeg or image/png — what /shot accepts. */
+  blob: Blob;
+  /** Pixel size after normalizing. */
+  w: number;
+  h: number;
 }
 
 /** The code half of a device link, as the link sheet paints it. */
@@ -133,6 +150,7 @@ export interface HudAnnotation {
   selector: string;
   /** Also file it as an intake task. */
   task: boolean;
+  attachments?: readonly HudAttachment[];
 }
 
 /** What "Report a bug" sends from the sheet. */
@@ -143,6 +161,7 @@ export interface HudReport {
   rect: HudRect | null;
   /** The marked element's selector; '' for a region or no mark. */
   selector: string;
+  attachments?: readonly HudAttachment[];
 }
 
 /**
@@ -162,7 +181,8 @@ export interface HudController {
   togglePause(): Promise<void>;
   /** Drains, then closes the session; rejects (session kept) while unreachable. */
   stop(): Promise<HudSaved>;
-  note(text: string): void;
+  /** `attachments` only when `canAttach`; with them, `text` may be empty. */
+  note(text: string, attachments?: readonly HudAttachment[]): void;
   annotate(a: HudAnnotation): void;
   setAnnotating(active: boolean): void;
   link(): Promise<HudLinkFlow>;
