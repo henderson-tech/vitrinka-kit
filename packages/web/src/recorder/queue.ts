@@ -705,8 +705,12 @@ type CaptureDraft = { sessionId: string; ts: string; tabId: string; tabHost: str
   | { kind: 'event'; event: { kind: string; payload?: Record<string, unknown> }; images?: readonly ImageDraft[] }
   | { kind: 'chunk'; part: { count: number; body: string } }
 );
-/** `seq` is the FIRST of the draft's seqs (`seqCount` of them). */
-interface StoredAllocation { draft: CaptureDraft; seq?: number }
+/**
+ * `seq` is the FIRST of the draft's seqs (`seqCount` of them). `left`, once
+ * some settled (acknowledged, or an image dropped), lists those it still
+ * waits on: a reload restores only them, never a settled image.
+ */
+interface StoredAllocation { draft: CaptureDraft; seq?: number; left?: number[] }
 interface PendingAllocation extends StoredAllocation { key: string; persisted: boolean; bytes: number }
 const pendingAllocations = new Set<PendingAllocation>();
 const MAX_ALLOCATION_BYTES = 16 * 1024 * 1024;
@@ -722,6 +726,11 @@ function seqCount(draft: CaptureDraft): number {
 
 function seqsFrom(first: number, draft: CaptureDraft): Set<number> {
   return new Set(Array.from({ length: seqCount(draft) }, (_, i) => first + i));
+}
+
+/** A capture journal as stored: with `left` once some of its seqs settled. */
+function journalJson(draft: CaptureDraft, seq: number | undefined, left?: ReadonlySet<number>): string {
+  return JSON.stringify(left && left.size < seqCount(draft) ? { draft, seq, left: [...left] } : { draft, seq });
 }
 let allocationsRecovered = false;
 let allocationBusy: Promise<void> | null = null;
@@ -761,9 +770,14 @@ function recoverAllocations(refresh = false): void {
   }
 }
 
-/** `seq` is the capture's first: a note's images take it and the next ones, the note the last. */
-function appendCapture(draft: CaptureDraft, seq: number): void {
+/**
+ * `seq` is the capture's first: a note's images take it and the next ones,
+ * the note the last. `left` (its journal's) restores only the seqs still
+ * waited on — a settled image never re-queues to crowd out a live one.
+ */
+function appendCapture(draft: CaptureDraft, seq: number, left?: ReadonlySet<number>): void {
   const { ts, tabId, tabHost, sessionId } = draft;
+  const awaited = (at: number) => !left || left.has(at);
   if (draft.kind === 'event') {
     const images = draft.images ?? [];
     const own = seq + images.length;
@@ -771,12 +785,12 @@ function appendCapture(draft: CaptureDraft, seq: number): void {
       ? { ...draft.event, payload: { ...draft.event.payload, attachments: images.map((_, i) => seq + i) } }
       : draft.event;
     const buffer = getBuffer();
-    if (!buffer.some((e) => e.seq === own)) buffer.push({ seq: own, ts, tabId, tabHost, ...event });
+    if (awaited(own) && !buffer.some((e) => e.seq === own)) buffer.push({ seq: own, ts, tabId, tabHost, ...event });
     if (images.length) {
       const pending = getImages();
       images.forEach((image, i) => {
         const at = seq + i;
-        if (pending.some((p) => p.seq === at)) return;
+        if (!awaited(at) || pending.some((p) => p.seq === at)) return;
         // Already uploaded, its row waits in the buffer (a reload restored it):
         // its bytes still leave the journal on that row's ack.
         if (buffer.some((e) => e.seq === at)) {
@@ -817,12 +831,23 @@ function appendCapture(draft: CaptureDraft, seq: number): void {
   scheduleFlush();
 }
 
-/** `seqs` were acknowledged (or dropped): a journal none of whose seqs is left goes. */
+/**
+ * `seqs` were acknowledged (or dropped): a journal none of whose seqs is
+ * left goes; one with some left records which (merged with another tab's
+ * record — `left` only shrinks).
+ */
 function clearStoredCaptures(sessionId: string, seqs: ReadonlySet<number>): void {
   for (const [key, item] of allocatedCaptures) {
     if (item.sessionId !== sessionId) continue;
     // A journal holds one seq, or a note's few: walk its own, never the batch.
+    const before = item.seqs.size;
     for (const seq of item.seqs) if (seqs.has(seq)) item.seqs.delete(seq);
+    const saved = item.seqs.size && item.seqs.size < before && item.persisted ? readJson<StoredAllocation | null>(key, null) : null;
+    if (saved) {
+      const left = new Set([...item.seqs].filter((seq) => !saved.left || saved.left.includes(seq)));
+      if (left.size) safeSet(key, journalJson(saved.draft, saved.seq, left));
+      else item.seqs.clear(); // another tab settled the rest
+    }
     if (item.seqs.size === 0) {
       kv().remove(key);
       allocatedCaptures.delete(key);
@@ -886,6 +911,7 @@ function allocatePending(): Promise<void> {
             return;
           }
           item.seq = saved.seq;
+          item.left = saved.left;
         }
         adoptStoredState(storage.getString(REC_KEY) ?? null);
         if (getState()?.sessionId !== item.draft.sessionId) {
@@ -896,11 +922,12 @@ function allocatePending(): Promise<void> {
         const seq = item.seq ?? allocSeq(seqCount(item.draft))?.seq;
         if (seq === undefined) return;
         item.seq = seq;
+        const seqs = item.left ? new Set(item.left) : seqsFrom(seq, item.draft);
         // Keep the payload AND its identity until the server acknowledges it.
         // A recovering document reuses this seq even when the old tab is alive.
-        if (item.persisted) storage.set(item.key, JSON.stringify({ draft: item.draft, seq }));
-        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seqs: seqsFrom(seq, item.draft), persisted: item.persisted });
-        appendCapture(item.draft, seq);
+        if (item.persisted) storage.set(item.key, journalJson(item.draft, seq, seqs));
+        allocatedCaptures.set(item.key, { sessionId: item.draft.sessionId, seqs, persisted: item.persisted });
+        appendCapture(item.draft, seq, seqs);
         removeAllocation(item);
       });
     }
@@ -949,7 +976,7 @@ function queueCapture(draft: CaptureDraft, journaled?: Promise<boolean>): boolea
  */
 function publishAllocation(item: PendingAllocation): void {
   const allocated = allocatedCaptures.get(item.key);
-  if (allocated) allocated.persisted = safeSet(item.key, JSON.stringify({ draft: item.draft, seq: item.seq }));
+  if (allocated) allocated.persisted = safeSet(item.key, journalJson(item.draft, item.seq, allocated.seqs));
   else if (pendingAllocations.has(item)) item.persisted = safeSet(item.key, JSON.stringify({ draft: item.draft }));
 }
 
