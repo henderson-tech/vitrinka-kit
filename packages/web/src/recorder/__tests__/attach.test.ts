@@ -38,7 +38,7 @@ it('steps down an oversized encoding until the uploaded blob meets the cap', asy
 });
 it('rejects non-image input before decoding', async () => {
   const seam = encoder(() => 4);
-  await expect(normalizeAttachment(new Blob(['text'], { type: 'text/plain' }), 'notes.txt')).rejects.toThrow('notes.txt is not an image');
+  await expect(normalizeAttachment(new Blob(['text'], { type: 'text/plain' }), 'notes.txt')).rejects.toThrow('Not an image: notes.txt');
   expect(seam.calls).toEqual([]);
   expect(seam.closed()).toBe(0);
 });

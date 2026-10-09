@@ -48,17 +48,18 @@ export function pastedName(file: File): string {
 }
 
 /**
- * Normalize one file for a note. Rejects with an `Error` whose message names
- * the file and the reason (not an image, unreadable, too large).
+ * Normalize one file for a note. Rejects with an `Error` whose message leads
+ * with the reason (not an image, unreadable, too large), then the file — the
+ * sheet ellipsizes a long name, never the reason.
  */
 export async function normalizeAttachment(file: Blob, name: string): Promise<HudAttachment> {
-  if (file.type && !file.type.startsWith('image/')) throw new Error(`${name} is not an image`);
+  if (file.type && !file.type.startsWith('image/')) throw new Error(`Not an image: ${name}`);
   let img: Decoded;
   try {
     img = await decode(file);
   } catch (e) {
     console.warn('vitrinka: attachment decode failed —', e);
-    throw new Error(`${name} could not be read as an image`);
+    throw new Error(`Unreadable image: ${name}`);
   }
   let out: HudAttachment | null;
   try {
@@ -66,11 +67,11 @@ export async function normalizeAttachment(file: Blob, name: string): Promise<Hud
   } catch (e) {
     // A canvas the browser refuses to read back (a tainted SVG) or encode.
     console.warn('vitrinka: attachment encode failed —', e);
-    throw new Error(`${name} could not be converted`);
+    throw new Error(`Could not convert: ${name}`);
   } finally {
     img.close();
   }
-  if (!out) throw new Error(`${name} is too large to attach`);
+  if (!out) throw new Error(`Too large to attach: ${name}`);
   return out;
 }
 
