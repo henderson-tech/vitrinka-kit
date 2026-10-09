@@ -10,7 +10,7 @@ apps:
     cmd: "bun apps/extension/e2e/fixture.ts --port {port:web}"
     ports: [web]
     sync: .
-    sync_ignores:
+    sync_ignores: &ignores
       - .env
       - .env.*
       - "!.env.example"
@@ -27,6 +27,8 @@ apps:
   hud:
     cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun packages/web/e2e/fixture/serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:hud}"
     ports: [hud]
+    sync: .
+    sync_ignores: *ignores
     deps: *deps
 
 scripts:
