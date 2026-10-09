@@ -7,7 +7,7 @@ import { type Linked, type LinkStart, linkWorkspace, pollLink, startLink } from 
 import { onUnauthorized } from './api';
 import { clearLink, defaultLinkLabel, recorderConfig, storeLink } from './config';
 import { clearAccount } from './me';
-import { getState, resetQueues, setState } from './queue';
+import { getState, pruneBlobJournal, resetQueues, setState } from './queue';
 import { updateRecent } from './recents';
 import { elapsedOf } from './session';
 import { notify } from './state';
@@ -38,7 +38,10 @@ export async function linkDevice(): Promise<DeviceLink> {
   return { start, linked, cancel: () => ac.abort() };
 }
 
-/** Forget the stored link and its account; a live session ends locally (its tail is dropped). */
+/**
+ * Forget the stored link and its account; a live session ends locally (its
+ * tail is dropped, its attached images' bytes leave the blob journal).
+ */
 export function forgetLink(): void {
   clearLink();
   clearAccount();
@@ -47,6 +50,7 @@ export function forgetLink(): void {
     updateRecent(rec.sessionId, { status: 'unsaved', durationMs: elapsedOf(rec) });
     setState(null);
     resetQueues();
+    void pruneBlobJournal(rec.sessionId);
   }
   notify();
 }
