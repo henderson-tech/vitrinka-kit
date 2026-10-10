@@ -1,6 +1,6 @@
 {
   "name": "vitrinka",
-  "version": "5.20.0",
+  "version": "5.21.0",
   "description": "Capture UI journeys, publish interactive artifact and annotation boards, work tasks and QA sessions, all through the vitrinka MCP server.",
   "author": {
     "name": "Henderson Tech",

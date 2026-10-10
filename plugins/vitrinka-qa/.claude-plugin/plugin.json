@@ -1,6 +1,6 @@
 {
   "name": "vitrinka-qa",
-  "version": "5.20.0",
+  "version": "5.21.0",
   "displayName": "Vitrinka QA",
   "description": "The testing pipeline on top of core: test like a user, process recorded sessions, pair with a human who is testing live, review a board's screens or a journey, and spot what you will not fix now.",
   "author": {

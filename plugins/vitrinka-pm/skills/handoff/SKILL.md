@@ -47,9 +47,9 @@ carries each field's shape; the full contract is `docs {topic: "tasks"}`.
   before the hand-back, not filed; a remainder that outgrew the context
   window is the one exception, and it says so in `buildOn`.
 - **That remainder's fresh session** (never from a run nobody attends):
-  after `rendered`, with `$VITRINKA_SESSION_LAUNCHER` set run
-  `sh -c '${VITRINKA_SESSION_LAUNCHER:?} "$@"' _ '<task url>' '<worktree abs path>'`:
-  exit 0 → print its receipt line and stop; unset or non-zero → print
+  after `rendered`, run
+  `vitrinka qa session launch '<task url>' '<worktree abs path>'`:
+  exit 0 → print its receipt line and stop; non-zero → print
   `/continue <task url>` and stop.
 - **A decision is asked, never filed, while a human is in the session**:
   ask it before the hand-back (AskUserQuestion in Claude Code) and record
