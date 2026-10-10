@@ -1,7 +1,7 @@
 {
   "name": "vitrinka",
-  "version": "5.17.1",
-  "description": "Capture UI journeys, publish interactive artifact and annotation boards, and work with Vitrinka through MCP.",
+  "version": "5.20.0",
+  "description": "Capture UI journeys, publish interactive artifact and annotation boards, work tasks and QA sessions, all through the vitrinka MCP server.",
   "author": {
     "name": "Henderson Tech",
     "url": "https://github.com/henderson-tech"
@@ -9,19 +9,11 @@
   "homepage": "https://vitrinka.ai",
   "repository": "https://github.com/henderson-tech/vitrinka-kit",
   "license": "Elastic-2.0",
-  "keywords": [
-    "screenshots",
-    "annotation-board",
-    "ui-review",
-    "journeys",
-    "qa",
-    "mcp"
-  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Vitrinka",
     "shortDescription": "Capture UI journeys and publish review boards",
-    "longDescription": "Use Vitrinka to capture UI work, publish screenshot journeys and interactive artifacts, compose annotation boards, and process board work through the vitrinka MCP server (registered separately by `vitrinka setup`).",
+    "longDescription": "Use Vitrinka to capture UI work, publish screenshot journeys and interactive artifacts, compose annotation boards, pick tasks up and hand them back, and process board work through the vitrinka MCP server (registered separately by `vitrinka setup`).",
     "developerName": "Vitrinka",
     "category": "Developer Tools",
     "capabilities": [

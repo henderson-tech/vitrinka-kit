@@ -21,21 +21,27 @@ your device and what data it collects.
 | [`packages/expo`](packages/expo) | `@vitrinka/expo` — the Expo / React Native toolkit. Today: the journey recorder (`@vitrinka/expo/recorder`). |
 | [`packages/web`](packages/web) | `@vitrinka/web` — the React DOM toolkit (Next, Vite, …). Today: the journey recorder (`@vitrinka/web/recorder`) — rrweb DOM stream, clicks, navigation, network, console, notes — and the `withVitrinkaRecorder` build guard for Next. |
 | [`packages/link`](packages/link) | `@vitrinka/link` — the device link (code + approval → ingest-only `vkr_` token) both recorders authenticate with. Zero deps. |
-| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. Generated from the product repo like `skills/`; changes land there. |
+| [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. Generated from the product repo like `plugins/`; changes land there. |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | What the recorders capture and where it is sent. |
-| [`skills/`](skills) | Agent skills for working with vitrinka — generated from the product repo, installable as the `vitrinka` plugin (Claude Code / Codex) or via the skills CLI. |
-| [`agents/`](agents) | Companion agents used by the skills, generated from the same product-repo source. |
+| [`plugins/`](plugins) | The four Claude Code plugins, one subtree each: `vitrinka` (core — publish, artifact, brainstorming, listen, resolve), `vitrinka-pm` (pickup, handoff, tasks, release, me, plus the work-loop session hooks), `vitrinka-qa` (usertest, review, sessions, pair, spot) and the opt-in `vitrinka-experimental` (build-idea, make-idea, test, cleanup — Claude Code only). Generated from the product repo. |
+| [`codex-plugin/`](codex-plugin) | The one Codex bundle — every module's skills in a single plugin. Generated from the same source. |
+| [`skills.sh.json`](skills.sh.json) | The skills.sh grouping (plugin, then module) for any other skills-CLI agent. |
 
 ## Quick start — agent skills
 
-The skills ship through the standard channels — pick yours:
+The shortest path is the CLI: `vitrinka setup` registers the marketplace,
+installs core + pm + qa for the harnesses it finds (`--modules` picks,
+`--experimental` adds the fourth) and wires the MCP door. By hand:
 
 ```bash
-# Claude Code
+# Claude Code — the marketplace, then the plugins you want
 claude plugin marketplace add henderson-tech/vitrinka-kit
-claude plugin install vitrinka@kit
+claude plugin install vitrinka@kit          # core (required)
+claude plugin install vitrinka-pm@kit       # tasks, pickup/handoff, work-loop hooks
+claude plugin install vitrinka-qa@kit       # usertest, review, sessions
+claude plugin install vitrinka-experimental@kit   # opt-in
 
-# Codex
+# Codex — one bundle with every module
 codex plugin marketplace add henderson-tech/vitrinka-kit
 codex plugin add vitrinka
 
@@ -43,8 +49,9 @@ codex plugin add vitrinka
 npx skills add henderson-tech/vitrinka-kit
 ```
 
-The `vitrinka` CLI's `vitrinka setup` / `vitrinka setup skills` drive the same
-mechanisms with a status table and a picker. This surface is **generated** —
+`vitrinka update` is the whole upgrade: it updates the CLI and every installed
+Claude Code / Codex plugin in one step. Every plugin manifest carries the CLI's
+version, so a kit release is a CLI release. This surface is **generated** —
 authored in the product repo and rendered here by its exporter; edits belong
 there, not in these files.
 

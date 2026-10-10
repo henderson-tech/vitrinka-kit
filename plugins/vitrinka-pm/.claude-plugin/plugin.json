@@ -1,0 +1,23 @@
+{
+  "name": "vitrinka-pm",
+  "version": "5.20.0",
+  "displayName": "Vitrinka PM",
+  "description": "The work loop on top of core: pick a task up, hand it back, file what you spot, drive the task engine and a project's release, keep personal todos and reminders. Ships the session hooks that stamp a run, cue a pickup and gate the hand-back.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "tasks",
+    "project-management",
+    "work-loop",
+    "todos",
+    "release"
+  ],
+  "dependencies": [
+    "vitrinka"
+  ]
+}

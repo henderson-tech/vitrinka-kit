@@ -1,0 +1,22 @@
+{
+  "name": "vitrinka-experimental",
+  "version": "5.20.0",
+  "displayName": "Vitrinka Experimental",
+  "description": "Flows still proving themselves, beside core: build-idea takes a committed brief to a draft PR with one quick check, make-idea runs a brainstorm into it, test asks which lanes and device checks to run, cleanup reconciles a project's tasks against reality. Claude Code only; opt in with `vitrinka setup --experimental`.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "experimental",
+    "workflows",
+    "device-testing",
+    "ios-simulator"
+  ],
+  "dependencies": [
+    "vitrinka"
+  ]
+}
