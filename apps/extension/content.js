@@ -608,9 +608,10 @@
   // worker's; this only translates.
   //
   //   snapshot.recording  ← vt-status (on load), vt-paused, vt-health
-  //   account/prefs/recents/workspaceUrl ← vt-hud (hudState in background.js)
+  //   account/prefs/recents/workspaceUrl/canAttach ← vt-hud (hudState in background.js)
   //   start · togglePause · stop → vt-start · vt-pause · vt-stop
-  //   note · annotate → vt-note · vt-snap (rect in image px, as clicks)
+  //   note · annotate → vt-note · vt-snap (rect in image px, as clicks;
+  //     attachments ride beside the payload as data URLs)
   //   getMe · setPrefs · refreshRecents → vt-hud-me · vt-hud-prefs · vt-hud-recents
   //   link → the options page (its device-code dance); unlink is the options page's too
 
@@ -618,7 +619,7 @@
   // The live recording as the HUD paints it; null once it ended.
   let live = null; // {sessionId, title, paused, activeMs, resumedAt, boardUrl}
   let health = null; // the worker's last health()
-  let hud = { base: "", workspace: "", live: null, recents: [], prefs: { size: "md", verbose: false }, account: null };
+  let hud = { base: "", workspace: "", live: null, recents: [], prefs: { size: "md", verbose: false, sheetW: 0, sheetH: 0 }, account: null, canAttach: false };
   // True while THIS tab's HUD stops the session: the vt-stop the worker sends
   // every recorded tab then ends capture here but keeps the HUD for "Saved".
   let stoppingHere = false;
@@ -686,6 +687,8 @@
         r.status === "recording" && r.sessionId !== hud.live ? { ...r, status: "unsaved" } : r),
       workspaceUrl: hud.base ? (ws ? `${hud.base}/w/${encodeURIComponent(ws)}` : hud.base) : "",
       version: VERSION,
+      // The paperclip, while this recording's workspace takes images (D6).
+      canAttach: !!recording && hud.canAttach === true,
     };
   };
   const listeners = new Set();
@@ -712,6 +715,35 @@
     changed();
   };
   const fail = (r, fallback) => new Error((r && r.error) || fallback);
+
+  // A tester's images (recorder attachments D5) cross to the worker as data
+  // URLs: a runtime message is JSON, and a Blob would arrive as {}. The HUD
+  // already normalized each one (re-encoded, ≤ 2560 px, ≤ 12 MiB), so nothing
+  // is re-encoded here; only a note whose images would outgrow one message
+  // (Chrome caps it at 64 MiB, base64 adds a third) keeps the first ones.
+  const ATTACH_MESSAGE_BYTES = 40 * 1024 * 1024;
+  const dataUrlOf = (blob) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(blob);
+  });
+  const wireAttachments = async (attachments) => {
+    const out = [];
+    let total = 0;
+    for (let i = 0; i < attachments.length; i++) {
+      const a = attachments[i];
+      total += a.blob.size;
+      if (total > ATTACH_MESSAGE_BYTES) {
+        console.warn(`vitrinka: ${attachments.length - i} attachment(s) past one message's budget — dropped`);
+        break;
+      }
+      try {
+        out.push({ name: a.name, dataUrl: await dataUrlOf(a.blob), w: a.w, h: a.h });
+      } catch (e) { console.warn("vitrinka: an attachment could not be read — dropped", e); }
+    }
+    return out;
+  };
 
   const controller = {
     getSnapshot: () => snap,
@@ -754,13 +786,23 @@
       // the face takes once the worker's board wait (D11) tells this pill.
       return { ...(boardUrl ? { boardUrl } : {}), ...(sessionId ? { sessionId } : {}) };
     },
-    note(text) { send({ type: "vt-note", payload: { text, route: location.pathname } }); },
-    annotate({ text, rect, selector, task }) {
+    // Without images a note goes at once, its seq where the tester wrote it;
+    // with them it goes once they are read, the images riding beside it.
+    note(text, attachments) {
+      const msg = { type: "vt-note", payload: { text, route: location.pathname } };
+      if (!attachments || !attachments.length) return void send(msg);
+      wireAttachments(attachments).then((files) => {
+        if (files.length || text) send({ ...msg, attachments: files });
+      });
+    },
+    annotate({ text, rect, selector, task, attachments }) {
       const s = imageScale();
-      send({ type: "vt-snap", route: location.pathname, payload: {
+      const msg = { type: "vt-snap", route: location.pathname, payload: {
         rect: { x: Math.round(rect.x * s), y: Math.round(rect.y * s), w: Math.round(rect.w * s), h: Math.round(rect.h * s) },
         selector, note: text, task: !!task,
-      } });
+      } };
+      if (!attachments || !attachments.length) return void send(msg);
+      wireAttachments(attachments).then((files) => send({ ...msg, attachments: files }));
     },
     setAnnotating(on) { annotating = !!on; changed(); },
     async link() {

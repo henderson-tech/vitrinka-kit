@@ -35,10 +35,12 @@ The root `devbox.yaml` runs `apps/extension/e2e/fixture.ts` on the kit app's
 `web` port: a synthetic form and recorder API, not a source-directory server.
 Use the current address from `devbox url` for both the page and the recorder
 base URL, with workspace `qa` and a dummy token — never production credentials.
-The fixture keeps recordings in memory; `/__qa/state` exposes captured events
-and chunks, and `POST /__qa/mode` with `{"mode":"strict"}` or
-`{"mode":"failed"}` exercises text masking or policy failure (`default`
-restores the default policy). A packaged store archive is available only at
+The fixture keeps recordings in memory; `/__qa/state` exposes captured events,
+chunks, `/shot` uploads and each `attachment` event beside its upload, and
+`POST /__qa/mode` with `{"mode":"strict"}` or `{"mode":"failed"}` exercises
+text masking or policy failure, `{"mode":"legacy"}` a policy answer without
+`attachments` (an older server: no paperclip) — any other answered policy
+carries `attachments: true` (`default` restores the default policy). A packaged store archive is available only at
 `/__qa/store.zip`; unknown paths return 404.
 
 `devbox run --no-up test` runs the build, typecheck and unit gates without
@@ -129,7 +131,7 @@ manual banner — download, unzip over the folder, ↻.
 - **Start** from the popup on any tab whose host matches a project rule. Other
   tabs on the same project's domains join the session automatically (multi-tab
   journeys: admin + web side by side).
-- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.3.3):
+- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.4.0):
   rec dot · timer · sync chip · pause · note · annotate · ■ stop · ⋯, at one of
   eight spots or tucked into an edge. Shortcuts: `Alt+Shift+A` annotate (click
   an element OR drag any region, note, Enter sends, ⇧Enter newline, Esc / ✕ /
@@ -140,7 +142,9 @@ manual banner — download, unzip over the folder, ↻.
   browser's last five recordings on the current server and workspace with
   their boards, and sets the size and the technical details (user prefs; on the
   device for a key build, a non-recorder token or a server without the route;
-  edits apply in order, one PATCH at a time).
+  edits apply in order, one PATCH at a time). The sheet's corner grip resizes
+  it, and that size (`sheetW`/`sheetH`) is a pref too, sent in a PATCH of its
+  own. A server before it answers 422, and the size then stays on the device.
 - **The sync chip is the health answer** (recorder-live D4/D5): `synced` once the server
   confirms it holds everything captured, `sending N` while a backlog drains,
   `offline · N` when vitrinka is unreachable, `ended` when the session was closed or deleted
@@ -155,6 +159,19 @@ manual banner — download, unzip over the folder, ↻.
   the session. Picking is composing — only ↑ Send commits, and the choice
   resets to `board` on every snap. A draft is never auto-accepted; triage is a
   reviewer's call.
+- **A note or a snap can carry images** — a reference of how it should be
+  (`docs/specs/2026-10-09-recorder-attachments-decisions.md`): paste, drop or
+  pick up to four on the HUD's paperclip, which shows only while the
+  recording's policy answer says `attachments: true` (absent on an older
+  server, `false` when the workspace switched them off). The HUD re-encodes
+  each image (EXIF/GPS gone, ≤ 2560 px); `content.js` hands them to the worker
+  as data URLs, which queues each as a durable `attachment` item whose seq is
+  drawn before its note's (images and note in one IndexedDB transaction, only
+  into the recording the message arrived in), uploads its bytes through
+  `POST /sessions/{id}/shot?seq=N` like a screenshot, and lists the seqs on the
+  note (`attachments: [seqs]`). The board shows them as the tester's own thread
+  message under that note. They are the tester's deliberate upload, so
+  `maskAllText` never blurs them — the workspace switch is the lever.
 - **Continue a journey**: the popup lists the project's recent finished
   sessions — Continue reopens one, the event stream resumes from its last
   sequence, and stop appends the new steps to the SAME set + board.
