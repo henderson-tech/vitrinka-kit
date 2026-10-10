@@ -63,7 +63,7 @@ Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic
 
 ## Closing question — ALWAYS the last `AskUserQuestion`
 
-"In which style to implement?" with three exits — **Build here** (this session, the feature worktree, the whole remaining budget) · **Fresh session** (after the hand-back, with `$VITRINKA_SESSION_LAUNCHER` set, run `sh -c '${VITRINKA_SESSION_LAUNCHER:?} "$@"' _ '<task url>' '<feature worktree abs path>'`: exit 0 → print its receipt line and stop; unset or non-zero → print `/continue <task url>` and stop) · **Subagent-driven** (forks on the brief's ordered `Work packages`, disjoint files, one package per fork, ≤ 4 per phase, a context-inheriting fork reviewer after each phase). A spike ends in its recommendation instead. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
+"In which style to implement?" with three exits — **Build here** (this session, the feature worktree, the whole remaining budget) · **Fresh session** (after the hand-back, run `vitrinka qa session launch '<task url>' '<feature worktree abs path>'`: exit 0 → print its receipt line and stop; non-zero → print `/continue <task url>` and stop) · **Subagent-driven** (forks on the brief's ordered `Work packages`, disjoint files, one package per fork, ≤ 4 per phase, a context-inheriting fork reviewer after each phase). A spike ends in its recommendation instead. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
 
 ## Visual surface: vitrinka brainstorm boards
 
