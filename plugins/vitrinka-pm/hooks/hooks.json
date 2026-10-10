@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context start 2>/dev/null || true", "timeout": 8 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context task-end 2>/dev/null || true", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context stop 2>/dev/null || true", "timeout": 5 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context touch 2>/dev/null || true", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

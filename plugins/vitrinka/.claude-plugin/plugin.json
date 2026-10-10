@@ -1,0 +1,21 @@
+{
+  "name": "vitrinka",
+  "version": "5.20.0",
+  "displayName": "Vitrinka",
+  "description": "The vitrinka experience: capture UI work as journeys and walkthroughs, author documents, pages and diagrams, brainstorm on a decision board, and service a board's annotation queue. Registers nothing itself — `vitrinka setup` adds the MCP endpoint.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "screenshots",
+    "annotation-board",
+    "ui-review",
+    "journeys",
+    "artifacts",
+    "mcp"
+  ]
+}

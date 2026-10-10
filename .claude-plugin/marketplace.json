@@ -4,26 +4,55 @@
     "name": "Henderson Tech",
     "url": "https://github.com/henderson-tech"
   },
-  "description": "Vitrinka — screenshot journeys, annotation boards, and the AI expression layer.",
   "plugins": [
     {
       "name": "vitrinka",
       "displayName": "Vitrinka",
-      "source": "./claude-plugin",
-      "description": "Screenshot journeys, annotation boards, and the AI expression layer — 17 skills in four modules: Core (publish = captured work [session·journey·walkthrough·board], artifact = authored [standalone·pages·diagram·docs board], brainstorming, make-idea, listen, resolve), PM (tasks, release, pickup, spot, handoff, cleanup), QA (sessions, pair, usertest, review) and Me (me). Modules are presets over Claude Code's skillOverrides via `vitrinka setup skills`; `vitrinka setup` registers the deploy's MCP endpoint over HTTP with OAuth.",
+      "source": "./plugins/vitrinka",
+      "description": "The vitrinka experience: capture UI work as journeys and walkthroughs, author documents, pages and diagrams, brainstorm on a decision board, and service a board's annotation queue. Registers nothing itself — `vitrinka setup` adds the MCP endpoint.",
       "category": "productivity",
       "keywords": [
         "screenshots",
         "annotation-board",
         "ui-review",
-        "qa"
+        "journeys",
+        "artifacts",
+        "mcp"
+      ]
+    },
+    {
+      "name": "vitrinka-pm",
+      "displayName": "Vitrinka PM",
+      "source": "./plugins/vitrinka-pm",
+      "description": "The work loop on top of core: pick a task up, hand it back, file what you spot, drive the task engine and a project's release, keep personal todos and reminders. Ships the session hooks that stamp a run, cue a pickup and gate the hand-back.",
+      "category": "productivity",
+      "keywords": [
+        "tasks",
+        "project-management",
+        "work-loop",
+        "todos",
+        "release"
+      ]
+    },
+    {
+      "name": "vitrinka-qa",
+      "displayName": "Vitrinka QA",
+      "source": "./plugins/vitrinka-qa",
+      "description": "The testing pipeline on top of core: test like a user, process recorded sessions, pair with a human who is testing live, review a board's screens or a journey, and spot what you will not fix now.",
+      "category": "productivity",
+      "keywords": [
+        "qa",
+        "user-testing",
+        "sessions",
+        "review",
+        "pairing"
       ]
     },
     {
       "name": "vitrinka-experimental",
       "displayName": "Vitrinka Experimental",
-      "source": "./claude-plugin-experimental",
-      "description": "Exp — flows still proving themselves, beside the core plugin (which stays required): build-idea hands a feature to the human after ONE quick \"does it work\" check and a draft PR; test asks which lanes, breakpoints and iOS 26 Simulator checks to run and how thorough, then shoots, reviews, fixes and files results into device tabs and the task engine. Claude Code only. Opt in with `vitrinka setup --experimental`.",
+      "source": "./plugins/vitrinka-experimental",
+      "description": "Flows still proving themselves, beside core: build-idea takes a committed brief to a draft PR with one quick check, make-idea runs a brainstorm into it, test asks which lanes and device checks to run, cleanup reconciles a project's tasks against reality. Claude Code only; opt in with `vitrinka setup --experimental`.",
       "category": "productivity",
       "keywords": [
         "experimental",

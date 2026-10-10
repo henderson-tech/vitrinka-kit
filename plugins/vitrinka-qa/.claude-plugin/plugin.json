@@ -1,0 +1,23 @@
+{
+  "name": "vitrinka-qa",
+  "version": "5.20.0",
+  "displayName": "Vitrinka QA",
+  "description": "The testing pipeline on top of core: test like a user, process recorded sessions, pair with a human who is testing live, review a board's screens or a journey, and spot what you will not fix now.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "qa",
+    "user-testing",
+    "sessions",
+    "review",
+    "pairing"
+  ],
+  "dependencies": [
+    "vitrinka"
+  ]
+}

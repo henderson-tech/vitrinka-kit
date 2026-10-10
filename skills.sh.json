@@ -4,51 +4,51 @@
   "groupings": [
     {
       "title": "Core",
-      "description": "The vitrinka experience — boards, capture, authoring, the annotation loop.",
+      "description": "Boards, capture, authoring, the annotation loop.",
       "skills": [
-        "artifact",
         "publish",
+        "artifact",
         "brainstorming",
-        "make-idea",
         "listen",
         "resolve"
       ]
     },
     {
       "title": "PM",
-      "description": "The task engine — intake, triage, ranking, automation rules, release boards.",
+      "description": "The task engine: pickup, hand-back, intake, triage, release boards.",
       "skills": [
-        "tasks",
-        "release",
         "pickup",
-        "spot",
         "handoff",
-        "cleanup"
-      ]
-    },
-    {
-      "title": "QA",
-      "description": "The testing pipeline — recorded sessions, live pairing, exploratory user-testing, AI review.",
-      "skills": [
-        "sessions",
-        "pair",
-        "usertest",
-        "review"
+        "tasks",
+        "release"
       ]
     },
     {
       "title": "Me",
-      "description": "Personal todos, milestones and scheduled reminders — the moments a session should judge.",
+      "description": "Personal todos, milestones and reminders the session judges.",
       "skills": [
         "me"
       ]
     },
     {
+      "title": "QA",
+      "description": "Recorded sessions, live pairing, exploratory user-testing, AI review.",
+      "skills": [
+        "usertest",
+        "review",
+        "sessions",
+        "pair",
+        "spot"
+      ]
+    },
+    {
       "title": "Experimental",
-      "description": "Exp — the split build-idea that hands the feature over after one quick check, and the ask-first device test skill. Opt in with `vitrinka setup --experimental`.",
+      "description": "Unattended workflows and ask-first device testing, opt-in.",
       "skills": [
         "build-idea",
-        "test"
+        "make-idea",
+        "test",
+        "cleanup"
       ]
     }
   ]
