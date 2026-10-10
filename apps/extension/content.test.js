@@ -7,7 +7,15 @@ const source = readFileSync(new URL("./content.js", import.meta.url), "utf8");
 function recorder(policy) {
   const messages = [], listeners = [], records = [], intervals = new Map();
   const documentListeners = new Map();
-  let timer = 0;
+  let timer = 0, controller;
+  class FileReader {
+    readAsDataURL(blob) {
+      blob.arrayBuffer().then((bytes) => {
+        this.result = `data:${blob.type};base64,${Buffer.from(bytes).toString("base64")}`;
+        this.onload();
+      });
+    }
+  }
   class Element {
     constructor(tagName = "DIV") {
       this.tagName = tagName;
@@ -32,7 +40,8 @@ function recorder(policy) {
   const context = createContext({
     Element, console, Blob, Date, crypto, queueMicrotask,
     MutationObserver: class { observe() {} disconnect() {} },
-    VitrinkaHud: { mount: () => () => {} },
+    FileReader,
+    VitrinkaHud: { mount: (adapter) => { controller = adapter; return () => {}; } },
     window: { devicePixelRatio: 1, innerWidth: 1440 },
     location: { pathname: "/", href: "https://example.test/" },
     document: {
@@ -70,6 +79,8 @@ function recorder(policy) {
   });
   return {
     messages, records, listeners,
+    get controller() { return controller; },
+    hud(hud) { for (const listener of [...listeners]) listener({ type: "vt-hud", hud }, {}, () => {}); },
     async start(nextPolicy = policy) {
       policy = nextPolicy;
       runInContext(source, context);
@@ -127,4 +138,30 @@ test("stop retires rrweb and its message listener before a stricter session star
   await rec.stop();
   expect(rec.messages.filter((msg) => msg.type === "vt-rrweb").flatMap((msg) => msg.events))
     .toEqual([{ type: 3, data: { text: "***" } }]);
+});
+
+test("HUD canAttach requires an explicit true capability", async () => {
+  const rec = recorder(masked); await rec.start();
+  for (const canAttach of [true, false, undefined]) {
+    rec.hud({ base: "https://synthetic.test", workspace: "qa", recents: [], prefs: {}, canAttach });
+    expect(rec.controller.getSnapshot().canAttach).toBe(canAttach === true);
+  }
+});
+
+test("note serializes attachment blobs as JSON-safe data URLs", async () => {
+  const rec = recorder(masked); await rec.start();
+  rec.controller.note("Plain");
+  expect(rec.messages.at(-1)).toMatchObject({ type: "vt-note", payload: { text: "Plain" } });
+  rec.controller.note("Reference", [{ name: "expected.png", blob: new Blob(["pixels"], { type: "image/png" }), w: 20, h: 10 }]);
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  expect(JSON.parse(JSON.stringify(rec.messages.at(-1)))).toMatchObject({ type: "vt-note", attachments: [{ name: "expected.png", dataUrl: "data:image/png;base64,cGl4ZWxz", w: 20, h: 10 }] });
+});
+
+test("annotate serializes attachments beside the vt-snap payload", async () => {
+  const rec = recorder(masked); await rec.start();
+  rec.controller.annotate({ text: "Reference", rect: { x: 1, y: 2, w: 3, h: 4 }, selector: "button", task: true,
+    attachments: [{ name: "expected.webp", blob: new Blob(["pixels"], { type: "image/webp" }), w: 20, h: 10 }] });
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  expect(JSON.parse(JSON.stringify(rec.messages.at(-1)))).toMatchObject({ type: "vt-snap", payload: { note: "Reference", task: true, rect: { x: 1, y: 2, w: 3, h: 4 } },
+    attachments: [{ name: "expected.webp", dataUrl: "data:image/webp;base64,cGl4ZWxz", w: 20, h: 10 }] });
 });

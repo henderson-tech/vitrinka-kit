@@ -24,7 +24,7 @@
 // index is needed.
 //
 //   {sessionId, seq, ts, tabId, tabHost, kind, payload,
-//    blob?      Blob      — shot PNG / rrweb JSON awaiting upload
+//    blob?      Blob      — shot PNG / attachment image / rrweb JSON awaiting upload
 //    blobCT?    string    — its content type
 //    blobKey?   string    — set once the blob is uploaded; blob is then dropped
 //    bytes      number    — payload+blob size, so usage stats never read blobs
@@ -95,6 +95,27 @@ export const vtdb = {
     const rec = { ...item, bytes: sizeOf(item), needsBlob: item.blob ? 1 : 0 };
     await wrap(tx(db, "readwrite").put(rec));
     return rec;
+  },
+
+  // putAll writes several items in ONE transaction and resolves once it has
+  // committed: all of them land or none do. A note and the attachment events
+  // it names are one fact — a worker killed between two puts must never leave
+  // images on disk whose note is gone.
+  async putAll(items) {
+    for (const item of items) {
+      if (!item.sessionId || !item.seq) throw new Error("vtdb.putAll: sessionId and seq are required");
+    }
+    const recs = items.map((item) => ({ ...item, bytes: sizeOf(item), needsBlob: item.blob ? 1 : 0 }));
+    const db = await openDB();
+    const t = db.transaction(STORE, "readwrite");
+    const done = new Promise((resolve, reject) => {
+      t.oncomplete = () => resolve();
+      t.onabort = () => reject(t.error || new Error("vtdb.putAll: transaction aborted"));
+    });
+    const store = t.objectStore(STORE);
+    for (const rec of recs) store.put(rec);
+    await done;
+    return recs;
   },
 
   // head returns THIS session's oldest `limit` items in seq order — the

@@ -607,6 +607,84 @@ async function pushEvents(items) {
   scheduleFlush();
 }
 
+// Recorder attachments (2026-10-09 decisions): the images a tester attached
+// to a note or a ⌖ annotation. What /shot accepts, and the server's per-note
+// ceiling (it ignores the rest; the HUD itself stops at 4).
+const ATTACHMENT_TYPES = new Set(["image/png", "image/webp", "image/jpeg"]);
+const MAX_NOTE_ATTACHMENTS = 10;
+
+// attachmentsOf turns the content script's data URLs (runtime messages are
+// JSON — a Blob would arrive as {}) back into Blobs, keeping only what the
+// /shot leaf can ever take: anything else is a permanent 4xx after an upload.
+// The HUD already re-encoded them; tester images are never pixel-masked (D2 —
+// the workspace's lever is the `attachments` switch, not shoot()'s blur).
+async function attachmentsOf(list) {
+  if (!Array.isArray(list)) return [];
+  const dim = (n) => (Number.isInteger(n) && n > 0 ? n : undefined);
+  const out = [];
+  for (const a of list.slice(0, MAX_NOTE_ATTACHMENTS)) {
+    if (!a || typeof a.dataUrl !== "string" || !a.dataUrl.startsWith("data:image/")) continue;
+    let blob;
+    try {
+      blob = await (await fetch(a.dataUrl)).blob();
+    } catch (e) {
+      console.warn("vitrinka: attachment undecodable — dropped", String(e));
+      continue;
+    }
+    if (!ATTACHMENT_TYPES.has(blob.type) || !blob.size || blob.size > WIRE_ITEM_CAP) {
+      console.warn(`vitrinka: attachment (${blob.type || "no type"}, ${blob.size} B) is not an image /shot takes — dropped`);
+      continue;
+    }
+    out.push({ name: String(a.name || "image").slice(0, 200), blob, w: dim(a.w), h: dim(a.h) });
+  }
+  return out;
+}
+
+// pushNote queues a note with its attachments. Each image is an `attachment`
+// event whose bytes upload through /shot first and whose seq is drawn BEFORE
+// the note's, so the note's `attachments: [seqs]` names events a replay has
+// already seen. Images reach the queue only while the recording's policy
+// answered `attachments: true`; a note left with neither text nor images (and
+// no other reason to exist — `keep`) is not written.
+//
+// `startedIn` is the recording the message arrived in, read BEFORE its images
+// decoded: a stop → start landing meanwhile must not file the note — or the
+// tab lane it resolves — into the next recording. Unlike pushEvents, the
+// write happens INSIDE the lock and as one transaction: the images and their
+// note land together or not at all, and Stop's freeze (which takes this lock)
+// only reaches its drain once they are on disk.
+async function pushNote(startedIn, tabId, payload, files, keep) {
+  const queued = await withLock(async () => {
+    const cur = await getState();
+    if (!capturing(cur) || !sameRecording(cur, startedIn)) return false;
+    const tab = cur.tabs[String(tabId)];
+    if (!tab) return false;
+    const imgs = cur.attachments === true ? files : [];
+    if (files.length > imgs.length) console.warn(`vitrinka: ${files.length} attachment(s) dropped — the workspace does not take them`);
+    if (!imgs.length && !keep) return false;
+    const first = cur.seq + 1;
+    cur.seq += imgs.length + 1;
+    // Seqs persist first: a worker killed before the batch commits leaves a
+    // hole, never a later capture overwriting rows that did land.
+    await setState(cur);
+    const ts = new Date().toISOString();
+    const seqs = imgs.map((_, i) => first + i);
+    await vtdb.putAll([
+      ...imgs.map(({ name, blob, w, h }, i) => ({
+        sessionId: cur.sessionId, seq: seqs[i], ts, tabId: tab.id, tabHost: tab.host, kind: "attachment",
+        payload: { name, mime: blob.type, bytes: blob.size, ...(w ? { w } : {}), ...(h ? { h } : {}) },
+        blob, blobCT: blob.type,
+      })),
+      {
+        sessionId: cur.sessionId, seq: cur.seq, ts, tabId: tab.id, tabHost: tab.host, kind: "note",
+        payload: seqs.length ? { ...payload, attachments: seqs } : payload,
+      },
+    ]);
+    return true;
+  });
+  if (queued) scheduleFlush();
+}
+
 // Allocate `count` consecutive seqs without emitting events (blob uploads name
 // their blobs by seq). Returns {seq, sessionId} — the pair, atomically: a seq
 // only means anything alongside the session it was drawn from, and a caller
@@ -668,14 +746,16 @@ async function flushInner() {
     return true;
   }
 
-  // Phase 1 — blobs. A shot/rrweb item owes its bytes before its event row can
-  // reference them, and each is its own request. FIFO is strict: a transient
-  // failure stops the pass rather than reordering the stream.
+  // Phase 1 — blobs. A shot/attachment/rrweb item owes its bytes before its
+  // event row can reference them, and each is its own request. FIFO is strict:
+  // a transient failure stops the pass rather than reordering the stream.
   for (const item of live) {
     if (!item.needsBlob) continue;
-    const path = item.kind === "shot"
-      ? `/api/v1/sessions/${rec.sessionId}/shot?seq=${item.seq}`
-      : `/api/v1/sessions/${rec.sessionId}/chunk?seq=${item.seq}`;
+    // Every image rides the /shot leaf — a tester's attachment too (recorder
+    // attachments D5: zero vkr_ widening, and an older server stores the blob
+    // and ignores the event); only rrweb JSON is a /chunk.
+    const leaf = item.kind === "shot" || item.kind === "attachment" ? "shot" : "chunk";
+    const path = `/api/v1/sessions/${rec.sessionId}/${leaf}?seq=${item.seq}`;
     try {
       const up = await api("POST", path, item.blob, item.blobCT);
       await vtdb.resolveBlob(rec.sessionId, item.seq, up.blobKey);
@@ -817,9 +897,10 @@ async function reconcile() {
     // a second fetch would bump policyRunSeq and discard the first apply
     // (converges, but wastefully).
     policyRefetchInFlight = true;
+    const caps = {};
     applyPolicyWhenFetched(
-      fetchPolicy(rec.workspace || "").finally(() => { policyRefetchInFlight = false; }),
-      rec, null,
+      fetchPolicy(rec.workspace || "", caps).finally(() => { policyRefetchInFlight = false; }),
+      rec, null, caps,
     );
   }
   let ses;
@@ -1075,7 +1156,11 @@ function capHeaders(h, rec) {
 // every vt-policy/shoot waiter — for the session's lifetime. (No extra
 // rejection guard needed: Promise.race subscribes to every input, so the
 // abandoned request's late rejection is always handled.)
-async function fetchPolicy(workspace) {
+// `caps`, when passed, receives what the same answer carries beside the
+// policy — `attachments` (recorder attachments D6: `true` shows the HUD's
+// paperclip; absent on an older server or `false` when the workspace switched
+// them off) — set only once the server has answered, like the policy itself.
+async function fetchPolicy(workspace, caps = null) {
   try {
     const res = await Promise.race([
       api("GET", "/api/v1/recorder/policy", undefined, undefined, { workspace }),
@@ -1087,7 +1172,11 @@ async function fetchPolicy(workspace) {
     // carries a `policy` key, even for the zero policy.
     if (!res || typeof res !== "object" || Array.isArray(res) || !("policy" in res)) return undefined;
     const policy = res.policy;
-    if (policy === null) return null;
+    const settled = (answer) => {
+      if (caps) caps.attachments = res.attachments === true;
+      return answer;
+    };
+    if (policy === null) return settled(null);
     // A malformed answer must stay UNKNOWN: settling it could reopen DOM or
     // pixels, or persist rules the engine cannot compile and suppress retries.
     // Unknown fields remain forward-compatible; recognized fields are typed.
@@ -1098,7 +1187,7 @@ async function fetchPolicy(workspace) {
     for (const key of ["maskAllText", "fullFidelity"]) {
       if (key in policy && typeof policy[key] !== "boolean") return undefined;
     }
-    return policy;
+    return settled(policy);
   } catch (e) {
     const status = statusOf(e);
     // permanentStatus = 4xx minus 408/429: a rate-limited or proxy-timed-out
@@ -1107,6 +1196,7 @@ async function fetchPolicy(workspace) {
     // the uploads through the same api(), so the session is dying regardless).
     if (permanentStatus(status)) {
       console.warn("vitrinka: no redaction policy (HTTP " + status + ") — using safe defaults", e);
+      if (caps) caps.attachments = false;
       return null;
     }
     console.warn("vitrinka: redaction policy fetch failed — strict masking until the retry lands", e);
@@ -1126,9 +1216,10 @@ let policyRefetchInFlight = false;
 let pendingPolicy = null;
 // Monotonic run counter: a stale promise from run A must not outrace run B's
 // fresher answer even when both runs carry the SAME server session id
-// (stop → continue of one session).
+// (stop → continue of one session). `caps` is the object fetchPolicy filled
+// beside the policy; its `attachments` is written in the same state write.
 let policyRunSeq = 0;
-function applyPolicyWhenFetched(policyPromise, recording, tabId) {
+function applyPolicyWhenFetched(policyPromise, recording, tabId, caps = null) {
   const runSeq = ++policyRunSeq;
   // pendingPolicy holds the WHOLE CHAIN (fetch + the setState that persists
   // it), never the raw fetch promise: a waiter racing the raw promise would
@@ -1145,10 +1236,11 @@ function applyPolicyWhenFetched(policyPromise, recording, tabId) {
     // an unserialized apply could interleave with attachTab/pushEvents,
     // whose stale rec (policy still undefined) would commit AFTER this write
     // and erase the fetched policy.
+    const attachments = !!caps && caps.attachments === true;
     const rec = await withLock(async () => {
       const live = await getState();
       if (!sameRecording(live, recording) || live.policy !== undefined) return null;
-      await setState({ ...live, policy });
+      await setState({ ...live, policy, attachments });
       return live;
     });
     if (!rec) return;
@@ -1160,6 +1252,9 @@ function applyPolicyWhenFetched(policyPromise, recording, tabId) {
     for (const id of ids) {
       chrome.tabs.sendMessage(id, { type: "vt-policy-push", pixel }).catch(() => {});
     }
+    // canAttach rides hudState; a HUD that mounted before the answer landed
+    // learns of its paperclip here (a later mount reads it with vt-hud).
+    if (attachments) broadcastHud().catch((e) => console.warn("vitrinka: HUD broadcast failed", e));
   }).catch((e) => { console.warn("vitrinka: redaction policy apply failed — keeping strict masking", e); });
   pendingPolicy = chain;
   chain.finally(() => {
@@ -1317,9 +1412,11 @@ function shotHash(s) {
   return s.length + ":" + (h >>> 0).toString(36);
 }
 
-async function shoot(tabId, payload) {
+// `expected`, when passed, is the recording a deliberate snap was asked in:
+// one that ended while the snap's message was handled shoots nothing.
+async function shoot(tabId, payload, expected = null) {
   let rec = await getState();
-  if (!capturing(rec)) return;
+  if (!capturing(rec) || (expected && !sameRecording(rec, expected))) return;
   // A frame captured before the policy settles could be a full-resolution
   // shot of a workspace that demanded blur (maskAllText's default is the
   // permissive side). Wait bounded; still unsettled ⇒ drop the frame — the
@@ -1442,7 +1539,8 @@ async function startSession(title) {
     await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
     await setState(recording);
   });
-  applyPolicyWhenFetched(fetchPolicy(workspace), recording, active.id);
+  const caps = {};
+  applyPolicyWhenFetched(fetchPolicy(workspace, caps), recording, active.id, caps);
   serverMaxSeq = 0;
   lastSyncAt = Date.now();
   failures = 0;
@@ -1488,7 +1586,8 @@ async function continueSession(sessionId) {
     await setState(next);
     return next;
   });
-  applyPolicyWhenFetched(fetchPolicy(recording.workspace), recording, null);
+  const caps = {};
+  applyPolicyWhenFetched(fetchPolicy(recording.workspace, caps), recording, null, caps);
   serverMaxSeq = Number(ses.maxSeq || 0);
   lastSyncAt = Date.now();
   failures = 0;
@@ -1985,23 +2084,33 @@ async function maybeSelfReload(force = false) {
 //               {base, workspace, sessionId, title, startedAt, durationMs?, status, boardUrl?};
 //               one is (base, workspace, sessionId), and the HUD lists the
 //               last five of the current base + workspace only
-//   hudPrefs    {size, verbose}; a linked user's server copy wins
+//   hudPrefs    {size, verbose, sheetW, sheetH}; a linked user's server copy wins
 //   hudMe       who the token records as (GET /api/v1/recorder/me)
 // The same rules as the kit's recorder (packages/web/src/recorder/me.ts,
 // recents.ts): a 404 means a server without the route (prefs stay on the
-// device), a 409 a key build with no user to store against.
+// device), a 409 a key build with no user to store against. The sheet size
+// (sheetW/sheetH, CSS px 0..1600, 0 = the HUD's default) rides its own
+// PATCH: a server before it answers 422, and the size then stays on the
+// device for this worker's lifetime, never costing size/verbose their sync.
 
 const HUD_SIZES = ["sm", "md", "lg"];
-const HUD_DEFAULT_PREFS = { size: "md", verbose: false };
+const HUD_SHEET_KEYS = ["sheetW", "sheetH"];
+const HUD_SHEET_MAX = 1600;
+const HUD_DEFAULT_PREFS = { size: "md", verbose: false, sheetW: 0, sheetH: 0 };
 const MAX_RECENTS = 5;
 // Kept across every base + workspace, so switching back still finds them.
 const MAX_STORED_RECENTS = 20;
+
+// A sheet size: a finite number ≥ 0 (within what the server stores), else 0.
+const hudSheetPx = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(v, HUD_SHEET_MAX) : 0);
 
 function hudPrefsOf(raw) {
   if (!raw || typeof raw !== "object") return null;
   return {
     size: HUD_SIZES.includes(raw.size) ? raw.size : HUD_DEFAULT_PREFS.size,
     verbose: typeof raw.verbose === "boolean" ? raw.verbose : HUD_DEFAULT_PREFS.verbose,
+    sheetW: hudSheetPx(raw.sheetW),
+    sheetH: hudSheetPx(raw.sheetH),
   };
 }
 
@@ -2083,6 +2192,9 @@ async function hudState() {
     recents: recents.filter((r) => r.base === scope.base && r.workspace === scope.workspace).slice(0, MAX_RECENTS),
     prefs: hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS,
     account: hudMe,
+    // The HUD's paperclip: only while the live recording's policy answer said
+    // `attachments: true` (recorder attachments D6; absent = an older server).
+    canAttach: !!rec && rec.attachments === true,
   };
 }
 
@@ -2154,6 +2266,9 @@ async function refreshRecents() {
 // credential stays. Other failures settle the state but are retried later.
 const meUnavailable = new Set();
 const meWarned = new Set();
+// The credentials whose server answered the sheet-size PATCH 422 (it predates
+// sheetW/sheetH): the size stays on the device, never sent again this worker.
+const meSheetLocal = new Set();
 const ME_TIMEOUT_MS = 8000;
 // Local prefs edits so far: a /me answer adopts its prefs only when no edit
 // happened since its request left, so a slow GET never reverts a choice.
@@ -2185,7 +2300,13 @@ async function adoptMe(me, gen, key) {
   // never over an edit this credential's server has not acknowledged yet.
   if (server) await withPrefs(async () => {
     const pending = await pendingPrefs();
-    if (gen === prefEdits && !(pending && pending.for === key)) await chrome.storage.local.set({ hudPrefs: server });
+    if (gen !== prefEdits || (pending && pending.for === key)) return;
+    // An answer without the sheet size (a server before it), or one this
+    // credential stopped sending it to, keeps the device's.
+    const { hudPrefs = null } = await chrome.storage.local.get("hudPrefs");
+    const local = hudPrefsOf(hudPrefs) || HUD_DEFAULT_PREFS;
+    for (const f of HUD_SHEET_KEYS) if (meSheetLocal.has(key) || typeof me.prefs[f] !== "number") server[f] = local[f];
+    await chrome.storage.local.set({ hudPrefs: server });
   });
 }
 
@@ -2273,10 +2394,30 @@ async function sendPrefs() {
   // Relinked while deciding: the edit belongs to the account left behind and
   // is dropped (the new account's server copy wins, as on any relink).
   if ((await credKey()) !== key) return void (await settlePrefs(key, null));
+  // size/verbose, then the sheet size in a PATCH of its own: a server before
+  // sheetW/sheetH answers that one 422, and the size stays on the device.
+  const hud = {};
+  const sheet = {};
+  for (const [f, v] of Object.entries(pending.prefs)) (HUD_SHEET_KEYS.includes(f) ? sheet : hud)[f] = v;
+  if (meSheetLocal.has(key) && Object.keys(sheet).length) {
+    await settlePrefs(key, sheet);
+    for (const f of HUD_SHEET_KEYS) delete sheet[f];
+  }
   try {
-    const me = await api("PATCH", "/api/v1/recorder/me", { prefs: pending.prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS, cred, workspace });
-    await settlePrefs(key, pending.prefs);
-    await adoptMe(me, gen, key);
+    let me = null;
+    for (const prefs of [hud, sheet]) {
+      if (!Object.keys(prefs).length) continue;
+      try {
+        me = await api("PATCH", "/api/v1/recorder/me", { prefs }, undefined, { timeoutMs: ME_TIMEOUT_MS, cred, workspace });
+        await settlePrefs(key, prefs);
+      } catch (e) {
+        if (prefs !== sheet || statusOf(e) !== 422) throw e;
+        meSheetLocal.add(key);
+        await settlePrefs(key, prefs);
+        console.warn("vitrinka: this server keeps no sheet size — it stays on this device", e);
+      }
+    }
+    if (me) await adoptMe(me, gen, key);
   } catch (e) {
     // 404 (no route) and 409 (a key build): the server can never store them.
     if (statusOf(e) === 404 || statusOf(e) === 409) await settlePrefs(key, null);
@@ -2305,7 +2446,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         return sendResponse({ ok: true });
       case "vt-note":
-        if (tab) await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "note", payload: msg.payload }]);
+        if (tab) {
+          // Fixed before the images decode (pushNote refuses any other).
+          const startedIn = await getState();
+          // An image can BE the note: one sent with images but no text stands
+          // only while an image survives (attachmentsOf, the workspace switch).
+          const asked = Array.isArray(msg.attachments) && msg.attachments.length > 0;
+          await pushNote(startedIn, sender.tab.id, msg.payload, await attachmentsOf(msg.attachments), !asked || !!(msg.payload && msg.payload.text));
+        }
         return sendResponse({ ok: true });
       case "vt-snap":
         if (tab) {
@@ -2314,12 +2462,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // tester picked in the HUD before sending). A task destination
           // admits a note-less snap — the server titles it from the region —
           // because choosing "task" and getting nothing would be a silent
-          // no-op; without one, an empty note stays a screenshot as before.
-          if (msg.payload.note || msg.payload.task) {
-            await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "note", payload: { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true, task: !!msg.payload.task } }]);
-          }
+          // no-op; so does an attached image. Without either, an empty note
+          // stays a screenshot as before. The note and its shot both belong
+          // to the recording the snap was asked in, fixed before the decode.
+          const startedIn = await getState();
+          await pushNote(startedIn, sender.tab.id,
+            { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true, task: !!msg.payload.task },
+            await attachmentsOf(msg.attachments), !!(msg.payload.note || msg.payload.task));
           lastShot = 0; // a deliberate snap always captures
-          await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true });
+          await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true }, startedIn);
         }
         return sendResponse({ ok: true });
       case "vt-console":
@@ -2429,6 +2580,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const patch = {};
         if (HUD_SIZES.includes(p.size)) patch.size = p.size;
         if (typeof p.verbose === "boolean") patch.verbose = p.verbose;
+        for (const f of HUD_SHEET_KEYS) if (typeof p[f] === "number" && Number.isFinite(p[f])) patch[f] = hudSheetPx(p[f]);
         if (Object.keys(patch).length) await hudSetPrefs(patch);
         return sendResponse(await hudState());
       }
