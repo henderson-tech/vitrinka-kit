@@ -428,8 +428,12 @@ export function patchNetwork(): void {
       trackCapture(
         (async () => {
           // Re-check AFTER the await, and require the SAME session — the run may
-          // have been paused/stopped meanwhile.
-          if (!stillCapturing(origin)) return;
+          // have been paused/stopped meanwhile, or another recorder took the
+          // lead. An abandoned clone is cancelled, never left buffering its tee.
+          if (!stillCapturing(origin)) {
+            if (clone) discard(clone);
+            return;
+          }
           const resBody = clone ? await readBoundedBody(clone, headers) : undefined;
           if (!stillCapturing(origin)) return;
           const rawReqHeaders = rawFetchReqHeaders(input, init);

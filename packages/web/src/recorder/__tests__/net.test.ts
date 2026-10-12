@@ -161,3 +161,35 @@ describe('net lane bounded body read', () => {
     expect(await __readBoundedTextForTests(res, headers)).toBe('[body omitted: 10485760 bytes]');
   });
 });
+
+describe('net lane across a change of leader', () => {
+  it('a response that arrives after another recorder took the lead is not captured, and its clone is cancelled', async () => {
+    const { unpatchNetwork } = await import('../capture/net');
+    const { leadState } = await import('../state');
+    unpatchNetwork();
+    let cancelled = 0;
+    let answer: (r: Response) => void = () => undefined;
+    const slow = (() =>
+      new Promise<Response>((resolve) => {
+        answer = resolve;
+      })) as unknown as typeof fetch;
+    globalThis.fetch = slow;
+    patchNetwork();
+    setState(liveSession());
+    const pending = fetch('https://api.example.test/slow');
+    // The extension took the lead while the request was out.
+    leadState.following = 'extension';
+    try {
+      const res = new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+      const body = { cancel: async () => void (cancelled += 1) };
+      Object.defineProperty(res, 'clone', { value: () => ({ body }) });
+      answer(res);
+      await pending;
+      await capturesSettled();
+      expect(cancelled).toBe(1);
+      expect(recorded()).toHaveLength(0);
+    } finally {
+      leadState.following = null;
+    }
+  });
+});
