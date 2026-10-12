@@ -22,6 +22,7 @@ export type { RecorderControl, RecorderStatus } from './control';
 export type { RecorderConfig } from './config';
 export { type Leader, RecorderBusyError } from './lead';
 export { configureRecorderStorage, type RecorderStorage } from './storage';
+export { withRecorderLock } from './storage/lock';
 
 export interface VitrinkaRecorderRootProps {
   /** vitrinka base URL; defaults to `NEXT_PUBLIC_VITRINKA_URL`. */

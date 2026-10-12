@@ -47,6 +47,8 @@ describe('claim codec', () => {
       sessionId: '7',
       since: 5,
     });
+    // A web 0.5.0 page wrote the server's numeric id: readers still name #42.
+    expect(parseClaim('{"v":1,"by":"page","id":"p.1","state":"recording","sessionId":42,"since":0}')?.sessionId).toBe('42');
   });
 
   it('treats an object detail (what an isolated world hands the main world: null) and an unknown op as absent', () => {

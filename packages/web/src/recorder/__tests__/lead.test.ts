@@ -196,9 +196,33 @@ describe('following', () => {
     await settle();
     expect(leadState.following).toBeNull();
   });
+
+  it('a session holding this document lets go and waits when the extension records elsewhere — a tab thawing after its Start (D14)', async () => {
+    const { env, attrs } = fakeDocument();
+    setState(liveSession());
+    startLead(handlers, env);
+    expect(readClaim(env)?.by).toBe('page');
+    const one = extensionElsewhere(env);
+    one.announce();
+    expect(attrs.has(LEAD_ATTR)).toBe(false);
+    expect(leadState.following).toBe('extension');
+    expect(pushEvent('click', { selector: '#buy' }, ROUTE)).toBeNull();
+    one.stop();
+    await settle();
+    expect(readClaim(env)).toMatchObject({ by: 'page', state: 'recording', sessionId: 'sess-1' });
+  });
 });
 
 describe('leading', () => {
+  it('claims under the server\'s numeric session id as a string, so every reader names #N', async () => {
+    const { env } = fakeDocument();
+    startLead(handlers, env);
+    stub.script.sessions.push({ ok: true, body: { id: 42, project: 'example', environment: 'development', title: '' } });
+    await startSession();
+    expect(getState()?.sessionId).toBe('42');
+    expect(readClaim(env)).toMatchObject({ by: 'page', state: 'recording', sessionId: '42' });
+  });
+
   it('a session joined from another tab claims this document; leaving releases it', () => {
     const { env, attrs } = fakeDocument();
     const leave = startLead(handlers, env);
