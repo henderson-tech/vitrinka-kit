@@ -7,9 +7,9 @@
 import { type ReactElement, type ReactNode, useEffect } from 'react';
 
 import { installClickLane } from './capture/click';
-import { patchConsole, unpatchConsole } from './capture/console';
-import { installNavLane, noteNavigation, primeNavigation } from './capture/nav';
-import { patchNetwork, unpatchNetwork } from './capture/net';
+import { ownConsolePatch, patchConsole, unpatchConsole } from './capture/console';
+import { installNavLane, noteNavigation, ownNavLane, primeNavigation } from './capture/nav';
+import { ownNetworkPatch, patchNetwork, unpatchNetwork } from './capture/net';
 import { checkoutRRWeb, flushRRWeb, startFlightRRWeb, startRRWeb, stopRRWeb } from './capture/rrweb';
 import { configureRecorder, type RecorderConfig } from './config';
 import { installControl } from './control';
@@ -67,8 +67,23 @@ export function RecorderProvider({
     // and UNINSTALLED on unmount below, so the recorder never outlives its
     // tree; the History wrap is idempotent too and stays (a nav event with no
     // session is dropped at the queue unless the flight recorder holds it).
-    patchNetwork();
-    patchConsole();
+    // They are global, so with two recorder bundles on the page the one that
+    // starts capturing takes them over (`own*`): whoever leads, not whoever
+    // mounted first, hears the traffic. A mount takes the wrappers over too
+    // (a stale Fast Refresh copy's, an idle bundle's) unless another bundle
+    // on the page leads — never from under a live recording.
+    const ownLanes = () => {
+      ownNetworkPatch();
+      ownConsolePatch();
+      ownNavLane();
+    };
+    if (leadState.following === 'page') {
+      patchNetwork();
+      patchConsole();
+    } else {
+      ownNetworkPatch();
+      ownConsolePatch();
+    }
     installNavLane();
     const uninstallClicks = installClickLane({
       ignore: (t) => annotateState.active || insideHud(t),
@@ -89,6 +104,7 @@ export function RecorderProvider({
       const rec = getState();
       const recording = rec !== null && !rec.dead && leadState.following === null;
       const flying = flightActive();
+      if ((recording && !wasRecording) || (flying && !wasFlying)) ownLanes();
       if (wasFlying && !flying) stopRRWeb();
       if (recording && !wasRecording) startRRWeb();
       else if (!recording && wasRecording) stopRRWeb();

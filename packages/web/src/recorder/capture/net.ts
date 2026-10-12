@@ -353,7 +353,15 @@ interface VtMeta {
 /** The uninstaller of the live patch, kept on globalThis for the same reason as the mark. */
 const UNPATCH_MARK = '__vitrinkaRecorderNetUnpatch';
 
-type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: boolean; [UNPATCH_MARK]?: () => void };
+type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: unknown; [UNPATCH_MARK]?: () => void };
+
+/**
+ * This module instance's mark. The wrappers are global, so the mark says WHOSE
+ * are live: another recorder bundle's on the page, or a stale Fast Refresh
+ * copy's. `ownNetworkPatch` hands them to this one (ONE recorder: whoever leads
+ * captures, not whoever mounted first).
+ */
+const OWNER: object = {};
 
 /**
  * Remove the fetch/XHR wrappers installed by `patchNetwork` — the provider's
@@ -365,13 +373,24 @@ type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: boolean; [UNPATCH_MARK]
  */
 export function unpatchNetwork(): void {
   const g = globalThis as PatchGlobals;
+  // Another bundle's live wrappers are its own to remove.
+  if (g[PATCH_MARK] !== undefined && g[PATCH_MARK] !== OWNER) return;
   g[UNPATCH_MARK]?.();
+}
+
+/** Make this module's wrappers the live ones (a no-op when they already are). */
+export function ownNetworkPatch(): void {
+  const g = globalThis as PatchGlobals;
+  if (g[PATCH_MARK] === OWNER) return;
+  g[UNPATCH_MARK]?.();
+  delete g[PATCH_MARK];
+  patchNetwork();
 }
 
 export function patchNetwork(): void {
   const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
-  g[PATCH_MARK] = true;
+  g[PATCH_MARK] = OWNER;
   const restores: (() => void)[] = [];
   g[UNPATCH_MARK] = () => {
     for (const r of restores.splice(0)) r();

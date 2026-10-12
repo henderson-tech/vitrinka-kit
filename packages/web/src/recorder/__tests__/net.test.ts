@@ -79,6 +79,38 @@ describe('net lane uninstall', () => {
     unpatchNetwork();
     expect(globalThis.fetch).toBe(foreign);
   });
+
+  it('another recorder bundle\'s wrappers stay its own to remove, and a bundle that starts capturing takes them over (ONE recorder)', async () => {
+    const { ownNetworkPatch, unpatchNetwork } = await import('../capture/net');
+    unpatchNetwork();
+    // The first bundle on the page installed its wrapper; it now follows, so it passes everything through.
+    const g = globalThis as { __vitrinkaRecorderNetPatched?: unknown; __vitrinkaRecorderNetUnpatch?: () => void };
+    const underneath = globalThis.fetch;
+    const theirs = ((input: RequestInfo | URL, init?: RequestInit) => underneath(input, init)) as typeof fetch;
+    globalThis.fetch = theirs;
+    let theirUnpatch = 0;
+    g.__vitrinkaRecorderNetPatched = {};
+    g.__vitrinkaRecorderNetUnpatch = () => {
+      theirUnpatch += 1;
+      if (globalThis.fetch === theirs) globalThis.fetch = underneath;
+      delete g.__vitrinkaRecorderNetPatched;
+      delete g.__vitrinkaRecorderNetUnpatch;
+    };
+    unpatchNetwork();
+    expect(theirUnpatch).toBe(0);
+    expect(globalThis.fetch).toBe(theirs);
+    // This bundle leads: its wrapper goes live in their place and records.
+    ownNetworkPatch();
+    expect(theirUnpatch).toBe(1);
+    setState(liveSession());
+    await fetch('https://api.example.test/led');
+    await capturesSettled();
+    expect(recorded().map((e) => e.url)).toEqual(['https://api.example.test/led']);
+    ownNetworkPatch();
+    await fetch('https://api.example.test/once');
+    await capturesSettled();
+    expect(recorded()).toHaveLength(2);
+  });
 });
 
 // The bound is asserted on the RAW read (the capping wrapper would hide it):
