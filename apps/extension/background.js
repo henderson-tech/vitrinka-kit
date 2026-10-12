@@ -23,6 +23,11 @@ const SHOT_THROTTLE_MS = 700;
 const BODY_CAP = 64 * 1024;
 // The server caps one events POST at 500.
 const UPLOAD_BATCH = 500;
+// ...and by bytes: each POST packs under this. A captured request carries up
+// to 2×64K chars of body, so a count-only batch of 500 could run to tens of
+// MiB. The current server takes 50 MiB, an older one 1 MiB — a 413 halves the
+// target until the batch fits (eventPackBytes).
+const EVENT_PACK_BYTES = 10 * 1024 * 1024;
 // How long Stop keeps trying before it hands the tester an honest error. The
 // queue is never discarded on timeout — a later Stop finishes the job.
 const STOP_DRAIN_MS = 60_000;
@@ -202,6 +207,31 @@ function splitRRWebEvents(events, packBytes = CHUNK_PACK_BYTES, hardBytes = CHUN
   flushPart();
   return { parts, bodies, dropped };
 }
+
+// packEvents serializes the ready head in seq order and keeps the longest
+// prefix whose events POST stays under `budget` bytes — never fewer than one
+// event, so an event bigger than the budget still travels alone and the
+// server's verdict decides it. Returns {count, bytes, body}: body is the POST
+// ALREADY serialized, sent verbatim.
+function packEvents(ready, budget) {
+  const enc = new TextEncoder();
+  const strs = [];
+  let bytes = 13; // {"events":[]}
+  for (const i of ready) {
+    const s = JSON.stringify({
+      seq: i.seq, ts: i.ts, tabId: i.tabId, tabHost: i.tabHost,
+      kind: i.kind, payload: i.payload, blobKey: i.blobKey,
+    });
+    const b = enc.encode(s).length + 1; // +1 for the comma
+    if (strs.length && bytes + b > budget) break;
+    strs.push(s);
+    bytes += b;
+  }
+  return { count: strs.length, bytes, body: `{"events":[${strs.join(",")}]}` };
+}
+// The pack target, halved by each 413 for the life of the worker — an older
+// server's smaller cap is learned once, not re-hit on every flush.
+let eventPackBytes = EVENT_PACK_BYTES;
 
 // ---------------------------------------------------------------------------
 // health (D4/D5)
@@ -800,14 +830,27 @@ async function flushInner() {
     scheduleFlush();
     return false;
   }
-  const events = ready.map((i) => ({
-    seq: i.seq, ts: i.ts, tabId: i.tabId, tabHost: i.tabHost,
-    kind: i.kind, payload: i.payload, blobKey: i.blobKey,
-  }));
+  const pack = packEvents(ready, eventPackBytes);
+  const sent = ready.slice(0, pack.count);
   try {
-    await api("POST", `/api/v1/sessions/${rec.sessionId}/events`, { events });
+    await api("POST", `/api/v1/sessions/${rec.sessionId}/events`, pack.body, "application/json");
   } catch (e) {
     const st = statusOf(e);
+    if (st === 413) {
+      // Too large is a verdict on THIS batch, never on the session: go again
+      // with half. An event refused even alone becomes a note at its own seq
+      // (D8 — the timeline says what is missing, nothing vanishes silently).
+      if (sent.length > 1) {
+        eventPackBytes = Math.floor(pack.bytes / 2);
+      } else {
+        const [one] = sent;
+        console.warn(`vitrinka: ${one.kind} seq ${one.seq} too large to upload (${pack.bytes} B) — sent as a note`, e);
+        await vtdb.put({ sessionId: rec.sessionId, seq: one.seq, ts: one.ts, tabId: one.tabId, tabHost: one.tabHost, kind: "note",
+          payload: { text: `⚠ ${one.kind} event omitted (${(pack.bytes / 1048576).toFixed(1)} MiB — too large to upload)` } });
+      }
+      scheduleFlush(0);
+      return false;
+    }
     if (permanentStatus(st)) {
       // D9: a 409 from a session the server already closed used to retry every
       // 2s for the life of the browser profile, keeping the queue on disk
@@ -824,9 +867,9 @@ async function flushInner() {
   // the 10s reconcile tick instead left a freshly-started recorder showing
   // "server has 0 / 3" and a noncommittal glyph for the first ten seconds,
   // which is exactly the window where a tester wants to know it is working.
-  const top = events[events.length - 1].seq;
+  const top = sent[sent.length - 1].seq;
   if (top > serverMaxSeq) serverMaxSeq = top;
-  await vtdb.remove(rec.sessionId, ready.map((i) => i.seq));
+  await vtdb.remove(rec.sessionId, sent.map((i) => i.seq));
   const left = await vtdb.head(rec.sessionId, 1);
   if (left.length) {
     scheduleFlush(0);
@@ -924,9 +967,55 @@ async function reconcile() {
   if (!active) return null;
   if (!active.stopping && (ses.status === "done" || ses.deletedAt)) {
     await markSessionDead(rec, ses.deletedAt ? "session was deleted" : "session was closed on the server");
+  } else if ((active.revived || (active.dead && /\(413\)$/.test(active.deadReason || ""))) && (ses.status === "recording" || ses.status === "paused")) {
+    await reviveSession(active, ses);
   }
   await broadcastHealth();
   return ses;
+}
+
+// reviveSession undoes a death that was never the server's verdict: before
+// byte packing, an oversized events batch (413) killed its session while the
+// server still held it open. The revival rides an update, and the reload that
+// applies one has already cut the tabs' capture — so the session is FINISHED:
+// its kept tail uploads, it stops and projects its board, and Continue picks
+// it back up with fresh capture. `revived` persists that intent: every
+// reconcile retries the finish until the stop clears the recording (a worker
+// restart mid-drain, a failed close), and Start/Continue wait for it.
+let finishingRevived = false; // single-flight: reconcile polls every 10s, a finish drains up to a minute
+async function reviveSession(expected, ses) {
+  const rec = await withLock(async () => {
+    const r = await getState();
+    if (!sameRecording(r, expected) || !(r.dead || r.revived)) return null;
+    if (r.dead) {
+      r.dead = false;
+      delete r.deadReason;
+      r.revived = true;
+      if (!r.paused && !r.stopping) {
+        // Frozen until the stop: the recorded span ends at the server's last
+        // write, not at the revival.
+        const last = Date.parse(ses.updatedAt || "");
+        if (r.resumeAt && last > Date.parse(r.resumeAt)) r.activeMs = (r.activeMs || 0) + last - Date.parse(r.resumeAt);
+        r.paused = true;
+        r.resumeAt = null;
+      }
+      await setState(r);
+    }
+    return r;
+  });
+  if (!rec || finishingRevived) return;
+  finishingRevived = true;
+  console.info(`vitrinka: session ${rec.sessionId} revived to finish — its 413 was a batch size, not a verdict`);
+  // Not awaited: reconcile is a poll, and the stop drains for up to a minute.
+  stopSession(null, rec)
+    .catch((e) => console.warn("vitrinka: revived session's stop failed — the next reconcile retries", e))
+    .finally(() => { finishingRevived = false; });
+}
+
+// A revived recording's finish detaches, drains and closes whatever is current;
+// adopting another recording under it would hand that one the stop.
+async function refuseWhileFinishing() {
+  if ((await getState())?.revived) throw new Error("a recovered recording is still uploading — try again once it has finished");
 }
 
 // reapDeadSessions clears queue data for sessions the server considers gone.
@@ -1496,6 +1585,7 @@ async function shoot(tabId, payload, expected = null) {
 // lifecycle
 
 async function startSession(title) {
+  await refuseWhileFinishing();
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active || !/^https?:/.test(active.url || "")) throw new Error("open the app you want to record first");
   const host = new URL(active.url).host;
@@ -1565,6 +1655,7 @@ async function startSession(title) {
 // stream from maxSeq, attaches the active tab; stop appends to the SAME
 // set + board (import-set dedups what's already placed).
 async function continueSession(sessionId) {
+  await refuseWhileFinishing();
   const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
   const scope = await scopeOf(ses.workspace);
   await refuseForeignTail(ses.id, scope);
@@ -1615,9 +1706,12 @@ async function continueSession(sessionId) {
 // waited for — the server builds it on a worker and the recorder learns it is
 // ready by polling (D11), so Stop and Show-board are separate acts (D3).
 // `pill` ({tabId, token}) is the HUD instance that asked, told the link later.
-async function stopSession(pill = null) {
+// `expected` binds a stop nobody pressed (a revived session) to its recording:
+// one Start/Continue adopted meanwhile is never stopped in its place.
+async function stopSession(pill = null, expected = null) {
   const rec = await withLock(async () => {
     const current = await getState();
+    if (expected && !sameRecording(current, expected)) return null;
     if (current && !current.stopping) {
       // Freeze capture atomically with Start/Continue adopting a new session.
       // `stopping` still admits detachAll's final rrweb batch, unlike paused.
@@ -2043,9 +2137,11 @@ async function extUpdateStatus() {
 // applyUpdate downloads + swaps via the host. It does NOT reload — the caller
 // does, so the popup can say what happened before the world restarts.
 async function applyUpdate() {
-  if (await getState()) {
+  const rec = await getState();
+  if (rec && !rec.dead) {
     // A reload tears down the CDP attach and the content scripts mid-session.
-    // Recorded evidence outranks being current.
+    // Recorded evidence outranks being current. A dead session captures
+    // nothing and its queue survives the reload — an update may be its cure.
     return { ok: false, error: "stop the recording first — updating restarts the extension" };
   }
   const r = await hostCall("update");
@@ -2058,7 +2154,8 @@ async function applyUpdate() {
 // Never mid-session, and never while a board is still being built.
 const EXT_CHECK_PERIOD_MIN = 60;
 async function maybeSelfReload(force = false) {
-  if (await getState()) return;
+  const rec = await getState();
+  if (rec && !rec.dead) return;
   const { awaiting, extCheckedAt = 0 } = await chrome.storage.local.get(["awaiting", "extCheckedAt"]);
   if (awaiting) return;
   // boot() runs on EVERY worker wake, and each hostCall spawns a host process

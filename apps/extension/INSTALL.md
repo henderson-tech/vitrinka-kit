@@ -94,6 +94,14 @@ vitrinka setup extension update --check  # just say whether one exists
 A terminal update is picked up by the running extension within the hour; open
 the popup and click **reload into it** to apply it now.
 
+A recording that ended with **server rejected this session (413)** (0.10.0 and
+older) still holds its unsent events in the extension, but that version
+refuses to update while it holds them. Run `vitrinka setup extension update`,
+then press ↻ on the recorder in `chrome://extensions` — never remove it or
+clear its data. 0.10.1 uploads the kept events and finishes the session. Do it
+within 24 hours of the recording: the server closes an idle session then, and
+the recorder discards a closed session's queue.
+
 ### When something is off
 
 ```sh
