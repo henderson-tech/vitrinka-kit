@@ -288,10 +288,11 @@ function showUpdate(icon, text, onClick, enabled = true) {
 
 // reloadInto — activate files already on disk. No host call, so it works with
 // the shelf unreachable; the recording guard still applies, because a reload
-// tears down the CDP attach either way.
+// tears down the CDP attach either way — except for a dead session, which
+// captures nothing and keeps its queue across the reload.
 async function reloadInto(to) {
   const { rec } = await chrome.storage.local.get("rec");
-  if (rec) {
+  if (rec && !rec.dead) {
     showUpdate("circle-x", "stop the recording first — reloading restarts the extension", () => reloadInto(to));
     return;
   }

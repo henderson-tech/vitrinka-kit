@@ -14,7 +14,10 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
   const writes = [], captures = [], requests = [];
   let messageListener;
   const db = {
-    put: async (item) => writes.push({ ...item, needsBlob: item.blob ? 1 : 0 }),
+    put: async (item) => { // upserts by [sessionId, seq], like the IndexedDB keyPath
+      const at = writes.findIndex((i) => i.sessionId === item.sessionId && i.seq === item.seq);
+      writes.splice(at < 0 ? writes.length : at, at < 0 ? 0 : 1, { ...item, needsBlob: item.blob ? 1 : 0 });
+    },
     putAll: async (items) => { for (const item of items) writes.push({ ...item, needsBlob: item.blob ? 1 : 0 }); },
     stats: async () => ({ count: writes.length }), sessionStats: async () => ({ count: writes.length, maxSeq: 0 }),
     head: async (sessionId, limit) => writes.filter((i) => i.sessionId === sessionId).sort((a, b) => a.seq - b.seq).slice(0, limit).map((i) => ({ ...i })),
@@ -24,6 +27,9 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
     },
     remove: async (sessionId, seqs) => {
       for (let i = writes.length - 1; i >= 0; i--) if (writes[i].sessionId === sessionId && seqs.includes(writes[i].seq)) writes.splice(i, 1);
+    },
+    dropSession: async (sessionId) => {
+      for (let i = writes.length - 1; i >= 0; i--) if (writes[i].sessionId === sessionId) writes.splice(i, 1);
     },
   };
   let beforeSet = null;
@@ -225,4 +231,90 @@ test("403 on an attachment upload marks the session dead and preserves its queue
     expect(await w.call("flushInner()")).toBe(false);
     expect(w.requests).toHaveLength(1);
   }
+});
+
+const queued = (w, seqs, resBody) => Promise.all(seqs.map((seq) => w.db.put({ sessionId: 1, seq, ts: "2026-10-11T17:00:00Z", tabId: "tab1", tabHost: "app.test", kind: "request", payload: { resBody } })));
+const eventsServer = (w, capBytes) => {
+  const posted = [];
+  w.context.fetch = async (url, init) => {
+    w.requests.push({ url: String(url), ...init });
+    if (new TextEncoder().encode(init.body).length > capBytes) return { ok: false, status: 413, text: async () => '{"error":"too large"}' };
+    posted.push(JSON.parse(init.body).events);
+    return { ok: true, status: 200, text: async () => '{"inserted":1}' };
+  };
+  return posted;
+};
+
+test("events upload in seq order under the byte target; a 413 halves the batch and never ends the session", async () => {
+  const w = worker();
+  await queued(w, [1, 2, 3, 4, 5, 6], "x".repeat(4000));
+  const posted = eventsServer(w, 10_000);
+  for (let i = 0; i < 12 && w.writes.length; i++) await w.call("flushInner()");
+  expect(w.data.rec.dead).toBeUndefined();
+  expect(w.writes).toHaveLength(0);
+  expect(posted.flat().map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  expect(posted.every((batch) => batch.length <= 2)).toBe(true);
+});
+
+test("an event the server refuses even alone travels as a note at its own seq", async () => {
+  const w = worker();
+  await queued(w, [1], "x".repeat(4000));
+  eventsServer(w, 1000);
+  expect(await w.call("flushInner()")).toBe(false);
+  const posted = eventsServer(w, 10_000);
+  expect(await w.call("flushInner()")).toBe(true);
+  expect(posted[0]).toMatchObject([{ seq: 1, kind: "note", payload: { text: expect.stringContaining("request event omitted") } }]);
+  expect(w.data.rec.dead).toBeUndefined();
+});
+
+test("a session a 413 killed before byte packing uploads its tail and finishes while the server holds it open", async () => {
+  for (const [reason, stopping, revived] of [["server rejected this session (413)", false, true], ["server rejected this session (413)", true, true], ["server rejected this session (409)", false, false]]) {
+    const w = worker(); const posted = [];
+    Object.assign(w.data.rec, { policy: null, dead: true, deadReason: reason, stopping, paused: false, activeMs: 0, resumeAt: "2026-10-11T17:00:00Z" });
+    await queued(w, [1, 2], "x");
+    w.context.fetch = async (url, init) => {
+      w.requests.push({ url: String(url), ...init });
+      if (String(url).endsWith("/events")) posted.push(...JSON.parse(init.body).events.map((e) => e.seq));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: 1, status: "recording", maxSeq: 0, updatedAt: "2026-10-11T17:03:56Z" }) };
+    };
+    const frozen = []; w.interceptSet(async ({ rec }) => { if (rec && !rec.dead) frozen.push(rec.activeMs); });
+    await w.call("reconcile()");
+    const patches = () => w.requests.filter((r) => r.method === "PATCH").map((r) => JSON.parse(r.body));
+    for (let i = 0; i < 50 && revived && w.data.rec; i++) await new Promise((r) => setImmediate(r));
+    if (!revived) { expect(w.data.rec.dead).toBe(true); expect(patches()).toEqual([]); continue; }
+    expect(posted).toEqual([1, 2]);
+    expect(patches()).toEqual([{ status: "done" }]);
+    expect(w.data.rec).toBeNull();
+    if (!stopping) expect(frozen[0]).toBe(236_000);
+  }
+});
+
+test("a revived finish whose close fails is retried by the next reconcile; Start and Continue wait for it", async () => {
+  const w = worker(); let closeFails = true;
+  Object.assign(w.data.rec, { policy: null, dead: true, deadReason: "server rejected this session (413)", paused: false, activeMs: 0, resumeAt: "2026-10-11T17:00:00Z" });
+  w.context.fetch = async (url, init) => {
+    w.requests.push({ url: String(url), ...init });
+    if (init.method === "PATCH" && closeFails) return { ok: false, status: 503, text: async () => '{"error":"unavailable"}' };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ id: 1, status: "recording", maxSeq: 0 }) };
+  };
+  const closes = () => w.requests.filter((r) => r.method === "PATCH").length;
+  const settle = async (done) => { for (let i = 0; i < 50 && !done(); i++) await new Promise((r) => setImmediate(r)); };
+  await w.call("reconcile()");
+  await settle(() => closes() === 1 && !w.call("finishingRevived"));
+  expect(w.data.rec).toMatchObject({ revived: true, stopping: true });
+  for (const call of ['startSession("x")', "continueSession(1)"]) await expect(w.call(call)).rejects.toThrow("still uploading");
+  closeFails = false;
+  await w.call("reconcile()");
+  await settle(() => !w.data.rec);
+  expect(closes()).toBe(2);
+  expect(w.data.rec).toBeNull();
+});
+
+test("a stop bound to a recording never stops the one Start or Continue adopted meanwhile", async () => {
+  const w = worker();
+  w.data.rec = { sessionId: 2, generation: "second", tabs: {}, seq: 0 };
+  expect(await w.call('stopSession(null, {sessionId: 1, generation: "first"})')).toBeNull();
+  expect(w.data.rec).toMatchObject({ sessionId: 2, generation: "second" });
+  expect(w.data.rec.stopping).toBeUndefined();
+  expect(w.requests).toHaveLength(0);
 });
