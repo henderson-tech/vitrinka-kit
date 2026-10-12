@@ -588,7 +588,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
             <AlertIcon />
           </span>
           <span className="msg">{shortFailure(failure, report, startFailed)}</span>
-          {rec || report ? (
+          {(rec || report) && !startFailed ? (
             <button type="button" className="fb" onClick={p.onRetry}>
               Retry
             </button>
