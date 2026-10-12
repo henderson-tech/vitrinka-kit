@@ -10,9 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { holdFace, leadStatus, pingLeader, RecorderBusyError, sendToLeader, setLeadStopping, setRemoteStop, startLead } from '../lead';
 import { ask, LEAD_ATTR, PAGE_ATTR, readClaim, sendCommand, serveHello, takeClaim } from '../one';
-import { getState, pushEvent, setState } from '../queue';
+import { getState, pushEvent, REC_KEY, setState } from '../queue';
 import { startSession } from '../session';
 import { leadState, notify } from '../state';
+import { getRecorderStorage } from '../storage';
 import { RECORDER_ID } from '../version';
 import { extensionElsewhere, extensionHere, fakeDocument, settle } from './one-fake';
 import { fakeLocation, freshRecorder, installStub, liveSession, ROUTE, type Stub } from './stub';
@@ -269,5 +270,25 @@ describe('a waiting session is never replaced', () => {
     expect(getState()?.sessionId).toBe('sess-1');
     expect(readClaim(env)?.by).toBe('extension');
     expect(created()).toBe(0);
+  });
+});
+
+describe('another bundle in this document', () => {
+  it('a waiting session its leader already ended is not resumed from a stale cache', async () => {
+    const { env, attrs } = fakeDocument();
+    // The leading bundle (protocol-wise a holder like any other) records this document.
+    const leader = extensionHere(env);
+    leader.start();
+    setState(liveSession());
+    startLead(handlers, env);
+    expect(leadState.following).toBe('extension');
+    // Its Stop removed the shared record; storage events never reach the document that wrote them.
+    getRecorderStorage().remove(REC_KEY);
+    expect(getState()?.sessionId).toBe('sess-1');
+    leader.stop();
+    await settle();
+    expect(getState()).toBeNull();
+    expect(attrs.has(LEAD_ATTR)).toBe(false);
+    expect(leadState.following).toBeNull();
   });
 });

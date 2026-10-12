@@ -48,8 +48,9 @@ import {
   updateClaim,
   watchClaim,
 } from './one';
-import { getState, stoppingElsewhere } from './queue';
+import { adoptStoredState, getState, REC_KEY, stoppingElsewhere } from './queue';
 import { leadState, notify, subscribe } from './state';
+import { getRecorderStorage } from './storage';
 import { RECORDER_ID } from './version';
 
 export type Leader = OneParty;
@@ -153,6 +154,16 @@ function syncClaim(): void {
   // unheld document only: another holder keeps it, and an extension
   // recording elsewhere keeps the browser — the session waits (D14).
   if (want.state === 'saved' || cur || extensionLive()) return;
+  // Another recorder bundle in THIS document may have ended (or replaced)
+  // the session meanwhile, and storage events never reach the document that
+  // wrote them: re-read the durable record before resuming from the cache.
+  if (!starting) {
+    const change = adoptStoredState(getRecorderStorage().getString(REC_KEY) ?? null);
+    if (change === 'ended' || change === 'joined') {
+      notify();
+      return;
+    }
+  }
   if (takeClaim(env, self, { id: self.inst, ...want }).ok) announce(env, self, liveOf());
 }
 
