@@ -16,6 +16,7 @@ import type { RedactionPolicy } from '@vitrinka/redact';
 import type { SessionDone } from '../protocol';
 import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
 import { type StagedImage, stageAttachments } from './attachments';
+import { primeNavigation } from './capture/nav';
 import { redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
 import type { HudAttachment } from './hud/controller';
@@ -244,6 +245,10 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   });
   await attachTags(ses.id, opts.tags);
   armReconcile();
+  // The start's nav names where the document is NOW (a recorder bundle that
+  // followed until this Start never heard the navigations in between) and
+  // seeds the nav lane's dedupe with it.
+  primeNavigation();
   pushEvent(
     'nav',
     { url: redactUrl(currentUrl()), route: currentRoute.pathname },

@@ -72,10 +72,11 @@ export function RecorderProvider({
     // mounted first, hears the traffic. A mount takes the wrappers over too
     // (a stale Fast Refresh copy's, an idle bundle's) unless another bundle
     // on the page leads — never from under a live recording.
-    const ownLanes = () => {
+    /** True when the nav takeover recorded the navigation it had missed. */
+    const ownLanes = (): boolean => {
       ownNetworkPatch();
       ownConsolePatch();
-      ownNavLane();
+      return ownNavLane();
     };
     if (leadState.following === 'page') {
       patchNetwork();
@@ -99,12 +100,19 @@ export function RecorderProvider({
     let wasRecording = false;
     let wasPaused = false;
     let wasFlying = false;
+    // This document's own session waited while another recorder led (D14).
+    let waited = false;
     const syncLanes = () => {
       void syncFlight();
       const rec = getState();
+      if (rec !== null && leadState.following !== null) waited = true;
       const recording = rec !== null && !rec.dead && leadState.following === null;
       const flying = flightActive();
-      if ((recording && !wasRecording) || (flying && !wasFlying)) ownLanes();
+      const caughtUp = (recording && !wasRecording) || (flying && !wasFlying) ? ownLanes() : false;
+      // A waiting session resumes: its timeline gets this document's nav as a
+      // keyframe (the mount's, captured while following, was dropped).
+      if (recording && !wasRecording && waited && !caughtUp) noteNavigation(true);
+      if (rec === null || recording) waited = false;
       if (wasFlying && !flying) stopRRWeb();
       if (recording && !wasRecording) startRRWeb();
       else if (!recording && wasRecording) stopRRWeb();
