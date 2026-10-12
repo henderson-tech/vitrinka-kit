@@ -588,6 +588,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
             <AlertIcon />
           </span>
           <span className="msg">{shortFailure(failure, report, startFailed)}</span>
+          {/* The full reason (the tooltip is aria-hidden): a refusal names where the other recording lives. */}
+          <span className="sr">{failure}</span>
           {(rec || report) && !startFailed ? (
             <button type="button" className="fb" onClick={p.onRetry}>
               Retry

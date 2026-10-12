@@ -165,6 +165,8 @@ test('ONE recorder: a refused Start says why and offers no Retry; a second remot
   await page.getByRole('button', { name: 'Start recording' }).click();
   const failed = page.getByRole('alert');
   await expect(failed).toContainText('Already recording');
+  // The full reason reaches a screen reader too (the tooltip is aria-hidden).
+  await expect(failed).toContainText('the Vitrinka extension is recording in another tab — stop it there first');
   // D12: the refusal stays; a session that appears meanwhile (a resume) never turns it into a Stop's Retry.
   await page.evaluate(() => (window as unknown as { recordNow: () => void }).recordNow());
   await expect(failed.getByRole('button', { name: 'Retry' })).toHaveCount(0);
