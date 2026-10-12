@@ -253,7 +253,8 @@ export function takeClaim(env: OneEnv, self: OneSelf, next: { id: string; state:
     id: next.id,
     state: next.state,
     sessionId: next.sessionId ?? '',
-    since: cur?.id === next.id ? cur.since : Date.now(),
+    // Re-taking its own live claim keeps its age; a new claim (or one over a `saved` face) starts now.
+    since: cur?.id === next.id && isLive(cur.state) ? cur.since : Date.now(),
   };
   writeClaim(env, claim);
   return { ok: true, claim };
