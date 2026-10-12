@@ -26,6 +26,7 @@ import { createPortal } from 'react-dom';
 import type { RecorderStorage } from '../storage';
 import type { HudAttachment, HudController, HudLinkFlow, HudReport } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
+import { bindChords } from './chords';
 import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
 import {
@@ -322,7 +323,11 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     setStarting(true);
     controller
       .start({ title: defaultTitle() })
-      .catch((e) => console.warn('vitrinka: start failed', e))
+      .catch((e: unknown) => {
+        // A refusal (another recorder leads, D12) or a failed create: the pill says why.
+        console.warn('vitrinka: start failed', e);
+        dispatch({ type: 'startFailed', message: errorText(e) });
+      })
       .finally(() => setStarting(false));
   }, [controller, defaultTitle, beginLink]);
   onStartRef.current = onStart;
@@ -331,10 +336,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   }, [controller]);
 
   // The inline flows. Stop drains first; a refusal (offline) keeps the session.
+  // One Stop at a time: a remote stop (D11) or a Retry arriving while a save
+  // is out never starts a second one; the flag clears as the face settles.
+  const stopInFlight = useRef(false);
   const runStop = useCallback(() => {
+    if (stopInFlight.current) return;
+    stopInFlight.current = true;
     const t0 = Date.now();
     const settle = (ev: Parameters<typeof dispatch>[0]) =>
-      setTimeout(() => dispatch(ev), Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
+      setTimeout(() => {
+        stopInFlight.current = false;
+        dispatch(ev);
+      }, Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
     controller.stop().then(
       (r) => settle({ type: 'saved', ...r }),
       (e: unknown) => {
@@ -375,6 +388,8 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     dispatch({ type: 'dismiss' });
   }, [failedReport, controller]);
   const onRetry = useCallback(() => {
+    // A refused Start has nothing to retry (and must never run a Stop).
+    if (flow.face === 'failed' && flow.start) return;
     if (failedReport) {
       dispatch({ type: 'retry', queued: 0 });
       if (reportRef.current) runReport(reportRef.current);
@@ -382,7 +397,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     }
     dispatch({ type: 'retry', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
     runStop();
-  }, [failedReport, controller, runStop, runReport]);
+  }, [flow, failedReport, controller, runStop, runReport]);
   // A stop confirm outlives nothing: the session ended under it (401, the server).
   useEffect(() => {
     if (!rec && flow.face === 'confirm' && flow.action === 'stop') dispatch({ type: 'cancel' });
@@ -412,21 +427,52 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     void controller.refreshRecents();
   }, [menu, controller]);
 
-  // Shortcuts (window keydown, CAPTURE — the host's shield stops a keydown
-  // from a focused HUD control before it could bubble to window, and a drag
-  // leaves the handle focused): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause · ⌥⇧S stop.
+  // ONE recorder: another recorder leads and this HUD is its remote (D8).
+  const following = snap.following ?? null;
+  // Becoming the remote — or ceasing to be — leaves nothing open: the sheet,
+  // menu, link sheet and annotate mode close (the drafts and their images
+  // survive, as a cancel keeps them), and the pill comes back idle.
+  const wasFollowing = useRef(following);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (!e.altKey || !e.shiftKey || e.metaKey || e.ctrlKey) return;
-      if (e.code === 'KeyA') toggleAnnotate();
-      else if (e.code === 'KeyN') openNote();
-      else if (e.code === 'KeyP') onPause();
-      else if (e.code === 'KeyS') askStop();
-      else return;
-      e.preventDefault();
-    };
-    return listen(window, 'keydown', key, { capture: true });
-  }, [toggleAnnotate, openNote, onPause, askStop]);
+    if (wasFollowing.current === following) return;
+    wasFollowing.current = following;
+    dispatch({ type: 'follow' });
+    if (!following) return;
+    setSheet(null);
+    setMenu(false);
+    setMarking(false);
+    closeLink();
+    controller.setAnnotating(false);
+  }, [following, closeLink, controller]);
+
+  // A remote stop (D11) runs this HUD's own Stop flow: no second confirm.
+  const remoteStop = useRef<() => void>(() => undefined);
+  remoteStop.current = () => {
+    setSheet(null);
+    setMenu(false);
+    setMarking(false);
+    controller.setAnnotating(false);
+    dispatch({ type: 'stop', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
+    runStop();
+  };
+  useEffect(() => controller.onRemoteStop?.(() => remoteStop.current()), [controller]);
+  // The controller holds its claim as `saved` while a stop's face shows (D7).
+  useEffect(() => {
+    controller.faceChanged?.(flow.face);
+  }, [flow.face, controller]);
+  useEffect(() => () => controller.faceChanged?.('none'), [controller]);
+
+  // Shortcuts (chords.ts): ⌥⇧A annotate · ⌥⇧N note · ⌥⇧P pause · ⌥⇧S stop —
+  // bound by the leader's HUD only (D9).
+  useEffect(() => {
+    if (following) return;
+    return bindChords(window, (c) => {
+      if (c === 'annotate') toggleAnnotate();
+      else if (c === 'note') openNote();
+      else if (c === 'pause') onPause();
+      else askStop();
+    });
+  }, [following, toggleAnnotate, openNote, onPause, askStop]);
 
   // Esc anywhere and click-outside close the sheet (capture-phase, so the
   // page's own dialog never sees the Esc that closed ours).
@@ -616,8 +662,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       ? { 'data-tuck': place.tuck, style: { '--ty': String(place.y) } as CSSProperties }
       : { 'data-row': rowOf(place.spot), 'data-col': colOf(place.spot) };
 
+  // A remote shows nothing (D7: one pill per document) — except a refused
+  // Start's face, which says why the pill steps aside until it is dismissed.
+  const hidden = following !== null && !(flow.face === 'failed' && flow.start === true);
+
   return (
-    <div ref={rootRef} className="hud" data-size={snap.prefs.size} data-spot={'spot' in place ? place.spot : undefined}>
+    <div
+      ref={rootRef}
+      className="hud"
+      data-size={snap.prefs.size}
+      data-spot={'spot' in place ? place.spot : undefined}
+      {...(hidden ? { 'data-following': following, style: { display: 'none' } } : {})}
+    >
       <style>{HUD_CSS}</style>
       {annotating && (rec || marking) ? <AnnotateOverlay onPick={onPick} onCancel={cancelAnnotate} /> : null}
       <div ref={dock.ref} className={dock.dragging ? 'dock dragging' : 'dock'} {...dockAttrs} onClickCapture={dock.onClickCapture}>

@@ -154,7 +154,9 @@ function SyncGlyph({ chip }: { chip: SyncChip }): ReactElement {
 }
 
 /** "Couldn't save" in a few words; the full sentence rides the tooltip. */
-function shortFailure(message: string, report: boolean): string {
+function shortFailure(message: string, report: boolean, start: boolean): string {
+  // A refused Start (another recorder leads, D12) or one that failed.
+  if (start) return /already recording|is recording|still saving/i.test(message) ? 'Already recording' : 'Couldn’t start';
   const offline = /unreachable|offline|fetch|network/i.test(message);
   if (report) return offline ? 'Offline — not sent' : 'Couldn’t send';
   if (offline) return 'Offline — kept here';
@@ -375,6 +377,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   const failure = shownFlow.face === 'failed' ? shownFlow.message : '';
   // A bug report's send: "Sending…", "Sent", "Couldn't send" — and it can always be retried.
   const report = 'report' in shownFlow && shownFlow.report === true;
+  const startFailed = shownFlow.face === 'failed' && shownFlow.start === true;
 
   return (
     <div
@@ -584,8 +587,10 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
           <span className="warn">
             <AlertIcon />
           </span>
-          <span className="msg">{shortFailure(failure, report)}</span>
-          {rec || report ? (
+          <span className="msg">{shortFailure(failure, report, startFailed)}</span>
+          {/* The full reason (the tooltip is aria-hidden): a refusal names where the other recording lives. */}
+          <span className="sr">{failure}</span>
+          {(rec || report) && !startFailed ? (
             <button type="button" className="fb" onClick={p.onRetry}>
               Retry
             </button>

@@ -10,13 +10,14 @@
  */
 import type { HudController, HudLinkFlow, HudSnapshot } from './hud/controller';
 import { readLink, recorderConfig, vitrinkaLinked } from './config';
+import { holdFace, leadStatus, sendToLeader, setRemoteStop } from './lead';
 import { forgetLink, linkDevice } from './link';
 import { cachedAccount, cachedPrefs, fetchMe, savePrefs } from './me';
 import { getState, health } from './queue';
 import { boardUrlOf, readRecents, refreshRecents } from './recents';
 import { canAttach, canReport, holdReport, sendReport } from './report';
 import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from './session';
-import { annotateState, setAnnotating, subscribe } from './state';
+import { annotateState, leadState, setAnnotating, subscribe } from './state';
 
 function build(): HudSnapshot {
   const rec = getState();
@@ -62,6 +63,7 @@ function build(): HudSnapshot {
     version: RECORDER_ID,
     canReport: canReport(),
     canAttach: canAttach(),
+    ...(leadState.following ? { following: leadState.following } : {}),
   };
 }
 
@@ -81,10 +83,19 @@ export function createPageController(): HudController {
     async start({ title }) {
       await startSession({ title });
     },
+    // While another recorder leads, pause, stop and a note act on it (ONE recorder D11).
     async togglePause() {
+      if (leadState.following) return sendToLeader('pause');
       await togglePause();
     },
     async stop() {
+      if (leadState.following) {
+        sendToLeader('stop');
+        const sessionId = leadStatus().claim?.sessionId;
+        return sessionId ? { sessionId } : {};
+      }
+      // The stop's face holds the claim as `saved` from its first moment (D7).
+      holdFace('saving');
       const boardUrl = getState()?.boardUrl;
       const sessionId = getState()?.sessionId;
       const done = await stopSession();
@@ -93,7 +104,12 @@ export function createPageController(): HudController {
       const url = boardUrlOf(done) ?? boardUrl;
       return { ...(url ? { boardUrl: url } : {}), ...(sessionId ? { sessionId } : {}) };
     },
-    note: (text, attachments) => addNote(text, attachments),
+    note(text, attachments) {
+      if (!leadState.following) return addNote(text, attachments);
+      // Images never cross to the other recorder; its note carries the text.
+      if (attachments?.length) console.warn('vitrinka: the note goes to the recorder that leads — without its images');
+      sendToLeader('note', text);
+    },
     annotate: ({ text, rect, selector, task, attachments }) =>
       addAnnotation(text, rect, selector, { task, ...(attachments ? { attachments } : {}) }),
     setAnnotating,
@@ -115,5 +131,7 @@ export function createPageController(): HudController {
     refreshRecents: () => refreshRecents(getState()?.sessionId ?? null),
     holdReport,
     report: (r) => sendReport(r),
+    onRemoteStop: setRemoteStop,
+    faceChanged: holdFace,
   };
 }

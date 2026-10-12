@@ -239,6 +239,21 @@ predating them answers 422). Those preferences
 and the device's last five recordings (id, title, start time, length,
 status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 
+## The page recorder beside the extension
+
+When a page embeds the web recorder and the browser also runs the Vitrinka
+extension, the two coordinate as one recorder (web 0.5.0). They share only
+the DOM, so every script on the page can read what they say there:
+`data-vitrinka-page` on `<html>` (the recorder's id, `web/0.5.0`) and
+`data-vitrinka-lead` (`{v, by, id, state, sessionId, since}`: which side
+records, a random holder id, the state and the session's id). Actions are
+`vitrinka:hello`, `vitrinka:command` and `vitrinka:ack` window events with
+a JSON-string detail. None of it carries a title, workspace, project, URL or
+credential, and neither side ever uses the other's credential. A command can
+only pause, stop or add a note to the recording already under way. The
+HUD is an open shadow root on the page, so a page script could already press
+those buttons. Nothing of this goes over the network.
+
 ## Retention & access
 
 Recorded sessions live on your vitrinka server under its access rules; the

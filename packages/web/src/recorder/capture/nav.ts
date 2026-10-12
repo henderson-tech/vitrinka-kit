@@ -11,15 +11,19 @@ import { redactUrl } from './redact';
 
 let lastUrl = '';
 
-/** Record a navigation to the document's current URL (idempotent per URL). */
-export function noteNavigation(): void {
+/**
+ * Record a navigation to the document's current URL (idempotent per URL;
+ * `force` records it again — the keyframe of a session that resumes here).
+ * True when it recorded one.
+ */
+export function noteNavigation(force = false): boolean {
   const loc = globalThis.location;
-  if (!loc) return;
+  if (!loc) return false;
   const url = loc.href;
   setCurrentPath(loc.pathname);
-  if (url === lastUrl) return;
+  if (url === lastUrl && !force) return false;
   lastUrl = url;
-  pushEvent(
+  return null !== pushEvent(
     'nav',
     { url: redactUrl(url), route: loc.pathname, spa: true },
     { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
@@ -33,26 +37,61 @@ export function primeNavigation(): void {
 }
 
 const PATCH_MARK = '__vitrinkaRecorderNavPatched';
+const UNPATCH_MARK = '__vitrinkaRecorderNavUnpatch';
+
+type NavGlobals = typeof globalThis & { [PATCH_MARK]?: unknown; [UNPATCH_MARK]?: () => void };
+
+/** This module instance's mark — whose History wrap is live (see `ownNavLane`). */
+const OWNER: object = {};
 
 /** Wrap pushState/replaceState + popstate/hashchange. Idempotent across HMR. */
 export function installNavLane(): void {
-  const g = globalThis as typeof globalThis & { [PATCH_MARK]?: boolean };
+  const g = globalThis as NavGlobals;
   if (g[PATCH_MARK] || typeof history === 'undefined') return;
-  g[PATCH_MARK] = true;
+  g[PATCH_MARK] = OWNER;
+  const restores: (() => void)[] = [];
   const wrap = (name: 'pushState' | 'replaceState') => {
     const orig = history[name];
-    history[name] = function (this: History, ...args: Parameters<History['pushState']>) {
+    const wrapped = (history[name] = function (this: History, ...args: Parameters<History['pushState']>) {
       const r = orig.apply(this, args);
       // After the URL changed, off the caller's stack so a router's own
       // synchronous state update never sees the recorder in its way.
       queueMicrotask(noteNavigation);
       return r;
-    };
+    });
+    // Restored only while it is still ours: a wrap stacked on top keeps ours beneath it.
+    restores.push(() => {
+      if (history[name] === wrapped) history[name] = orig;
+    });
   };
   wrap('pushState');
   wrap('replaceState');
-  addEventListener('popstate', () => queueMicrotask(noteNavigation));
-  addEventListener('hashchange', () => queueMicrotask(noteNavigation));
+  const onNav = () => queueMicrotask(noteNavigation);
+  addEventListener('popstate', onNav);
+  addEventListener('hashchange', onNav);
+  g[UNPATCH_MARK] = () => {
+    for (const r of restores.splice(0)) r();
+    removeEventListener('popstate', onNav);
+    removeEventListener('hashchange', onNav);
+    delete g[PATCH_MARK];
+    delete g[UNPATCH_MARK];
+  };
+}
+
+/**
+ * Make this module's History wrap the live one (ONE recorder): the first
+ * recorder bundle on the page installs it, but whichever bundle leads must
+ * hear the navigations. A no-op when it already is; true when the takeover
+ * recorded the navigation it had missed.
+ */
+export function ownNavLane(): boolean {
+  const g = globalThis as NavGlobals;
+  if (g[PATCH_MARK] === OWNER) return false;
+  g[UNPATCH_MARK]?.();
+  delete g[PATCH_MARK];
+  installNavLane();
+  // The navigations before the takeover reached the other bundle only: catch up.
+  return noteNavigation();
 }
 
 /** Test-only. */

@@ -20,6 +20,7 @@ import { getRecorderStorage } from './storage';
 export { useRecorderRoute };
 export type { RecorderControl, RecorderStatus } from './control';
 export type { RecorderConfig } from './config';
+export { type Leader, RecorderBusyError } from './lead';
 export { configureRecorderStorage, type RecorderStorage } from './storage';
 
 export interface VitrinkaRecorderRootProps {

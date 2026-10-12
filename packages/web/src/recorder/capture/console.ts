@@ -40,17 +40,37 @@ function record(text: string): void {
 
 const UNPATCH_MARK = '__vitrinkaRecorderConsoleUnpatch';
 
-type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: boolean; [UNPATCH_MARK]?: () => void };
+type PatchGlobals = typeof globalThis & { [PATCH_MARK]?: unknown; [UNPATCH_MARK]?: () => void };
+
+/**
+ * This module instance's mark. The wrappers are global, so the mark says WHOSE
+ * are live: another recorder bundle's on the page, or a stale Fast Refresh
+ * copy's. `ownConsolePatch` hands them to this one (ONE recorder: whoever leads
+ * captures, not whoever mounted first).
+ */
+const OWNER: object = {};
 
 /** Restore console.error (while it is still ours) and drop the window listeners. */
 export function unpatchConsole(): void {
-  (globalThis as PatchGlobals)[UNPATCH_MARK]?.();
+  const g = globalThis as PatchGlobals;
+  // Another bundle's live wrapper is its own to remove.
+  if (g[PATCH_MARK] !== undefined && g[PATCH_MARK] !== OWNER) return;
+  g[UNPATCH_MARK]?.();
+}
+
+/** Make this module's wrapper the live one (a no-op when it already is). */
+export function ownConsolePatch(): void {
+  const g = globalThis as PatchGlobals;
+  if (g[PATCH_MARK] === OWNER) return;
+  g[UNPATCH_MARK]?.();
+  delete g[PATCH_MARK];
+  patchConsole();
 }
 
 export function patchConsole(): void {
   const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
-  g[PATCH_MARK] = true;
+  g[PATCH_MARK] = OWNER;
   const origError = console.error;
   const orig = origError.bind(console);
   const patched = (...args: unknown[]) => {

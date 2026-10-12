@@ -1,5 +1,63 @@
 # @vitrinka/web
 
+## 0.5.0
+
+- **The page recorder and the Vitrinka extension are one recorder.** A page
+  could embed this recorder while the tester's browser ran the extension,
+  and the two fought. The extension's shortcuts swallowed the pill's ⌥⇧A/N/P,
+  either one could start its own recording, and two pills could show. Now the
+  first to start leads and the other becomes its remote: its pill hides, it
+  captures nothing (no rrweb, click, nav, console or net lane, no flight
+  recorder), and its pause, stop, note and shortcuts act on the leader. Two
+  recordings never run at once. The session lands where the leader is
+  configured; neither side ever borrows the other's credential.
+- **They speak over the DOM, the one thing their worlds share.** The
+  recorder marks the document with `data-vitrinka-page="web/0.5.0"` on
+  `<html>`. Whoever records holds `data-vitrinka-lead`, a JSON claim
+  (`{v, by, id, state, sessionId, since}`) written only by its holder and
+  taken by a synchronous check-and-set before any network call. Actions are
+  `window` CustomEvents with a JSON-string `detail`: `vitrinka:hello`,
+  `vitrinka:command` (`pause`, `stop`, `note`) and `vitrinka:ack`. Each is
+  answered inside its own dispatch, so a page never waits on a timer. A
+  holder that no longer answers (an extension reloaded or uninstalled) is
+  cleared under its own id. The page writes nothing until its root's effect
+  runs, so a server-rendered `<html>` hydrates untouched.
+- **Start is refused while the other side leads.** The pill's Start and
+  `__vitrinkaRecorder.start()` check before any network call and reject with
+  a `RecorderBusyError` (`code: 'recorder_busy'`, `leader`). The pill shows
+  the reason (**Already recording**, the full sentence on hover) until you
+  dismiss it, for example "the Vitrinka extension is recording in another tab
+  — stop it there first". Any other failed Start now shows **Couldn't start**
+  on the pill instead of only reaching the console.
+- **A recording that comes back never preempts.** A session resumed after a
+  reload, or joined from another tab, into a document or browser the
+  extension leads waits as a follower, capturing nothing. It resumes when the
+  extension lets go. Nothing is stopped on your behalf.
+- **Relayed shortcuts keep working.** Chrome hands the extension's command
+  chords to its worker, never to the page. The extension relays them as a
+  synthetic keydown, and the leading HUD acts on it (`isTrusted: false`
+  included). It takes the key with `preventDefault` only, so a host that
+  skips `defaultPrevented` keys leaves it alone. A follower's HUD binds no
+  chord.
+- `__vitrinkaRecorder.status()` gains `leader` (`'page' | 'extension'`) and
+  `following`. While the extension leads, `pause`, `stop` and `note` act on
+  it, and a note it can no longer take rejects with "the recording ended
+  before the note arrived" instead of landing in a later session.
+- `HudController`: `HudSnapshot.following` hides the HUD as the leader's
+  remote. It closes the sheet, menu, link sheet and annotate mode, keeps the
+  drafts and their images and keeps the dock spot. `onRemoteStop(run)`
+  registers the HUD's Stop flow, which a remote stop runs with no second
+  confirm. `faceChanged(face)` reports the inline flow face, so the host
+  holds its claim as `saved` while **Saved · Open board** shows. `HudFace`
+  is exported from `@vitrinka/web/hud`.
+- **`@vitrinka/web/one.iife.js`** (`build/one.iife.js`) is the protocol as
+  one 5 KB script defining `globalThis.VitrinkaOne`, for the extension's
+  content scripts. The extension vendors it beside `hud.iife.js` under the
+  same pin. The protocol types (`Claim`, `Hello`, `Command`, `Ack`, …) are
+  exported from `@vitrinka/web/hud`.
+- An older extension (≤ 0.10) is invisible to the protocol, and both behave
+  as before.
+
 ## 0.4.0
 
 - **Notes, annotations and bug reports carry images.** Testers asked to

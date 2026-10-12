@@ -34,6 +34,14 @@ export function setAnnotating(active: boolean): void {
   notify();
 }
 
+/**
+ * ONE recorder (lead.ts): who else leads this document's recording while
+ * this recorder follows — `'extension'` or `'page'` (another recorder bundle
+ * on the page) — else null. A follower captures nothing: every lane, the
+ * rrweb stream and the flight recorder check it.
+ */
+export const leadState: { following: 'page' | 'extension' | null } = { following: null };
+
 // -- change subscription (the HUD re-renders off this) -----------------------
 
 const listeners = new Set<() => void>();

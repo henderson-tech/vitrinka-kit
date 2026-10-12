@@ -36,8 +36,10 @@ scripts:
     cmd: "bun run build && bun run typecheck && bun run test"
     up: false
     profile: small
+  # The web browser suite. Like ci.yml, the workspace's @vitrinka/redact and
+  # @vitrinka/link build first: the HUD bundle resolves them through build/.
   e2e:
-    cmd: bun run test:e2e:web
+    cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun run test:e2e:web"
     up: false
 
 resources:

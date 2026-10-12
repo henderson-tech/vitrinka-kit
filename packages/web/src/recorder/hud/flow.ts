@@ -6,6 +6,10 @@
  *                       └─cancel→ none                    └─dismiss→ none
  *   none ─ask(unlink)→ confirm ─confirm→ none   (the caller unlinks)
  *   none ─send→ saving ─saved→ saved …          (a bug report, `report: true`)
+ *   any but saving ─stop→ saving …              (a remote stop: no confirm, ONE recorder D11)
+ *   none ─startFailed→ failed ─dismiss→ none     (a refused or failed Start, `start: true`, D12)
+ *   confirm | saved | failed ─follow→ none       (another recorder leads, or let go: the pill comes back
+ *                                                 idle; a refused Start's face stays until dismissed)
  *
  * Saved stays until the tester dismisses it. A report's saving, saved and
  * failed faces carry `report: true` through retries, so the pill can say
@@ -23,7 +27,8 @@ export type Flow =
   | { face: 'saving'; total: number; report?: true }
   /** `sessionId` lets a face saved before its board existed take the link from recents. */
   | { face: 'saved'; boardUrl?: string; sessionId?: string; report?: true }
-  | { face: 'failed'; message: string; report?: true };
+  /** `start`: a Start that was refused or failed — nothing to retry, only dismiss. */
+  | { face: 'failed'; message: string; report?: true; start?: true };
 
 export type FlowEvent =
   | { type: 'ask'; action: ConfirmAction }
@@ -34,7 +39,13 @@ export type FlowEvent =
   | { type: 'retry'; queued: number }
   | { type: 'saved'; boardUrl?: string; sessionId?: string }
   | { type: 'failed'; message: string }
-  | { type: 'dismiss' };
+  | { type: 'dismiss' }
+  /** The other recorder stopped this one's recording (D11): straight to saving. */
+  | { type: 'stop'; queued: number }
+  /** A Start was refused (`recorder_busy`) or failed (D12). */
+  | { type: 'startFailed'; message: string }
+  /** This HUD became, or stopped being, the other recorder's remote: nothing stays open. */
+  | { type: 'follow' };
 
 export const NO_FLOW: Flow = { face: 'none' };
 
@@ -55,7 +66,8 @@ export function flowReducer(flow: Flow, ev: FlowEvent): Flow {
     case 'send':
       return flow.face === 'none' ? { face: 'saving', total: 0, report: true } : flow;
     case 'retry':
-      return flow.face === 'failed' ? { face: 'saving', total: ev.queued, ...reportOf(flow) } : flow;
+      // A failed Start has nothing to retry: pressing Start again is the retry.
+      return flow.face === 'failed' && !flow.start ? { face: 'saving', total: ev.queued, ...reportOf(flow) } : flow;
     case 'saved':
       return flow.face === 'saving'
         ? {
@@ -69,6 +81,15 @@ export function flowReducer(flow: Flow, ev: FlowEvent): Flow {
       return flow.face === 'saving' ? { face: 'failed', message: ev.message, ...reportOf(flow) } : flow;
     case 'dismiss':
       return flow.face === 'saved' || flow.face === 'failed' ? NO_FLOW : flow;
+    case 'stop':
+      return flow.face === 'saving' ? flow : { face: 'saving', total: ev.queued };
+    case 'startFailed':
+      return flow.face === 'none' ? { face: 'failed', message: ev.message, start: true } : flow;
+    case 'follow':
+      // A save in flight keeps its face (it settles on its own), and so does
+      // a refused Start: it is what tells the tester why the pill steps aside.
+      if (flow.face === 'none' || flow.face === 'saving' || (flow.face === 'failed' && flow.start)) return flow;
+      return NO_FLOW;
   }
 }
 

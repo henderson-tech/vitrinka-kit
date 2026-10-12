@@ -35,7 +35,7 @@ import { EVENTS_PER_POST, getState, MAX_BATCH_BYTES, splitRRWebEvents, utf8Bytes
 import { awaitBoard, boardUrlOf, noteRecent } from './recents';
 import { addAnnotation, createSession, imagePixels, type ViewRect } from './session';
 import type { HudAttachment } from './hud/controller';
-import { currentRoute, notify } from './state';
+import { currentRoute, leadState, notify } from './state';
 
 // -- the gate ----------------------------------------------------------------
 
@@ -59,8 +59,15 @@ export function wantFlight(): () => void {
   };
 }
 
+/** …and this recorder leads or is idle: a follower keeps no last minute (ONE recorder D2). */
 function flightWanted(): boolean {
-  return pills > 0 && getState() === null && vitrinkaLinked() && recorderConfig().flightRecorder !== false;
+  return (
+    pills > 0 &&
+    getState() === null &&
+    leadState.following === null &&
+    vitrinkaLinked() &&
+    recorderConfig().flightRecorder !== false
+  );
 }
 
 /**
@@ -94,6 +101,7 @@ export function syncFlight(): Promise<void> {
 
 /** Can the pill offer "Report a bug" now — into the live session, or with the idle clip? */
 export function canReport(): boolean {
+  if (leadState.following) return false;
   const rec = getState();
   if (rec) return !rec.paused && !rec.dead;
   return flightWanted() && flightActive();
