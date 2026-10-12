@@ -17,21 +17,21 @@ First match wins: a bare number (`718`) · a task URL · nothing given → the
 checkout binds it (branch name, worktree path or HEAD trailer carrying
 `vt-<id>`). None → say which task you would need; never guess from titles.
 
-Task ids are per-workspace. Spell the id `"<workspace>/<id>"` on
-`get {kind:"task"}` and on every id-only call that follows (`hand_back`,
-`spot`, `update`, `read_task_ref`), or pass `workspace` beside a bare id; a
-URL already names it in `/w/<workspace>/`. A bare number lands in the
-connection's default workspace — the one the registration names and the
-SessionStart binding line shows (`vitrinka config bind` changes it) — which
-may be another team's task under the same number: say which workspace
-answered and stop.
+Task ids are per-workspace. A bare number runs in the session's workspace —
+the repo binding the SessionStart line names, which Claude Code's vitrinka
+hook adds to every call (`vitrinka config bind` changes it). A task of
+another workspace is `"<workspace>/<id>"` on `get {kind:"task"}` and on
+every id-only call that follows (`hand_back`, `spot`, `update`,
+`read_task_ref`), or `workspace` beside a bare id; a URL already names it
+in `/w/<workspace>/`. If the workspace that answered is not the task's, say
+which answered and stop.
 
 ## Read the pickup
 
 `get {kind:"task", id, view:"pickup"}` — CLI `vitrinka task pickup [id|url]`
 (also says whether the branch exists on origin; `--json` puts the pickup in
 `data`). The reply is the pickup plus `rendered`, rows WHAT · LAST · DONE ·
-ON · BRANCH · LINKS · BEFORE · READ · WHO · NEXT · SKIP; empty rows are
+ON · BRANCH · RUN · LINKS · BEFORE · READ · WHO · NEXT · SKIP; empty rows are
 omitted, rows past the token cap are dropped whole and counted in SKIP.
 LINKS names the issue the task tracks and the pages it refers to — open one
 only when the work needs it; the pickup never fetches them.
@@ -46,7 +46,12 @@ only when the work needs it; the pickup never fetches them.
    never the done children, never a transcript until the pickup or the work
    says so.
 3. **BRANCH**: continue on it when given; absent → a fresh worktree named
-   `vt-<id>` so the hooks bind the session.
+   `vt-<id>` so the hooks bind the session. **RUN** names the memo run
+   island the continuation lives in: from that worktree run its `bind:`
+   command (`memo run locate <run>`) and export the `MEMO_RUN=…` it prints
+   before any memory write; `UNAVAILABLE` means the run's branch is not
+   checked out here — check out BRANCH and locate again. No `memo` on PATH:
+   read RUN as information only.
 4. **Claim**: the SessionStart hook usually did (WHO lists you); otherwise
    `vitrinka task start [id]`. The run is how the team sees you on the plan.
 5. **NEXT** is the work queue, not a menu: the task's open steps first, then

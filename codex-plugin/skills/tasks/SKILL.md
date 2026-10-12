@@ -11,8 +11,8 @@ The verbs are the MCP generic verbs (`list · get · create · update · delete
 · search {kind}`; `docs {topic:"kind:task"}` is the per-kind contract, `docs
 {topic:"tasks"}` the engine's) and the CLI (`vitrinka task|sprint|intake|
 project --help`). This skill carries only the laws the verbs do not print.
-Ids are per-workspace: `"<workspace>/<id>"` on every id-only call, or
-`workspace` beside a bare id.
+Ids are per-workspace: a bare id runs in the session's (bound) workspace;
+another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
 
 ## Vocabulary laws
 

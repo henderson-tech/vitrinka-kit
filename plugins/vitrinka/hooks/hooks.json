@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__vitrinka__",
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context bind 2>/dev/null || true", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

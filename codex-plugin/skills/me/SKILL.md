@@ -15,7 +15,8 @@ each verb's `--help` carry the flags. Without a shell the MCP twins are
 `create {kind:"task", type:"todo"}`, `list {kind:"task", f:{types:["todo"]}}`,
 `ripe_todos`, `complete_todo`, `create|list|update {kind:"milestone"}`
 (`reached: true` marks one) and `create|list|update|delete {kind:"agenda"}`.
-Ids are per-workspace: `"<workspace>/<id>"` on every id-only call.
+Ids are per-workspace: a bare id runs in the session's (bound) workspace,
+another workspace's is `"<workspace>/<id>"`.
 
 ## Contracts the verbs do not print
 

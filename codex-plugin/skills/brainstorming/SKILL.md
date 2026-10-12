@@ -70,6 +70,7 @@ Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic
 An authenticated service (`vitrinka auth login`; self-hosted deployments set `VITRINKA_URL`). No throwaway server: the board outlives the session.
 
 - **Board vs terminal**: the board is for 2-3 *different visual takes* — layouts, design directions, flows — or an explicit ask; plain preference questions stay in `AskUserQuestion`. Offer just-in-time, once; on decline stay text-only.
+- **A take of an in-app surface renders with the app's `app.css` and its real components, never a private kit.**
 - **Until the board actually exists** (created, composed, URL handed over), terminal mode is in force and the written-out map is mandatory. With a board, the FULL map lives on it — one CHAPTER section per decision — and the terminal map is shortened to its titles, never skipped.
 - **The board owns its decisions**: once the URL is handed over, never open `AskUserQuestion` for a decision that has a chapter — print the titles and the URL, listen, end the turn. The terminal keeps only questions deliberately left off the board and the closing question. Doubting delivery is never a reason to mirror: announce the listening rung; only the user's explicit ask moves the remaining questions to the terminal, and they are then retracted from the board, never asked in both.
 - **A decision settled in the terminal closes its board question**: `update {kind:"question", id, answer, note}` — released and delivered, no Send; a 409 names a different board pick — ask which stands.
