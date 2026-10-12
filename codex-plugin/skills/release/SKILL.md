@@ -75,6 +75,18 @@ URL, do not poll.
 - A repository bound after the track started joins only when a refresh lists
   every repository with `--repo`; the refresh output names bound
   repositories not in the release.
+- **Cutting what was deployed**: `--until <full sha>` pins the primary
+  repository's window end to that commit on its branch; only merges it
+  contains are swept and the window's head (`headSha` in the answer) is the
+  commit. Check `headSha` equals the deployed commit before cutting; the pin
+  is not stored. Refused: `release_until_unknown` (not a commit of the
+  repository), `release_until_outside` (off the branch, or before the
+  window start).
+- A window starts AFTER its start commit: the PR that commit merged
+  belongs to the previous release.
+- **Is the page current?** The release's `docHeadSha` is the head Eve's page
+  was written for; `hasDoc` with `docHeadSha` != `headSha` is a stale page
+  (a refresh moved the head and Eve has not answered it yet).
 - Failures name the repository: `release_start_required` (no start), a
   repository not bound (bind it under Settings → Projects), the GitHub App
   not connected, a repository the GitHub App cannot read. Read the
@@ -83,6 +95,10 @@ URL, do not poll.
 pin: internal/web/releases_pipeline_test.go#TestReleaseMultiRepoSweepPersistsBranchAndStarts
 pin: internal/web/releases_pipeline_test.go#TestReleaseRefreshRefusesBeforeCreatingState
 pin: internal/web/releases_pipeline_test.go#TestReleaseFirstWindowStartCorrectable
+pin: internal/web/releases_until_test.go#TestReleaseRefreshStopsAtUntil
+pin: internal/web/releases_until_test.go#TestReleaseUntilRefusals
+pin: internal/web/releases_window_test.go#TestReleaseWindowStartIsExclusive
+pin: internal/web/releases_window_test.go#TestReleaseDocHeadNamesTheSweepItAnswered
 
 ## cut
 
@@ -91,9 +107,12 @@ cutting twice is refused. `vitrinka project release --cut --yes [--title …]
 [--version …]` prints the frozen board and the fresh one. Refused until a
 sweep has completed and while any repository's listing was truncated. Share
 the frozen board without sign-in: `vitrinka board share <slug>` or
-`share_board`.
+`share_board`. `--expect-head <sha>` cuts only while the window's head is
+the commit you checked; `release_head_mismatch` means a refresh moved it and
+nothing was cut.
 
 pin: internal/web/releases_pipeline_test.go#TestReleaseCutChainsEveryRepo
+pin: internal/web/releases_window_test.go#TestReleaseCutExpectsHead
 
 ## notes — the release notes document
 

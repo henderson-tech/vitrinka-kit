@@ -59,7 +59,7 @@ Scope flags (all optional): `--board <slug>` (one board), `--project <p>
 claims no scope; only for a read-only overview session, never to work items
 another session owns).
 
-All scope resolves *within the token's workspace* — `wait_for_work` /
+All scope resolves *within the session's workspace* (the repo binding) — `wait_for_work` /
 `list {kind:"work"}` scoping by `{board}` or `{project, branch}` only ever
 sees that workspace's work; another workspace of the organisation is
 `<workspace>/<slug>` or `<workspace>/<project>`.
