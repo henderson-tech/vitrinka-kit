@@ -40,6 +40,7 @@ import {
   type SessionState,
   setState,
   stoppingElsewhere,
+  type StoredChange,
 } from './queue';
 import { claimForStart, settleStart, setLeadStopping } from './lead';
 import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
@@ -100,23 +101,48 @@ export function recoverRedactionPolicy(): void {
  * others (their pills go idle, their lanes stop sending into it), a Start
  * is joined as a reload joins it, a pause follows. Returns the unsubscribe.
  */
+/**
+ * Take a session record this document did not write — another tab's, or
+ * another recorder bundle's in this very document — with what it implies:
+ * an ended session drops its rules, a joined one recovers its policy and
+ * reconcile poll, and a policy that arrived late applies at once.
+ */
+export function applyStoredRecord(raw: string | null): StoredChange {
+  const had = getState()?.policy;
+  const change = adoptStoredState(raw);
+  if (change === 'unchanged') return change;
+  if (change === 'ended') setRedactionPolicy(null);
+  if (change === 'joined') {
+    recoverRedactionPolicy();
+    armReconcile();
+  }
+  // The starting tab writes the workspace policy after its first record:
+  // its rules apply here the moment they arrive.
+  const policy = getState()?.policy;
+  if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
+  return change;
+}
+
+/**
+ * Re-read the durable record before a waiting session resumes (ONE
+ * recorder): another recorder bundle in THIS document may have ended or
+ * replaced it, and storage events never reach the document that wrote them.
+ * True when the cached session is still the one to resume.
+ */
+export function resyncStoredSession(): boolean {
+  const change = applyStoredRecord(getRecorderStorage().getString(REC_KEY) ?? null);
+  if (change !== 'ended' && change !== 'joined') return true;
+  notify();
+  return false;
+}
+
 export function followOtherTabs(): () => void {
   const storage = getRecorderStorage();
   const participant = registerRecorderTab();
   const offRec = storage.watch?.(REC_KEY, (raw) => {
-    const had = getState()?.policy;
-    const change = adoptStoredState(raw);
+    const change = applyStoredRecord(raw);
     if (change === 'unchanged') return;
     participant?.sync();
-    if (change === 'ended') setRedactionPolicy(null);
-    if (change === 'joined') {
-      recoverRedactionPolicy();
-      armReconcile();
-    }
-    // The starting tab writes the workspace policy after its first record:
-    // its rules apply here the moment they arrive.
-    const policy = getState()?.policy;
-    if (change === 'updated' && had === undefined && policy !== undefined) setRedactionPolicy(policy);
     notify();
     if (getState()?.stopping) void participant?.settle().catch((error: unknown) => {
       console.warn('vitrinka: cross-tab Stop remains unsaved', error);

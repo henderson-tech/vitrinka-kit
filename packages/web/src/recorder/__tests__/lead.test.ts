@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { holdFace, leadStatus, pingLeader, RecorderBusyError, sendToLeader, setLeadStopping, setRemoteStop, startLead } from '../lead';
 import { ask, LEAD_ATTR, PAGE_ATTR, readClaim, sendCommand, serveHello, takeClaim } from '../one';
 import { getState, pushEvent, REC_KEY, setState } from '../queue';
-import { startSession } from '../session';
+import { resyncStoredSession, startSession } from '../session';
 import { leadState, notify } from '../state';
 import { getRecorderStorage } from '../storage';
 import { RECORDER_ID } from '../version';
@@ -24,6 +24,7 @@ const handlers = {
   pause: () => void did.push('pause'),
   stop: () => void did.push('stop'),
   note: (t: string) => void did.push(`note:${t}`),
+  resync: resyncStoredSession,
 };
 const follower = { from: 'extension' as const, inst: 'x.popup' };
 
@@ -290,5 +291,23 @@ describe('another bundle in this document', () => {
     expect(getState()).toBeNull();
     expect(attrs.has(LEAD_ATTR)).toBe(false);
     expect(leadState.following).toBeNull();
+  });
+});
+
+describe('another bundle in this document replaced the session', () => {
+  it('a waiting bundle resumes the session in storage, with that session\'s redaction policy recovered', async () => {
+    const { env } = fakeDocument();
+    const leader = extensionHere(env);
+    leader.start();
+    setState({ ...liveSession(), policy: null });
+    startLead(handlers, env);
+    // The other bundle's newer session is in storage; its policy never reached this cache.
+    getRecorderStorage().set(REC_KEY, JSON.stringify({ ...liveSession(), sessionId: 'sess-2' }));
+    stub.script.policy = { attachments: true };
+    leader.stop();
+    await settle();
+    expect(getState()?.sessionId).toBe('sess-2');
+    expect(readClaim(env)).toMatchObject({ by: 'page', state: 'recording', sessionId: 'sess-2' });
+    expect(stub.calls.some((c) => c.path === '/api/v1/recorder/policy')).toBe(true);
   });
 });

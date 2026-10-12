@@ -19,7 +19,7 @@ import { insideHud } from './hud/host';
 import { startLead } from './lead';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
 import { dropFlight, syncFlight } from './report';
-import { addNote, followOtherTabs, onBeforeStop, recoverRedactionPolicy, stopSession, togglePause } from './session';
+import { addNote, followOtherTabs, onBeforeStop, recoverRedactionPolicy, resyncStoredSession, stopSession, togglePause } from './session';
 import { annotateState, leadState, setTabIdentity, subscribe } from './state';
 
 const TAB_KEY = 'vitrinka.tab';
@@ -61,6 +61,7 @@ export function RecorderProvider({
       stop: () =>
         void stopSession().catch((e: unknown) => console.warn('vitrinka: remote stop —', e instanceof Error ? e.message : e)),
       note: (text) => addNote(text),
+      resync: resyncStoredSession,
     });
     primeNavigation();
     // The fetch/XHR and console patches are idempotent (a globalThis mark)

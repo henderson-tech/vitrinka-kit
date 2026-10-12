@@ -48,9 +48,8 @@ import {
   updateClaim,
   watchClaim,
 } from './one';
-import { adoptStoredState, getState, REC_KEY, stoppingElsewhere } from './queue';
+import { getState, stoppingElsewhere } from './queue';
 import { leadState, notify, subscribe } from './state';
-import { getRecorderStorage } from './storage';
 import { RECORDER_ID } from './version';
 
 export type Leader = OneParty;
@@ -75,6 +74,11 @@ export interface LeadHandlers {
   /** The direct stop, for when no HUD registered its Stop flow. */
   stop(): void;
   note(text: string): void;
+  /**
+   * Re-read the durable session record before a waiting session resumes
+   * (`resyncStoredSession`); false when the cached one ended or was replaced.
+   */
+  resync?(): boolean;
 }
 
 /** How often a follower pings the holder. */
@@ -156,14 +160,8 @@ function syncClaim(): void {
   if (want.state === 'saved' || cur || extensionLive()) return;
   // Another recorder bundle in THIS document may have ended (or replaced)
   // the session meanwhile, and storage events never reach the document that
-  // wrote them: re-read the durable record before resuming from the cache.
-  if (!starting) {
-    const change = adoptStoredState(getRecorderStorage().getString(REC_KEY) ?? null);
-    if (change === 'ended' || change === 'joined') {
-      notify();
-      return;
-    }
-  }
+  // wrote them: the durable record decides before the cache resumes.
+  if (!starting && handlers?.resync && !handlers.resync()) return;
   if (takeClaim(env, self, { id: self.inst, ...want }).ok) announce(env, self, liveOf());
 }
 
