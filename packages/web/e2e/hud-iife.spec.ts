@@ -33,10 +33,15 @@ window.calls = calls;
 let remoteStop = null;
 window.remoteStop = () => remoteStop && remoteStop();
 window.follow = (who) => set({ following: who || undefined });
+const live = (title) => ({ sessionId: 'ext-1', title, paused: false, dead: false, activeMs: 0, resumedAt: Date.now(), sync });
+// A session that appears without a Start here (resumed, joined from another tab).
+window.recordNow = () => set({ recording: live('resumed') });
+// Set to a reason and Start is refused with it (another recorder leads).
+window.refuse = '';
 window.controller = {
   getSnapshot: () => snap,
   subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
-  async start(o) { calls.push(['start', o.title]); set({ recording: { sessionId: 'ext-1', title: o.title, paused: false, dead: false, activeMs: 0, resumedAt: Date.now(), sync } }); },
+  async start(o) { calls.push(['start', o.title]); if (window.refuse) throw new Error(window.refuse); set({ recording: live(o.title) }); },
   async togglePause() { calls.push(['pause']); },
   async stop() { calls.push(['stop']); set({ recording: null }); return { boardUrl: 'https://vitrinka.test/acme/b/ext-1' }; },
   note(t) { calls.push(['note', t]); },
@@ -150,4 +155,28 @@ test('ONE recorder: the leader takes relayed chords; a follower hides, binds non
   // D7: the controller hears the stop's face, so it can hold its claim as `saved`.
   expect(faces).toEqual(expect.arrayContaining(['saving', 'saved']));
   expect(faces).not.toContain('confirm');
+});
+
+test('ONE recorder: a refused Start says why and offers no Retry; a second remote stop never runs a second save', async ({ page }) => {
+  await page.goto(pageUrl);
+  await page.evaluate(() => {
+    (window as unknown as { refuse: string }).refuse = 'the Vitrinka extension is recording in another tab — stop it there first';
+  });
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const failed = page.getByRole('alert');
+  await expect(failed).toContainText('Already recording');
+  // D12: the refusal stays; a session that appears meanwhile (a resume) never turns it into a Stop's Retry.
+  await page.evaluate(() => (window as unknown as { recordNow: () => void }).recordNow());
+  await expect(failed.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+  await failed.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(page.getByRole('button', { name: 'Recorder controls' })).toBeVisible();
+  // D11: two remote stops in a row (a double click in the popup) are one save.
+  await page.evaluate(() => {
+    const w = window as unknown as { remoteStop: () => void };
+    w.remoteStop();
+    w.remoteStop();
+  });
+  await expect(page.locator('[data-e2e="saved"]').getByRole('link', { name: /Open board/ })).toBeVisible();
+  const stops = await page.evaluate(() => (window as unknown as { calls: unknown[][] }).calls.filter((c) => c[0] === 'stop').length);
+  expect(stops).toBe(1);
 });

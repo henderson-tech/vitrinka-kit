@@ -336,10 +336,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   }, [controller]);
 
   // The inline flows. Stop drains first; a refusal (offline) keeps the session.
+  // One Stop at a time: a remote stop (D11) or a Retry arriving while a save
+  // is out never starts a second one; the flag clears as the face settles.
+  const stopInFlight = useRef(false);
   const runStop = useCallback(() => {
+    if (stopInFlight.current) return;
+    stopInFlight.current = true;
     const t0 = Date.now();
     const settle = (ev: Parameters<typeof dispatch>[0]) =>
-      setTimeout(() => dispatch(ev), Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
+      setTimeout(() => {
+        stopInFlight.current = false;
+        dispatch(ev);
+      }, Math.max(0, MIN_SAVING_MS - (Date.now() - t0)));
     controller.stop().then(
       (r) => settle({ type: 'saved', ...r }),
       (e: unknown) => {
@@ -380,6 +388,8 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     dispatch({ type: 'dismiss' });
   }, [failedReport, controller]);
   const onRetry = useCallback(() => {
+    // A refused Start has nothing to retry (and must never run a Stop).
+    if (flow.face === 'failed' && flow.start) return;
     if (failedReport) {
       dispatch({ type: 'retry', queued: 0 });
       if (reportRef.current) runReport(reportRef.current);
@@ -387,7 +397,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     }
     dispatch({ type: 'retry', queued: controller.getSnapshot().recording?.sync.queued ?? 0 });
     runStop();
-  }, [failedReport, controller, runStop, runReport]);
+  }, [flow, failedReport, controller, runStop, runReport]);
   // A stop confirm outlives nothing: the session ended under it (401, the server).
   useEffect(() => {
     if (!rec && flow.face === 'confirm' && flow.action === 'stop') dispatch({ type: 'cancel' });
