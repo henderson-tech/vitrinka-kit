@@ -43,7 +43,7 @@ import type { AttachmentPayload, RecorderEvent } from '../protocol';
 import { api, permanentStatus, uploadChunk, uploadImage, VitrinkaApiError } from './api';
 import type { StagedImage } from './attachments';
 import { pushFlightEvent } from './flight';
-import { notify } from './state';
+import { leadState, notify } from './state';
 import { getRecorderStorage } from './storage';
 import { getRecorderBlobStore } from './storage/blobs';
 
@@ -1048,6 +1048,8 @@ export function pushEvent(
   route: { tabId: string; tabHost: string },
   images: readonly StagedImage[] = [],
 ): string | null {
+  // A follower captures nothing: the leader records this document (ONE recorder D2).
+  if (leadState.following) return null;
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
   if (rec.paused || rec.dead) return null;
@@ -1147,7 +1149,7 @@ export function pushRRWebBatch(
 ): number {
   if (!events.length) return 0;
   const rec = getState();
-  if (!rec || rec.paused || rec.dead) return 0;
+  if (!rec || rec.paused || rec.dead || leadState.following) return 0;
   const { parts, dropped } = splitRRWebEvents(events);
   for (const b of dropped) {
     console.warn(`vitrinka: rrweb event (${b} bytes) exceeds the chunk cap — dropped`);

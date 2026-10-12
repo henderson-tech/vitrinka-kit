@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/web",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "vitrinka toolkit for React DOM apps — the journey recorder: capture manual-testing sessions (rrweb DOM stream, clicks, navigation, network, console, notes) straight into vitrinka boards.",
   "license": "Elastic-2.0",
   "repository": {
@@ -34,6 +34,7 @@
       "default": "./build/hud.js"
     },
     "./hud.iife.js": "./build/hud.iife.js",
+    "./one.iife.js": "./build/one.iife.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -43,12 +44,13 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && bun run build:hud",
+    "build": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one",
     "build:hud": "bun build src/recorder/hud/iife.ts --format=iife --minify --target=browser --define process.env.NODE_ENV='\"production\"' --outfile build/hud.iife.js",
+    "build:one": "bun build src/recorder/one-iife.ts --format=iife --minify --target=browser --outfile build/one.iife.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "test:e2e": "playwright test -c playwright.config.ts --workers 1",
-    "prepublishOnly": "tsc -p tsconfig.build.json && bun run build:hud"
+    "prepublishOnly": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one"
   },
   "dependencies": {
     "@vitrinka/link": "^0.1.3",

@@ -30,6 +30,9 @@ let snap = {
 const set = (patch) => { snap = { ...snap, ...patch }; listeners.forEach((l) => l()); };
 const sync = { state: 'ok', synced: true, queued: 0, chunks: 0, failures: 0, error: '', lastSyncAt: Date.now(), events: 3, serverMaxSeq: 3, deadReason: '' };
 window.calls = calls;
+let remoteStop = null;
+window.remoteStop = () => remoteStop && remoteStop();
+window.follow = (who) => set({ following: who || undefined });
 window.controller = {
   getSnapshot: () => snap,
   subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
@@ -44,6 +47,8 @@ window.controller = {
   async getMe() { calls.push(['getMe']); return snap.account; },
   async setPrefs(p) { calls.push(['setPrefs', p]); set({ prefs: { ...snap.prefs, ...p } }); },
   async refreshRecents() { calls.push(['refreshRecents']); },
+  onRemoteStop(run) { remoteStop = run; return () => { if (remoteStop === run) remoteStop = null; }; },
+  faceChanged(face) { calls.push(['face', face]); },
 };
 `;
 
@@ -99,4 +104,50 @@ test('the IIFE mounts the HUD for a foreign controller and drives it only throug
   // Unmount removes the host.
   await page.evaluate(() => (window as unknown as { unmount: () => void }).unmount());
   await expect(page.locator('[data-vitrinka-hud]')).toHaveCount(0);
+});
+
+/** A chord as the extension relays it: a script-dispatched (untrusted) keydown on window. Returns defaultPrevented. */
+function relayChord(page: import('@playwright/test').Page, code: string): Promise<boolean> {
+  return page.evaluate((c) => {
+    const e = new KeyboardEvent('keydown', { code: c, altKey: true, shiftKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  }, code);
+}
+
+test('ONE recorder: the leader takes relayed chords; a follower hides, binds none and keeps its draft; a remote stop needs no confirm', async ({ page }) => {
+  await page.goto(pageUrl);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  const controls = page.getByRole('button', { name: 'Recorder controls' });
+  await expect(controls).toBeVisible();
+  // D9/D10: the leader's HUD acts on an untrusted chord.
+  expect(await relayChord(page, 'KeyN')).toBe(true);
+  const note = page.getByRole('dialog', { name: 'Note' });
+  await note.getByRole('textbox').fill('half a thought');
+  // D8: becoming the other recorder's remote closes the sheet and hides the HUD…
+  await page.evaluate(() => (window as unknown as { follow: (w: string) => void }).follow('extension'));
+  await expect(note).toHaveCount(0);
+  await expect(controls).toBeHidden();
+  await expect(page.locator('[data-vitrinka-hud]')).toHaveCount(1);
+  // …and binds no chord: the key is left to the leader.
+  expect(await relayChord(page, 'KeyN')).toBe(false);
+  await expect(note).toHaveCount(0);
+  // Let go: the pill comes back idle-faced, the draft intact.
+  await page.evaluate(() => (window as unknown as { follow: (w: string) => void }).follow(''));
+  await expect(controls).toBeVisible();
+  expect(await relayChord(page, 'KeyN')).toBe(true);
+  await expect(note.getByRole('textbox')).toHaveValue('half a thought');
+  // D11: the other side stops it — the sheet closes keeping the draft, straight to Saving → Saved.
+  await page.evaluate(() => (window as unknown as { remoteStop: () => void }).remoteStop());
+  await expect(note).toHaveCount(0);
+  await expect(page.locator('[data-e2e="saved"]').getByRole('link', { name: /Open board/ })).toHaveAttribute(
+    'href',
+    'https://vitrinka.test/acme/b/ext-1',
+  );
+  const faces = await page.evaluate(() =>
+    (window as unknown as { calls: unknown[][] }).calls.filter((c) => c[0] === 'face').map((c) => c[1]),
+  );
+  // D7: the controller hears the stop's face, so it can hold its claim as `saved`.
+  expect(faces).toEqual(expect.arrayContaining(['saving', 'saved']));
+  expect(faces).not.toContain('confirm');
 });

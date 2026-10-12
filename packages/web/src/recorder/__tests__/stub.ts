@@ -5,6 +5,7 @@
  * `credentials: omit` and the chunk route under test too.
  */
 import { configureRecorder } from '../config';
+import { __resetLeadForTests } from '../lead';
 import { __resetMeForTests } from '../me';
 import { __resetForTests } from '../queue';
 import { __resetRecentsForTests } from '../recents';
@@ -108,6 +109,7 @@ export function installStub(): Stub {
 
 /** Fresh recorder: memory storage, configured target, empty queue. */
 export function freshRecorder(): void {
+  __resetLeadForTests();
   __resetStorageForTests();
   configureRecorderStorage(memoryRecorderStorage());
   configureRecorder({ url: `${BASE}/`, key: 'vkr_test' });

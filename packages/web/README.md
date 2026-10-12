@@ -174,6 +174,25 @@ Radix focus trap or a `<dialog>.showModal()` never fights it, and nothing
 you do on the pill reaches the page (a "close on outside click" never fires
 because of the recorder).
 
+## With the Vitrinka extension
+
+A tester's browser may also run the Vitrinka extension. The two are one
+recorder: whichever starts first leads, and the other becomes its remote.
+While the extension records (this tab or another), the pill hides and this
+recorder captures nothing; its shortcuts and `__vitrinkaRecorder` act on the
+extension's recording. While the pill records, the extension relays its
+⌥⇧A/N/P to the pill. A Start pressed while the other side leads is refused
+before anything is created, and the pill says why until you dismiss it. A
+recording resumed after a reload into a browser the extension leads waits,
+capturing nothing, and resumes when the extension stops. The session lands
+where the leader is configured.
+
+They coordinate through two attributes on `<html>`: `data-vitrinka-page`
+(this recorder is mounted) and `data-vitrinka-lead` (who records), plus
+`vitrinka:*` window events. The page writes them from an effect, after
+hydration. The protocol is `src/recorder/one.ts`; `@vitrinka/web/one.iife.js`
+is the same code for the extension.
+
 ## Report a bug
 
 **Report a bug** (⋯ menu) files what led up to a bug — no recording needed.
@@ -250,8 +269,13 @@ What goes over the wire: [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md#attached-im
 await __vitrinkaRecorder.start({ title: 'checkout', tags: ['ai'] });
 __vitrinkaRecorder.note('price flashes on hover');
 const { boardUrl } = await __vitrinkaRecorder.stop();
-__vitrinkaRecorder.status(); // { recording, sessionId, elapsedMs, queued, synced, … }
+__vitrinkaRecorder.status(); // { recording, leader, sessionId, elapsedMs, queued, synced, … }
 ```
+
+While the extension leads, `status()` says `leader: 'extension'` and
+`following: 'extension'`, and `pause`, `stop` and `note` act on its
+recording. `start()` rejects with a `RecorderBusyError` (`code:
+'recorder_busy'`, exported from `@vitrinka/web/recorder`).
 
 ## The HUD on its own (`@vitrinka/web/hud`)
 
@@ -280,6 +304,12 @@ const unmount = mountRecorderHud(controller, { title: () => document.title });
   `annotate({…, attachments})` and `report({…, attachments})` hand over
   `HudAttachment`s (`{name, blob, w, h}`) the HUD has already re-encoded —
   png, webp or jpeg, ≤ 2560 px, ≤ 12 MiB. Uploading them is the host's job.
+- One recorder with the page's own: `following: 'page' | 'extension'` in
+  the snapshot hides the HUD as the leader's remote (sheets and annotate
+  mode close, the drafts survive, no shortcut is bound). Optionally,
+  `onRemoteStop(run)` registers the HUD's Stop flow for a remote stop (no
+  second confirm), and `faceChanged(face)` reports the pill's inline flow
+  face so the host can hold its claim while **Saved** shows.
 
 The full contract is in `src/recorder/hud/controller.ts`.
 
@@ -290,6 +320,9 @@ same mount as one self-contained script with React bundled in:
 <script src="hud.iife.js"></script>
 <script>const unmount = VitrinkaHud.mount(controller);</script>
 ```
+
+`@vitrinka/web/one.iife.js` is the page↔extension protocol the same way
+(`globalThis.VitrinkaOne`, no React, about 5 KB).
 
 ## What is captured, exactly
 

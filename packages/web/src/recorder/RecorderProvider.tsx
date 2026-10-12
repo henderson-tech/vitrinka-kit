@@ -16,10 +16,11 @@ import { installControl } from './control';
 import { flightActive } from './flight';
 import { installUnauthorizedHandler } from './link';
 import { insideHud } from './hud/host';
+import { startLead } from './lead';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
 import { dropFlight, syncFlight } from './report';
-import { followOtherTabs, onBeforeStop, recoverRedactionPolicy } from './session';
-import { annotateState, setTabIdentity, subscribe } from './state';
+import { addNote, followOtherTabs, onBeforeStop, recoverRedactionPolicy, stopSession, togglePause } from './session';
+import { annotateState, leadState, setTabIdentity, subscribe } from './state';
 
 const TAB_KEY = 'vitrinka.tab';
 
@@ -53,6 +54,14 @@ export function RecorderProvider({
 
   useEffect(() => {
     setTabIdentity(tabId(), location.host);
+    // ONE recorder: mark the document, hear who records, then lead or follow.
+    // A remote command opens this recorder's own doors.
+    const leaveLead = startLead({
+      pause: () => void togglePause(),
+      stop: () =>
+        void stopSession().catch((e: unknown) => console.warn('vitrinka: remote stop —', e instanceof Error ? e.message : e)),
+      note: (text) => addNote(text),
+    });
     primeNavigation();
     // The fetch/XHR and console patches are idempotent (a globalThis mark)
     // and UNINSTALLED on unmount below, so the recorder never outlives its
@@ -70,14 +79,15 @@ export function RecorderProvider({
     // Keep the rrweb lane in step with the session: start on record, a fresh
     // checkout on resume, ship-and-stop on stop. While idle the same lane
     // feeds the pill's flight recorder; it hands rrweb over (one record() at
-    // a time) before a recording takes it.
+    // a time) before a recording takes it. A follower records nothing: its
+    // own session (if any) waits until the leader lets go.
     let wasRecording = false;
     let wasPaused = false;
     let wasFlying = false;
     const syncLanes = () => {
       void syncFlight();
       const rec = getState();
-      const recording = rec !== null && !rec.dead;
+      const recording = rec !== null && !rec.dead && leadState.following === null;
       const flying = flightActive();
       if (wasFlying && !flying) stopRRWeb();
       if (recording && !wasRecording) startRRWeb();
@@ -131,6 +141,7 @@ export function RecorderProvider({
       dropFlight();
       unpatchNetwork();
       unpatchConsole();
+      leaveLead();
     };
     // The lanes install once per mount; config changes are handled above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

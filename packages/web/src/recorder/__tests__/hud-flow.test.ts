@@ -45,6 +45,31 @@ describe('flow', () => {
       report: true,
     });
   });
+
+  it('a remote stop goes straight to saving — no second confirm — and never restarts a save in flight (ONE D11)', () => {
+    expect(flowReducer(NO_FLOW, { type: 'stop', queued: 4 })).toEqual({ face: 'saving', total: 4 });
+    const confirming = flowReducer(NO_FLOW, { type: 'ask', action: 'stop' });
+    expect(flowReducer(confirming, { type: 'stop', queued: 0 })).toEqual({ face: 'saving', total: 0 });
+    const saving = flowReducer(confirming, { type: 'confirm', queued: 9 });
+    expect(flowReducer(saving, { type: 'stop', queued: 0 })).toBe(saving);
+  });
+
+  it('a refused Start shows its reason until dismissed; it has nothing to retry and survives becoming a follower (ONE D12)', () => {
+    const refused = flowReducer(NO_FLOW, { type: 'startFailed', message: 'the Vitrinka extension is recording in another tab — stop it there first' });
+    expect(refused).toEqual({ face: 'failed', message: 'the Vitrinka extension is recording in another tab — stop it there first', start: true });
+    expect(flowReducer(refused, { type: 'retry', queued: 0 })).toBe(refused);
+    expect(flowReducer(refused, { type: 'follow' })).toBe(refused);
+    expect(flowReducer(refused, { type: 'dismiss' })).toEqual(NO_FLOW);
+  });
+
+  it('becoming a follower — or ceasing to be — leaves nothing open but a save in flight (ONE D8)', () => {
+    const confirming = flowReducer(NO_FLOW, { type: 'ask', action: 'stop' });
+    expect(flowReducer(confirming, { type: 'follow' })).toEqual(NO_FLOW);
+    const saving = flowReducer(confirming, { type: 'confirm', queued: 0 });
+    expect(flowReducer(saving, { type: 'follow' })).toBe(saving);
+    const saved = flowReducer(saving, { type: 'saved', boardUrl: 'https://v.test/b/1' });
+    expect(flowReducer(saved, { type: 'follow' })).toEqual(NO_FLOW);
+  });
 });
 
 describe('syncChip', () => {

@@ -111,7 +111,18 @@ export interface HudSnapshot {
    * `attachments: true` to the policy read. Absent or false = text only.
    */
   canAttach?: boolean;
+  /**
+   * ONE recorder: another recorder leads this browser's recording — the
+   * extension, or the page's own recorder — and this HUD is its remote. The
+   * HUD hides, closes its sheet, menu, link sheet and annotate mode (the
+   * drafts and their images survive, as a cancel keeps them; the dock spot
+   * stays) and binds no shortcut. Absent = this HUD's host leads or is idle.
+   */
+  following?: 'page' | 'extension';
 }
+
+/** The pill's inline flow face (`hud/flow.ts`), as `faceChanged` reports it. */
+export type HudFace = 'none' | 'confirm' | 'saving' | 'saved' | 'failed';
 
 /** One image a tester attached, already normalized by the HUD:
  *  re-encoded (EXIF/GPS gone), long edge ≤ 2560 px, ≤ 12 MiB. */
@@ -215,6 +226,20 @@ export interface HudController {
    * without it never offers the menu row.
    */
   report?(r: HudReport): Promise<HudSaved>;
+  /**
+   * ONE recorder D11: the HUD registers its own Stop flow; the controller
+   * runs it when the other side stops the recording remotely (its open sheet
+   * closes keeping the draft, annotate exits, Saving → Saved on this pill,
+   * no second confirm). Returns the unregister. A host whose HUD is not
+   * mounted stops directly. Optional.
+   */
+  onRemoteStop?(run: () => void): () => void;
+  /**
+   * ONE recorder D7: the HUD reports its inline flow face, so the controller
+   * holds its claim as `saved` while Saving / Saved / failed shows after a
+   * stop. Optional.
+   */
+  faceChanged?(face: HudFace): void;
 }
 
 export const DEFAULT_PREFS: HudPrefs = { size: 'md', verbose: false, sheetW: 0, sheetH: 0 };

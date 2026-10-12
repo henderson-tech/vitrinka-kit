@@ -16,7 +16,7 @@
 import { isVitrinkaUrl } from '../config';
 import { flightTarget } from '../flight';
 import { getState, pushEvent, trackCapture } from '../queue';
-import { currentRoute } from '../state';
+import { currentRoute, leadState } from '../state';
 import { redactAndCap, redactHeaders, redactUrl } from './redact';
 
 const BODY_CAP = 64 * 1024;
@@ -51,6 +51,8 @@ function capturing(): boolean {
  * null), else the idle flight recorder's buffer, else null.
  */
 function captureTarget(): string | null {
+  // A follower captures nothing (ONE recorder D2).
+  if (leadState.following) return null;
   const rec = getState();
   if (rec) return !rec.paused && !rec.dead ? rec.sessionId : null;
   return flightTarget();

@@ -40,18 +40,18 @@ import {
   setState,
   stoppingElsewhere,
 } from './queue';
+import { claimForStart, settleStart, setLeadStopping } from './lead';
 import { awaitBoard, boardUrlOf, forgetRecents, noteRecent, RECENTS_KEY, updateRecent } from './recents';
 import { currentRoute, notify } from './state';
 import { getRecorderStorage } from './storage';
 import { recorderPeers, registerRecorderTab, waitForRecorderPeers } from './tabs';
+import { RECORDER_ID } from './version';
 
 export { currentRoute, notify, subscribe } from './state';
 export { onBeforeStop } from './queue';
 export type { SessionDone } from '../protocol';
 
-/** Sent as `meta.recorder`; bumped with the package version. */
-export const RECORDER_VERSION = '0.4.0';
-export const RECORDER_ID = `web/${RECORDER_VERSION}`;
+export { RECORDER_ID, RECORDER_VERSION } from './version';
 
 /** What `POST /api/v1/sessions` answers (the fields this recorder keeps). */
 export interface SessionOut {
@@ -185,16 +185,30 @@ export function createSession(
   });
 }
 
+/**
+ * Start a recording. The claim on this document comes first, synchronously
+ * and before any network call: while the extension (or another recorder on
+ * this page) leads, this rejects with a `RecorderBusyError` and nothing is
+ * created (ONE recorder D12).
+ */
 export async function startSession(opts: StartOptions = {}): Promise<SessionState> {
+  claimForStart();
   // The safe defaults apply from the first captured byte; the workspace
   // policy (fetched in parallel — fetchPolicy never rejects) can only ADD
   // rules or, self-host only, fullFidelity.
   setRedactionPolicy(null);
   const policyPromise = fetchPolicy();
-  const ses = await createSession(opts.title || '', {
-    ...(opts.environment ? { environment: opts.environment } : {}),
-    ...(opts.driver ? { meta: { driver: opts.driver } } : {}),
-  });
+  let ses: SessionOut;
+  try {
+    ses = await createSession(opts.title || '', {
+      ...(opts.environment ? { environment: opts.environment } : {}),
+      ...(opts.driver ? { meta: { driver: opts.driver } } : {}),
+    });
+  } catch (e) {
+    // Nothing was created: the `starting` claim goes.
+    settleStart(false);
+    throw e;
+  }
   void policyPromise.then(({ policy, attachments }) => {
     const rec = getState();
     if (rec?.sessionId !== ses.id) return;
@@ -214,6 +228,8 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
     activeMs: 0,
     resumeAt: new Date().toISOString(),
   });
+  // The claim moves from `starting` to `recording` with the session's id.
+  settleStart(true);
   resetQueues();
   resetHealth();
   resetIdle();
@@ -366,10 +382,13 @@ export async function stopSession(): Promise<SessionDone | null> {
   // The other tabs leave rec at the Stop, not when the save ends; a stop
   // that keeps the session hands it back to them as it now is.
   markStopping(rec.sessionId, durationMs);
+  // The claim reads `stopping` while the drain runs (a remote stop or pause is refused meanwhile).
+  setLeadStopping(rec.sessionId);
   try {
     return await finishStop(rec, durationMs, peers);
   } finally {
     markStopping(null);
+    setLeadStopping(null);
   }
 }
 

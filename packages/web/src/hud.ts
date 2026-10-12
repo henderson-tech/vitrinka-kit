@@ -11,6 +11,7 @@ export {
   type HudAnnotation,
   type HudAttachment,
   type HudController,
+  type HudFace,
   type HudLinkCode,
   type HudLinkFlow,
   type HudPrefs,
@@ -26,3 +27,20 @@ export {
   type HudSyncState,
 } from './recorder/hud/controller';
 export type { RecorderStorage } from './recorder/storage';
+/** ONE recorder: the protocol the page recorder and the extension speak (`build/one.iife.js` = `globalThis.VitrinkaOne`). */
+export type {
+  Ack,
+  AckCode,
+  Claim,
+  ClaimRoot,
+  ClaimState,
+  Command,
+  CommandOp,
+  CommandReply,
+  Hello,
+  Live,
+  OneEnv,
+  OneParty,
+  OneSelf,
+} from './recorder/one';
+export type { VitrinkaOneGlobal } from './recorder/one-iife';
