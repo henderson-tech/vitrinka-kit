@@ -348,6 +348,9 @@ export function claimForStart(): void {
     refresh();
     throw busy('extension', ext.here, '');
   }
+  // A session of this page's own — live, or waiting while another recorder's
+  // Saved face still shows (D14) — is never replaced by a new one.
+  if (getState()) throw new Error('vitrinka: a session is already recording');
   const taken = takeClaim(env, self, { id: self.inst, state: 'starting' });
   if (!taken.ok) {
     refresh();

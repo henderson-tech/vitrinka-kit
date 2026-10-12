@@ -254,3 +254,20 @@ describe('leading', () => {
     expect(getState()).toBeNull();
   });
 });
+
+describe('a waiting session is never replaced', () => {
+  it('a Start while the other recorder\'s Saved face holds the document keeps the waiting session (D14)', async () => {
+    const { env } = fakeDocument();
+    const ext = extensionHere(env);
+    ext.start();
+    setState(liveSession());
+    startLead(handlers, env);
+    ext.set('saved');
+    await settle();
+    expect(leadState.following).toBe('extension');
+    await expect(startSession()).rejects.toThrow('vitrinka: a session is already recording');
+    expect(getState()?.sessionId).toBe('sess-1');
+    expect(readClaim(env)?.by).toBe('extension');
+    expect(created()).toBe(0);
+  });
+});
