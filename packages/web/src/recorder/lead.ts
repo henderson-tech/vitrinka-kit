@@ -130,7 +130,8 @@ function desired(held: Claim | null): { state: ClaimState; sessionId: string } |
   const rec = getState();
   if (rec) {
     const state = stopping === rec.sessionId || stoppingElsewhere(rec) ? 'stopping' : rec.paused ? 'paused' : 'recording';
-    return { state, sessionId: rec.sessionId };
+    // A session web 0.5.0 stored (and this version resumed) still carries the server's numeric id.
+    return { state, sessionId: String(rec.sessionId) };
   }
   // The stop's face still shows on this pill: hold the claim as `saved` (D7).
   if (held && (face === 'saving' || face === 'saved' || face === 'failed')) return { state: 'saved', sessionId: held.sessionId };
@@ -148,6 +149,14 @@ function syncClaim(): void {
     return;
   }
   if (held) {
+    // The extension recording elsewhere keeps the browser even over a claim
+    // this page holds — a tab thawing after the extension's Start probe
+    // could not reach it, or a Start in the same instant: let go and wait
+    // (D14), never two recordings. A Stop already draining keeps its face.
+    if (want.state !== 'saved' && want.state !== 'stopping' && extensionLive()?.here === false) {
+      if (releaseClaim(env, self.inst)) announce(env, self, null);
+      return;
+    }
     if (held.state !== want.state || held.sessionId !== want.sessionId) {
       updateClaim(env, self.inst, want);
       announce(env, self, liveOf());

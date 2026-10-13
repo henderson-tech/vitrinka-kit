@@ -117,6 +117,10 @@ export function extensionElsewhere(env: OneEnv, state: ClaimState = 'recording')
       live = null;
       announce(env, self, null);
     },
+    /** Say so unasked, as one.js does when it lands in a tab already open. */
+    announce() {
+      announce(env, self, live);
+    },
     off,
   };
 }

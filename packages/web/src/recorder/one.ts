@@ -167,7 +167,8 @@ export function parseClaim(raw: string | null | undefined): Claim | null {
     by: b.by,
     id: b.id,
     state: b.state,
-    sessionId: str(b.sessionId) ? b.sessionId : '',
+    // web 0.5.0 pages wrote the server's numeric id.
+    sessionId: str(b.sessionId) ? b.sessionId : Number.isFinite(b.sessionId) ? String(b.sessionId) : '',
     since: typeof b.since === 'number' ? b.since : 0,
   };
 }

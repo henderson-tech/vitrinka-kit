@@ -1,5 +1,24 @@
 # @vitrinka/web
 
+## 0.5.1
+
+- **A claim names its session.** The server answers a session's id as a
+  number, and 0.5.0 wrote it into `data-vitrinka-lead` as one. The codec
+  reads only a string, so the extension's refusals lost their `#N`, and the
+  page re-announced its hello on every state change. The recorder now keys a
+  session by the id's string from the moment it is created. The codec also
+  reads a 0.5.0 page's numeric id.
+- **A page that holds the claim yields to the extension recording
+  elsewhere.** A tab that thaws after the extension started in another tab
+  (its Start probe could not reach a frozen tab) kept recording, so two
+  recordings ran. The page now releases its claim and waits, capturing
+  nothing, and resumes when the extension stops (D14). A Stop that is
+  already saving keeps its claim and its face.
+- **`withRecorderLock` is exported** from `@vitrinka/web/recorder`. A custom
+  storage driver shared with the package's own driver on one origin (a
+  host's own dock key, say) can take the very lock the package numbers
+  events under, instead of copying it.
+
 ## 0.5.0
 
 - **The page recorder and the Vitrinka extension are one recorder.** A page

@@ -362,6 +362,9 @@ Web Lock, or an IndexedDB transaction on hosts without Web Locks. Stop
 waits for these allocations before draining. A custom driver shared across
 documents must implement `withLock(name, run)` and run the synchronous
 callback exclusively across them; a document-local driver needs no lock.
+A driver that shares an origin with the package's own (e.g. one that
+re-keys a single entry) passes the package's `withRecorderLock` from
+`@vitrinka/web/recorder`, so both number events under the same lock.
 Shared drivers also implement `keys()` to coordinate Stop: each mounted tab
 ships its last rrweb batch and drains its captures before acknowledging.
 An undelivered sibling tail refuses Stop and stays queued for retry.

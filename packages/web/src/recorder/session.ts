@@ -196,7 +196,7 @@ export function createSession(
 ): Promise<SessionOut> {
   const cfg = recorderConfig();
   const environment = opts.environment ?? cfg.environment;
-  return api<SessionOut>('POST', '/api/v1/sessions', {
+  return api<Omit<SessionOut, 'id'> & { id: number | string }>('POST', '/api/v1/sessions', {
     host: pageHost(),
     title,
     ...(cfg.project ? { project: cfg.project } : {}),
@@ -209,7 +209,8 @@ export function createSession(
       ...(cfg.appVersion ? { appVersion: cfg.appVersion } : {}),
       ...opts.meta,
     },
-  });
+    // The server's id is an int64; the recorder keys a session by its string (claims, recents, storage).
+  }).then((s) => ({ ...s, id: String(s.id) }));
 }
 
 /**
