@@ -111,6 +111,16 @@ function extensionLive(): Live | null {
   return null;
 }
 
+/**
+ * The extension's recording is under way in another tab. Its Start probe
+ * announces `starting` before it reads this page's claim, and a draining
+ * Stop is ending: neither takes a document from the page that leads (D1).
+ */
+function extensionRecordingElsewhere(): boolean {
+  for (const l of extension.values()) if (!l.here && (l.state === 'recording' || l.state === 'paused')) return true;
+  return false;
+}
+
 /** A claim of another holder (any state: a `saved` one keeps its face, D7), else the extension elsewhere. */
 function computeFollowing(): Leader | null {
   if (!env) return null;
@@ -151,9 +161,11 @@ function syncClaim(): void {
   if (held) {
     // The extension recording elsewhere keeps the browser even over a claim
     // this page holds — a tab thawing after the extension's Start probe
-    // could not reach it, or a Start in the same instant: let go and wait
-    // (D14), never two recordings. A Stop already draining keeps its face.
-    if (want.state !== 'saved' && want.state !== 'stopping' && extensionLive()?.here === false) {
+    // could not reach it, or a Start whose probe ran before this claim: let
+    // go and wait (D14), never two recordings. Only a recording under way
+    // counts — a probe's `starting` meets this claim and is refused (D13).
+    // A Stop already draining here keeps its face.
+    if (want.state !== 'saved' && want.state !== 'stopping' && extensionRecordingElsewhere()) {
       if (releaseClaim(env, self.inst)) announce(env, self, null);
       return;
     }

@@ -211,6 +211,15 @@ describe('following', () => {
     await settle();
     expect(readClaim(env)).toMatchObject({ by: 'page', state: 'recording', sessionId: 'sess-1' });
   });
+
+  it('an extension Start probe announcing `starting` elsewhere takes nothing from the page that leads — its claim stays for the probe to read (D1, D13)', () => {
+    const { env } = fakeDocument();
+    setState(liveSession());
+    startLead(handlers, env);
+    extensionElsewhere(env, 'starting').announce();
+    expect(readClaim(env)).toMatchObject({ by: 'page', state: 'recording', sessionId: 'sess-1' });
+    expect(leadState.following).toBeNull();
+  });
 });
 
 describe('leading', () => {
