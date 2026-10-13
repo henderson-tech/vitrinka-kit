@@ -7,9 +7,13 @@
   extension records in another tab) also fired on the `starting` the
   extension's Start probe announces before it reads the page's claim. The
   page stepped aside and the extension's Start went through instead of being
-  refused (extension 0.11.0 against web 0.5.1). The page now yields only to
-  an extension recording or paused elsewhere; a probe meets the claim and is
-  refused, as first-to-start-leads demands.
+  refused. The page now yields only to an extension recording or paused
+  elsewhere, so a `starting` probe meets the claim and is refused. This does
+  not cover extension 0.11.0. Its `one.js` announces `recording` as soon as
+  the Start probe installs it, before the probe reads the claim, and a page
+  cannot tell that apart from a real recording in another tab. Use extension
+  0.11.1 or later, which installs `one.js` only where no recorder already
+  leads.
 
 ## 0.5.1
 
