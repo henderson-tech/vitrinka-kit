@@ -1,5 +1,16 @@
 # @vitrinka/web
 
+## 0.5.2
+
+- **A page that leads keeps the recording against an extension that is only
+  starting.** 0.5.1's yield (a page holding the claim lets go when the
+  extension records in another tab) also fired on the `starting` the
+  extension's Start probe announces before it reads the page's claim. The
+  page stepped aside and the extension's Start went through instead of being
+  refused (extension 0.11.0 against web 0.5.1). The page now yields only to
+  an extension recording or paused elsewhere; a probe meets the claim and is
+  refused, as first-to-start-leads demands.
+
 ## 0.5.1
 
 - **A claim names its session.** The server answers a session's id as a
