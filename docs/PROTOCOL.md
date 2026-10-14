@@ -178,12 +178,13 @@ conformance vectors in
   (OAuth callbacks, magic links, SAS URLs), with `;`-separated pairs handled
   — in request URLs, and in the web recorder also in every navigation URL
   (the page a session starts on included) and in the page URL rrweb stamps
-  on every full snapshot. The Expo recorder's route (every event's
-  `tabHost`, the `route` of navigations, taps and keyframes) passes the
-  same scrub.
+  on every full snapshot. The web recorder's `route` fields (navigation,
+  clicks, notes, bug reports) and the Expo recorder's route (every event's
+  `tabHost`, the `route` of navigations, taps and keyframes) pass the same
+  scrub.
 - **URL paths**: a credential in a path segment (`/reset-password/<token>`)
-  is the host app's to name. The Expo recorder's `sanitizeUrl` option
-  rewrites every route and request URL it captures before the scrub above,
+  is the host app's to name. The web and Expo recorders' `sanitizeUrl`
+  option rewrites every URL and route they capture before the scrub above,
   under any policy (`fullFidelity` included). A sanitizer that fails records
   only the URL's origin (`[redacted]` for a bare route), never the raw value.
 - **Values**: a PEM private key (`-----BEGIN … PRIVATE KEY-----`, any key

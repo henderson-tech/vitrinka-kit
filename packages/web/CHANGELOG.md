@@ -1,5 +1,29 @@
 # @vitrinka/web
 
+## 0.5.3
+
+- **Credentials in URL paths no longer reach vitrinka (`sanitizeUrl`).**
+  The recorder scrubbed secrets only in query strings and fragments, and
+  recorded `route` fields with no redaction at all. An app whose routes
+  carry tokens in the path (`/reset-password/:token`, `/cart/:id/:token`,
+  `/invite/:token`) uploaded them with every session and bug report.
+  `VitrinkaRecorderRoot` and `RecorderConfig` now take an optional
+  `sanitizeUrl: (url: string) => string`. It rewrites every URL and route
+  the recorder captures before the redaction engine scrubs it:
+  - navigation `url` and `route`, including the page a session starts on;
+  - the `route` of clicks, notes and annotations;
+  - network request URLs;
+  - the page URL on each rrweb full snapshot;
+  - a bug report's navigation and note.
+
+  It applies under `fullFidelity` too. A sanitizer that throws or returns a
+  non-string fails closed: the recorder keeps only the URL's origin, or
+  `[redacted]` when there is none, and logs one warning. See
+  [Credentials in URL paths](README.md#credentials-in-url-paths-sanitizeurl).
+- **Routes are redacted.** Every `route` field now passes the same scrub as
+  a URL, so a workspace's value patterns reach routes too. Without a
+  `sanitizeUrl`, a route that matches no pattern is recorded as before.
+
 ## 0.5.2
 
 - **A page that leads keeps the recording against an extension that is only
