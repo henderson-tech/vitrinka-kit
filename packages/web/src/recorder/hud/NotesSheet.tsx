@@ -42,6 +42,8 @@ export function NotesSheet({ className, origin, rows, now, onEdit, onReference, 
   const [edit, setEdit] = useState('');
   const list = useRef<HTMLDivElement>(null);
   const visible = filterRows(rows, filter);
+  // The one tabbable row: the focused one while the filter shows it, else the first.
+  const tabCid = visible.some((r) => r.cid === focused) ? focused : (visible[0]?.cid ?? null);
   const row = open ? rows.find((r) => r.cid === open) : undefined;
 
   // Opening a note puts its newest text in the edit box — only when ANOTHER
@@ -55,6 +57,14 @@ export function NotesSheet({ className, origin, rows, now, onEdit, onReference, 
   }, [open, openText]);
 
   const walk = (e: KeyboardEvent) => {
+    // Esc steps back from an open note, else closes the sheet — from any control in it.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (open) setOpen(null);
+      else onClose();
+      return;
+    }
     const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
     if (!step) return;
     if (e.target instanceof HTMLTextAreaElement) return;
@@ -180,7 +190,7 @@ export function NotesSheet({ className, origin, rows, now, onEdit, onReference, 
                 type="button"
                 className="n-open"
                 data-cid={r.cid}
-                tabIndex={r.cid === (focused ?? visible[0]?.cid) ? 0 : -1}
+                tabIndex={r.cid === tabCid ? 0 : -1}
                 aria-label={`${kicker(r, now)} — ${r.text}`}
                 onFocus={() => setFocused(r.cid)}
                 onClick={() => setOpen(r.cid)}
@@ -244,7 +254,8 @@ export const NOTES_CSS = `
 .n-th b { position:absolute; left:4px; bottom:2px; font:600 9px/1 ui-monospace, Menlo, monospace; color:var(--fg-2); }
 .n-th.on { opacity:1; box-shadow:0 0 0 2px var(--rec); color:var(--fg); }
 .n-th:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
-.n-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; padding:4px 14px 4px; }
+.n-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; padding:4px 14px 4px;
+  max-height:min(60vh, calc(380px * var(--s))); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
 .n-meta { font-size:var(--fs-s); color:var(--fg-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .n-ver { padding:8px 10px; border-radius:9px; background:rgba(0,0,0,.22); box-shadow:inset 0 0 0 1px var(--edge);
   font-size:calc(var(--fs) + .5px); line-height:1.4; color:var(--fg); white-space:pre-wrap; overflow-wrap:anywhere; }

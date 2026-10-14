@@ -236,7 +236,15 @@ export function noteLog(sessionId: string): HudNote[] {
 }
 
 export function logNote(sessionId: string, note: HudNote): void {
-  const notes = [...noteLog(sessionId), note].slice(-MAX_LOGGED_NOTES);
+  let notes = [...noteLog(sessionId), note];
+  while (notes.length > MAX_LOGGED_NOTES) {
+    // Evict the oldest ORIGINAL with its whole edit chain — an edit left
+    // without its original would list as a note of its own.
+    const root = new Map<string, string>();
+    for (const n of notes) root.set(n.cid, (n.replaces && root.get(n.replaces)) || n.cid);
+    const oldest = root.get(notes[0]!.cid);
+    notes = notes.filter((n) => root.get(n.cid) !== oldest);
+  }
   safeSet(NOTE_LOG_KEY, JSON.stringify({ sessionId, notes }));
 }
 

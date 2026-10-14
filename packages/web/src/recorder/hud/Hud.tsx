@@ -238,13 +238,20 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const rows = useMemo(() => noteRows(notes, rec?.sync.pendingNotes ?? []), [notes, rec?.sync.pendingNotes]);
   const dock = useDock(onMoveStart, storage);
   const phone = useMedia(PHONE_QUERY);
+  // The composer a note opens: the PARKED draft when there is one — it carries
+  // its pick, and a fresh Note sheet would send that annotation as a plain note.
+  const parkedNow = useRef(parked);
+  parkedNow.current = parked;
+  const composeNote = useCallback(() => {
+    setSheet(parkedNow.current ?? { title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
+    setParked(null);
+  }, []);
   const openNote = useCallback(() => {
     if (!controller.getSnapshot().recording) return;
     controller.setAnnotating(false);
     setMenu(false);
-    setParked(null);
-    setSheet({ title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
-  }, [controller]);
+    composeNote();
+  }, [controller, composeNote]);
   // The composer that Reselect left: Esc in pick mode goes back to it unchanged (D9).
   const reselectRef = useRef<SheetState | null>(null);
   const toggleAnnotate = useCallback(() => {
@@ -509,9 +516,9 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const onReferenceNote = useCallback(
     (row: NoteRow) => {
       setRefs((list) => (list.some((r) => r.cid === row.cid) ? list : [...list, row]));
-      setSheet({ title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
+      composeNote();
     },
-    [],
+    [composeNote],
   );
   const onRetryBuild = useCallback(
     (sessionId: string) => {
@@ -870,6 +877,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
           onRetry={onRetry}
           onDismiss={onDismiss}
           onRetryBuild={onRetryBuild}
+          canRetryBuild={typeof controller.retryBuild === 'function'}
           onTrayOpen={setTrayOpen}
           {...(controller.listNotes ? { notesCount: rows.length } : {})}
           onNotes={openNotes}

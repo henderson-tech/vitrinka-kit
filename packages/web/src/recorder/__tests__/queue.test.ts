@@ -94,6 +94,18 @@ describe('queue', () => {
     expect(noteLog('sess-1')).toEqual([]);
   });
 
+  it('evicts the oldest note with its whole edit chain, never an original alone', () => {
+    setState(liveSession());
+    const n = (cid: string, replaces?: string) => ({ cid, text: cid, at: 1, route: '/', region: false, ...(replaces ? { replaces } : {}) });
+    logNote('sess-1', n('first'));
+    logNote('sess-1', n('first-v2', 'first'));
+    for (let i = 0; i < 199; i++) logNote('sess-1', n(`n${i}`));
+    const cids = noteLog('sess-1').map((x) => x.cid);
+    expect(cids).not.toContain('first');
+    expect(cids).not.toContain('first-v2');
+    expect(cids).toHaveLength(199);
+  });
+
   it('keeps the buffer on a transient failure and schedules a retry', async () => {
     setState(liveSession());
     pushEvent('click', {}, ROUTE);

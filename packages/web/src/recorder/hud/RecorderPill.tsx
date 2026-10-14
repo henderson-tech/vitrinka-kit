@@ -88,6 +88,11 @@ export function newCid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** The sync state and counts as one sentence — the handle's description (D4). */
+function syncSentence(chip: SyncChip, a: HudSync['acked']): string {
+  return a ? `${chip.title} · ${a.actions} actions · ${a.frames} frames · ${a.notes} notes · ${a.pages} pages` : chip.title;
+}
+
 /** The details float's default face (D4): what reached vitrinka, by kind. */
 export function Stats({ sync, now }: { sync: HudSync; now: number }): ReactElement {
   const chip = syncChip(sync, now);
@@ -240,6 +245,8 @@ export interface RecorderPillProps {
   onDismiss: () => void;
   /** Build the saved session's board again (a retryable failed build). */
   onRetryBuild: (sessionId: string) => void;
+  /** The host implements `retryBuild`: only then does a failed build offer Retry. */
+  canRetryBuild: boolean;
   /** The recording's tray unfolded or folded: the stats float follows it. */
   onTrayOpen: (open: boolean) => void;
   /** This recording's notes so far (the tray's notes button counts them, D5); absent = the host lists none. */
@@ -495,10 +502,15 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
         </button>
       </Seg>
       <Seg on={face === 'rec' || (confirming && rec !== null)} className="s-handle">
+        {/* The sync ring and the stats float are visual; this says both to assistive tech (D4). */}
+        <span id="vt-sync-desc" className="sr">
+          {chip ? syncSentence(chip, shownRec?.sync.acked) : ''}
+        </span>
         <button
           type="button"
           className="handle"
           aria-label="Recorder controls"
+          aria-describedby="vt-sync-desc"
           aria-expanded={unfolded && face === 'rec'}
           onClick={toggle}
           {...p.handle}
@@ -654,7 +666,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
               </span>
               <span data-tip={proj?.error}>Board build failed</span>
               <span className="sr">{proj?.error}</span>
-              {proj?.retryable && savedSession ? (
+              {proj?.retryable && savedSession && p.canRetryBuild ? (
                 <button type="button" className="fb" onClick={() => p.onRetryBuild(savedSession)}>
                   Retry
                 </button>
