@@ -143,9 +143,10 @@ describe('sanitizeUrl', () => {
     }
   });
 
-  it('a sanitizer that logs is not re-entered by console capture', () => {
+  it('a line the sanitizer logs reaches the console, never the recording', () => {
+    const logged: unknown[][] = [];
     const saved = { error: console.error, warn: console.warn };
-    console.error = () => {};
+    console.error = (...args: unknown[]) => void logged.push(args);
     (globalThis as Record<string, unknown>).__vitrinkaRecorderConsolePatched = undefined;
     patchConsole();
     try {
@@ -154,8 +155,10 @@ describe('sanitizeUrl', () => {
         return sanitizeUrl(url);
       });
       session.addNote('step');
-      expect(events('console').map((e) => e.tabHost)).toEqual(['[redacted]']);
+      expect(logged).toEqual([['sanitizing', '/reset-password/s3cr3t']]);
+      expect(events('console')).toEqual([]);
       expect(events('note')[0]?.tabHost).toBe('/reset-password/[token]');
+      expect(JSON.stringify(queue.__bufferForTests())).not.toContain('s3cr3t');
     } finally {
       Object.assign(console, saved);
       (globalThis as Record<string, unknown>).__vitrinkaRecorderConsolePatched = undefined;

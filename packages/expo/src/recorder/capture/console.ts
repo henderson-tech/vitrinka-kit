@@ -3,7 +3,7 @@
  * "vitrinka:" and skipped, or a failed flush would feed itself forever.
  */
 import { pushEvent } from '../queue';
-import { eventRoute, redactText } from './redact';
+import { eventRoute, insideSanitizer, redactText } from './redact';
 
 const TEXT_CAP = 8 * 1024;
 
@@ -22,6 +22,7 @@ export function patchConsole(): void {
     const orig = console[level].bind(console);
     console[level] = (...args: unknown[]) => {
       orig(...args);
+      if (insideSanitizer()) return;
       try {
         const text = args
           .map((a) =>

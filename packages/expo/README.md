@@ -118,7 +118,8 @@ const sanitizeUrl = (url: string) => SECRET_PATHS.reduce((u, [rx, to]) => u.repl
   your statement about your own URLs, not a workspace redaction rule.
 - **Failure:** it fails closed. If it throws or returns a non-string, the
   recorder keeps only the URL's origin (`[redacted]` for a bare route),
-  never the raw value. It logs one `vitrinka:` warning per sanitizer.
+  never the raw value. It logs one `vitrinka:` warning per sanitizer. A line
+  your sanitizer logs reaches the console but is never recorded.
 - **Not covered:** free text stays under the workspace policy: request and
   response headers and bodies, and console lines (a router error that quotes
   the path, say). Add a policy pattern for a token shape that shows up in

@@ -69,7 +69,7 @@ export function redactAndCap(
 let hostSanitizer: ((url: string) => string) | undefined;
 /** The sanitizer whose failure was last reported: once, not on every URL. */
 let reportedSanitizer: unknown = null;
-/** True while the host's sanitizer runs: a line it logs re-enters via console capture. */
+/** True while the host's sanitizer runs. */
 let sanitizing = false;
 
 /** Install the host's `sanitizeUrl`; RecorderProvider calls it on every render. */
@@ -77,13 +77,18 @@ export function setSanitizeUrl(sanitize: ((url: string) => string) | undefined):
   hostSanitizer = sanitize;
 }
 
+/** Console capture skips what the sanitizer logs: such a line quotes the raw URL. */
+export function insideSanitizer(): boolean {
+  return sanitizing;
+}
+
 /**
  * The host's `sanitizeUrl` over one captured URL or route. FAIL CLOSED: a
  * sanitizer that throws or returns a non-string leaves the URL's origin, or
  * `[redacted]` when it has none (a relative URL, a route), never the raw
- * value; so does a URL captured from inside the sanitizer (its own log line).
- * It applies under `fullFidelity` too: it is the host's statement about its
- * own URLs, not a workspace redaction rule.
+ * value; so does a URL captured from inside the sanitizer. It applies under
+ * `fullFidelity` too: it is the host's statement about its own URLs, not a
+ * workspace redaction rule.
  */
 function sanitizeUrl(url: string): string {
   const sanitize = hostSanitizer;
