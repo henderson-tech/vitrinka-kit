@@ -162,19 +162,23 @@ returned unchanged otherwise.
 ## Using the pill
 
 Idle, the HUD is a 28px glass puck: a hollow ring until the device is linked
-(**Link recorder**), a muted dot once it is (**Start recording** — the session
-title is `document.title`, or the `title` prop); the label and a ⋯ slide out
-on hover or focus. Recording, it rests as a dot + timer capsule (**Recorder
-controls**) that unfolds into the tools on hover, focus or tap and folds back
-2.5s after you leave (a tooltip names each tool and its shortcut):
+(**Link recorder**), a red record dot once it is (**Start recording** — the
+session title is `document.title`, or the `title` prop; **Starting…** while it
+boots); the label and a ⋯ slide out on hover or focus. The first time on a
+site a small hint says what Start does (**Start** · **Got it**). Recording, it
+rests as a dot + timer capsule (**Recorder controls**) that unfolds into the
+tools on hover, focus or tap and folds back 2.5s after you leave (a tooltip
+names each tool and its shortcut). The dot's ring is the sync state; while the
+tools are out, a float above the pill says what reached vitrinka — `on
+vitrinka` (or `sending N`) · actions · frames · notes · pages:
 
 | Control | Shortcut | What |
 |---|---|---|
-| sync chip | | `synced` · `sending N` · `offline · N` · `ended` — readable without hovering |
-| ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture |
-| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel (the draft and its images survive a cancel); the pill says **Saved**. Images: see [Attach images](#attach-images) |
-| ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it: `board` (an annotation on the board) or `task` (also filed as an intake draft) |
-| ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Saved · Open board** until you dismiss it |
+| ≣ History | | this recording's notes and annotations, newest first, in the board's annotation-island layout: open one to see its versions, **Save edit** (sent as a new note that `replaces` it), or **reference** it from a new note |
+| ⏸ Pause / ▶ Resume | ⌥⇧P (Alt⇧P) | freezes the clock and capture (a note written while paused is still sent) |
+| ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel. A cancelled draft (and its images) parks as a small drop on the pill: hover shows its first line, a click resumes it. The clock says **queued**, then **Saved** once the server has the note. Images: see [Attach images](#attach-images) |
+| ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it; the sheet names what you picked (its crop where the host can read pixels — the extension — else its size and route) with **Reselect**. Everything lands on the board |
+| ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Building board · k/n** while the server builds it, then **Board ready · Open board** until **Done** (a failed build says so, with **Retry**) |
 | ⋯ | | the linked account · **Report a bug** (below) · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
 
 Move it anywhere: drag the puck or capsule and it lands on one of eight
@@ -188,11 +192,11 @@ wherever the HUD sits: sideways from a vertical one. They flip and shift so
 they never leave the viewport. On a phone, sheets are a bottom sheet above
 the keyboard and the link sheet drops the QR.
 
-The sync chip is honest: `synced` means the server confirmed it holds
-everything captured. A backlog reads `sending N`. An outage reads
-`offline · N` (nothing is dropped; the tail is kept in `localStorage`). A
-session the server closed reads `ended`. A one-line detail also unfolds for
-an outage or an ended session. Stop drains first and refuses while the server
+The sync state is honest: `on vitrinka` means the server confirmed it holds
+everything captured. A backlog reads `sending N` (an amber ring). An outage
+reads `offline · N` (nothing is dropped; the tail is kept in `localStorage`).
+A session the server closed reads `ended` (a red ring). A one-line detail
+also unfolds for an outage or an ended session. Stop drains first and refuses while the server
 is unreachable: the pill says so and offers **Retry**.
 
 **Size** and **Technical details** are user preferences. For a linked device
@@ -206,8 +210,9 @@ the recorder version.
 The note, annotate and bug-report sheet is 440 px wide at every HUD size,
 and its text box grows with what you type up to 20 rows, then scrolls. Drag
 the grip on the sheet's free corner (the one away from the pill) to change
-the width and that cap; on a phone the sheet spans the screen, so its grip
-changes the cap alone. With the grip focused, the arrow keys move it 16 px
+the width and the height: a dragged height is kept as the box's minimum, and
+a longer draft still grows past it up to the room it has. On a phone the
+sheet spans the screen, so its grip changes the height alone. With the grip focused, the arrow keys move it 16 px
 (Shift: 64 px), and Enter or a double-click restores the default. The size is a
 preference too (`sheetW`, `sheetH` in CSS px, 0 = the default). It is sent
 in a PATCH of its own when you let go. A server that predates it answers 422,

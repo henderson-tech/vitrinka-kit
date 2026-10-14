@@ -962,7 +962,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
                 onStart();
               }}
             >
-              Start recording
+              Start
             </button>
             <button type="button" className="fb" onClick={markHinted}>
               Got it

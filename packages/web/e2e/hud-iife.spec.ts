@@ -94,7 +94,7 @@ test('the IIFE mounts the HUD for a foreign controller and drives it only throug
     'href',
     'https://vitrinka.test/acme/b/ext-1',
   );
-  await page.locator('[data-e2e="saved"]').getByRole('button', { name: 'Dismiss' }).click();
+  await page.locator('[data-e2e="saved"]').getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: 'Start recording' }).hover();
   await page.locator('.seg.on .b-more').click();
   await expect(page.locator('[data-e2e="menu-account"]')).toContainText('ext@example.test');

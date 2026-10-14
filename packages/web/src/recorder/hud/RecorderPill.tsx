@@ -524,8 +524,8 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
             <button
               type="button"
               className="tb b-notes"
-              aria-label={`Notes · ${p.notesCount}`}
-              data-tip="Notes"
+              aria-label={`History · ${p.notesCount}`}
+              data-tip="History"
               onClick={p.onNotes}
             >
               <ListIcon />
@@ -627,7 +627,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
           {build === 'building' ? (
             <>
               <LayersIcon />
-              <span>Building board</span>
+              <span>{report ? 'Sent · building board' : 'Building board'}</span>
               {proj?.step ? <span className="muted step">{proj.step}</span> : null}
               {buildTotal > 0 ? (
                 <span className="frac">

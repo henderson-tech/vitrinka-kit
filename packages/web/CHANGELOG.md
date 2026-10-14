@@ -1,5 +1,47 @@
 # @vitrinka/web
 
+## 0.6.0
+
+The pill now says what it is doing at every step, and keeps what you write.
+
+- **After Stop: Saving… → Building board · k/n → Board ready.** "Saved"
+  used to mean only that the server accepted the Stop, and the board link
+  appeared later without a word. The pill now shows the server's build
+  (`projection` step and progress) and then **Board ready · Open board**. A
+  failed build says so, with **Retry** when another pass can fix it (the
+  Retry closes the session again, a door a recorder token already has). The
+  ✕ became **Done**: it only ever dismissed the face.
+- **Start reads as an action.** The idle dot is red, **Starting…** shows
+  while a session boots, the ⋯ keeps the tray's inset from the pill's edge,
+  and a one-time hint per site says what Start does.
+- **The sync chip left the tray.** The rec dot carries the sync state as a
+  ring (green, amber backlog, warn offline, red ended); while the tools are
+  out, a float above the pill counts what the server acknowledged — actions,
+  frames, notes, pages (`HudSync.acked`).
+- **History.** A tray button lists the recording's notes and annotations in
+  the board annotation island's layout. **Save edit** sends a NEW note with
+  `replaces: <cid>` (the stream stays append-only; the board keeps the
+  versions in the thread); **reference** starts a note carrying `refs:
+  [<cid>]`, which the board turns into an annotation ref. Every note now
+  carries a client id, `cid` (`docs/PROTOCOL.md`). The list is kept on the
+  device for the recording's life (a recorder token reads nothing back).
+- **The composer.** The `board | task` toggle is gone: everything lands on
+  the board. The sheet names what an annotation points at — its crop where
+  the host can read pixels (`HudController.captureRegion`, the extension),
+  else its size and route — with **Reselect**. A dragged height is now a
+  minimum: releasing the grip never snaps the box back. A draft left by a
+  click on the page parks as a small drop on the pill; hover previews it, a
+  click resumes it.
+- **Honest flashes.** The clock says **queued** until the server
+  acknowledged a note, then **Saved** (`HudSync.pendingNotes`). A note
+  written while paused is queued and sent instead of dropped.
+- **A recording in another tab** shows a quiet "Recording in another tab"
+  pill instead of no recorder at all (`HudSnapshot.followingElsewhere`).
+- **Controller contract.** `HudAnnotation.task` is removed; `note` and
+  `annotate` take a `HudNoteLink`; `listNotes`, `captureRegion` and
+  `retryBuild` are optional. A host that omits them gets today's behaviour
+  for that part.
+
 ## 0.5.3
 
 - **Credentials in URL paths no longer reach vitrinka (`sanitizeUrl`).**

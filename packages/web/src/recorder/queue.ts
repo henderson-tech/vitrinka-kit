@@ -1485,12 +1485,14 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   noteSync();
   serverMaxSeq = Math.max(serverMaxSeq, ...batch.map((event) => event.seq));
   countAcked(batch);
-  notify();
   // Remove EXACTLY the sent seqs — events pushed during the in-flight POST survive.
   const sent = new Set(batch.map((e) => e.seq));
   clearStoredCaptures(rec.sessionId, sent);
   const rest = getBuffer().filter((e) => !sent.has(e.seq));
   setBuffer(rest);
+  // Announced once the buffer no longer holds them: a snapshot built now
+  // must not still list an acknowledged note as pending (the HUD's flash).
+  notify();
   // An acknowledged attachment row: its bytes are the server's now.
   for (const seq of sent) {
     const key = rowBlobs.get(seq);

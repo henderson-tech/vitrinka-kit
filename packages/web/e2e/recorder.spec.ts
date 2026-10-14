@@ -75,7 +75,7 @@ test('records a journey: create · click · nav · note · region annotation · 
   await expect.poll(() => seen.some((s) => s.method === 'PATCH' && (s.body as { status?: string })?.status === 'done'), {
     timeout: 30_000,
   }).toBe(true);
-  await page.getByRole('button', { name: 'Dismiss' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
 
   const create = seen.find((s) => s.method === 'POST' && s.path === '/api/v1/sessions')!;
@@ -193,7 +193,9 @@ test('grip keyboard resizes and Enter restores defaults', async ({ page }) => {
   expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!)).toMatchObject({ sheetW: 0, sheetH: 0 });
 });
 
-test('a drag shows the cap it sets, then a short draft fits itself again under it', async ({ page }) => {
+// HUD polish D8: a dragged height is a MINIMUM — the release never snaps the
+// box back under a short draft, and a long draft still grows past it.
+test('a drag sets the height the composer keeps, and a long draft grows past it', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 810 });
   await page.goto(pageUrl);
   await page.getByRole('button', { name: 'Start recording' }).click();
@@ -208,11 +210,13 @@ test('a drag shows the cap it sets, then a short draft fits itself again under i
   const height = async () => (await text.boundingBox())!.height;
   await expect.poll(height).toBeCloseTo(before + 120, 0);
   await page.mouse.up();
-  await expect.poll(height).toBeCloseTo(before, 0);
-  const cap = JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!).sheetH;
-  expect(cap).toBeCloseTo(before + 120, 0);
+  // No snap back: the short draft keeps the dragged height.
+  await page.waitForTimeout(300);
+  expect(await height()).toBeCloseTo(before + 120, 0);
+  const min = JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!).sheetH;
+  expect(min).toBeCloseTo(before + 120, 0);
   await text.fill(Array.from({ length: 30 }, (_, i) => `Line ${i}`).join('\n'));
-  expect((await text.boundingBox())!.height).toBeCloseTo(cap, 0);
+  expect((await text.boundingBox())!.height).toBeGreaterThan(min + 20);
 });
 
 test('links the device from the pill, then records with the minted token', async ({ page }) => {
@@ -560,7 +564,7 @@ test('reduced motion stills the recording ripple', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();
-  const dot = page.locator('[data-e2e="recorder-pill"] .dot');
+  const dot = page.locator('[data-e2e="recorder-pill"] .handle .dot');
   await expect(dot).toBeVisible();
   expect(await dot.evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('none');
 });
@@ -621,7 +625,9 @@ test('stop lives in the pill: confirm inline, then saving, then saved with the b
   await expect(saved).toBeVisible();
   await expect(clock).toHaveText(stoppedAt);
 
-  await saved.getByRole('button', { name: 'Dismiss' }).click();
+  // D2: the exit says what it does — Done dismisses the face, nothing more.
+  await expect(saved).toContainText('Board ready');
+  await saved.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
 
   // Recents: the device's last recordings, linked to their boards.
@@ -1017,7 +1023,55 @@ test('report a bug from the idle pill: the last minute files as its own session,
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
 
-test('a report sent before its board is built says Sent · in Recents, then Open board opens it once it is', async ({ page }) => {
+// HUD polish D3: once per origin the idle puck explains what Start does.
+test('the first-run hint shows once: Got it, and it never comes back', async ({ page }) => {
+  await page.goto(`${pageUrl}/?hint`);
+  const hint = page.getByRole('dialog', { name: 'Record this session' });
+  await expect(hint).toBeVisible();
+  await hint.getByRole('button', { name: 'Got it' }).click();
+  await expect(hint).toBeHidden();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
+  await expect(hint).toBeHidden();
+});
+
+// HUD polish D10/D13/D5/D6: a draft left by a page click parks as the drop and
+// resumes intact; the history lists the note and an edit replaces it.
+test('a parked draft resumes from its drop, and the history edits a sent note', async ({ page }) => {
+  seen.length = 0;
+  await page.goto(`${pageUrl}/`);
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'Note', exact: true }).click();
+  const ta = page.getByPlaceholder("what's wrong / what to refine…");
+  await ta.fill('Tabs load twice');
+  await page.mouse.click(300, 300);
+  await expect(ta).toBeHidden();
+  const drop = page.locator('[data-e2e="draft-drop"]');
+  await expect(drop).toBeVisible();
+  await drop.getByRole('button', { name: /Resume the draft: Tabs load twice/ }).click();
+  await expect(ta).toHaveValue('Tabs load twice');
+  await ta.press('Enter');
+  await expect(drop).toBeHidden();
+
+  await page.getByRole('button', { name: 'Recorder controls' }).hover();
+  await page.getByRole('button', { name: 'History · 1' }).click();
+  await page.getByRole('button', { name: /№1 · note/ }).click();
+  const edit = page.getByRole('textbox', { name: 'Edit note №1' });
+  await edit.fill('Tabs load twice on switch');
+  await edit.press('Enter');
+  const notes = () =>
+    seen
+      .filter((s) => s.path.endsWith('/events'))
+      .flatMap((s) => (s.body as { events: { kind: string; payload: Record<string, unknown> }[] }).events)
+      .filter((e) => e.kind === 'note');
+  await expect.poll(() => notes().length).toBe(2);
+  const [first, second] = notes();
+  expect(second!.payload).toMatchObject({ text: 'Tabs load twice on switch', replaces: first!.payload.cid });
+  await expect(page.getByText('v2 · just now · current')).toBeVisible();
+});
+
+test('a report sent before its board is built says Sent · building board, then Open board opens it once it is', async ({ page }) => {
   // The live server projects a board after the stop (stills render first), so Send learns no link.
   const ready = servers.boardLater();
   await page.goto(`${pageUrl}/`);
@@ -1030,8 +1084,9 @@ test('a report sent before its board is built says Sent · in Recents, then Open
   await ta.press('Enter');
   const saved = page.locator('[data-e2e="saved"]');
   await expect(saved).toContainText('Sent', { timeout: 30_000 });
-  // No link to a board that does not exist yet.
-  await expect(saved).toContainText('in Recents');
+  // D1: the pill says the board is being built — no link to a board that does not exist yet.
+  await expect(saved).toHaveAttribute('data-build', 'building');
+  await expect(saved).toContainText('building board');
   await expect(saved.getByRole('link')).toHaveCount(0);
 
   ready();
@@ -1139,7 +1194,8 @@ test.describe('on a phone', () => {
     // Up the screen grows the cap; the sideways part of the drag changes nothing.
     await touchDrag(page, from, { x: from.x + 60, y: from.y - 80 });
     const after = (await text.boundingBox())!;
-    expect(after.height).toBeCloseTo(before.height + 80, 0);
+    // The dragged height is a minimum (D8): a 30-line draft may stand taller.
+    expect(after.height).toBeGreaterThanOrEqual(before.height + 79);
     expect(after.width).toBeCloseTo(before.width, 0);
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.recorder.prefs')))!)).toMatchObject({
       sheetW: 0,
