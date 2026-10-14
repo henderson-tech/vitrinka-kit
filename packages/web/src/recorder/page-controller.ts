@@ -13,10 +13,10 @@ import { readLink, recorderConfig, vitrinkaLinked } from './config';
 import { holdFace, leadStatus, sendToLeader, setRemoteStop } from './lead';
 import { forgetLink, linkDevice } from './link';
 import { cachedAccount, cachedPrefs, fetchMe, savePrefs } from './me';
-import { getState, health } from './queue';
-import { boardUrlOf, readRecents, refreshRecents } from './recents';
+import { ackedCounts, getState, health, pendingNoteCids } from './queue';
+import { boardUrlOf, readRecents, refreshRecents, retryBuild } from './recents';
 import { canAttach, canReport, holdReport, sendReport } from './report';
-import { addAnnotation, addNote, RECORDER_ID, startSession, stopSession, togglePause } from './session';
+import { addAnnotation, addNote, listNotes, RECORDER_ID, startSession, stopSession, togglePause } from './session';
 import { annotateState, leadState, setAnnotating, subscribe } from './state';
 
 function build(): HudSnapshot {
@@ -44,6 +44,8 @@ function build(): HudSnapshot {
         events: h.localSeq,
         serverMaxSeq: h.serverMaxSeq,
         deadReason: h.deadReason,
+        acked: ackedCounts(),
+        pendingNotes: pendingNoteCids(),
       },
     };
   }
@@ -104,14 +106,16 @@ export function createPageController(): HudController {
       const url = boardUrlOf(done) ?? boardUrl;
       return { ...(url ? { boardUrl: url } : {}), ...(sessionId ? { sessionId } : {}) };
     },
-    note(text, attachments) {
-      if (!leadState.following) return addNote(text, attachments);
+    note(text, attachments, link) {
+      if (!leadState.following) return addNote(text, attachments, link);
       // Images never cross to the other recorder; its note carries the text.
       if (attachments?.length) console.warn('vitrinka: the note goes to the recorder that leads — without its images');
       sendToLeader('note', text);
     },
-    annotate: ({ text, rect, selector, task, attachments }) =>
-      addAnnotation(text, rect, selector, { task, ...(attachments ? { attachments } : {}) }),
+    annotate: ({ text, rect, selector, attachments, link }) =>
+      addAnnotation(text, rect, selector, { ...(attachments ? { attachments } : {}), ...(link ? { link } : {}) }),
+    listNotes,
+    retryBuild,
     setAnnotating,
     async link(): Promise<HudLinkFlow> {
       const flow = await linkDevice();

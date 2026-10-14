@@ -567,12 +567,67 @@ function noteFailure(e: unknown): void {
   lastError = String(e instanceof Error ? e.message : e).slice(0, 200);
 }
 
+/**
+ * What THIS tab delivered and the server acknowledged, by what a tester would
+ * call it (the HUD's stats float): clicks are actions, navigations pages,
+ * rrweb rows count their DOM frames, notes include annotations.
+ */
+export interface AckedCounts {
+  actions: number;
+  pages: number;
+  frames: number;
+  notes: number;
+}
+
+let acked: AckedCounts = { actions: 0, pages: 0, frames: 0, notes: 0 };
+/** Client ids (`payload.cid`) of notes the server has acknowledged. */
+const ackedNotes = new Set<string>();
+
+function countAcked(events: readonly RecorderEvent[]): void {
+  const next = { ...acked };
+  for (const ev of events) {
+    if (ev.kind === 'click') next.actions++;
+    else if (ev.kind === 'nav') next.pages++;
+    else if (ev.kind === 'rrweb') next.frames += typeof ev.payload?.count === 'number' ? ev.payload.count : 1;
+    else if (ev.kind === 'note') {
+      next.notes++;
+      if (typeof ev.payload?.cid === 'string') ackedNotes.add(ev.payload.cid);
+    }
+  }
+  acked = next;
+}
+
+/** The acknowledged counts; the SAME object until a delivery changes them. */
+export function ackedCounts(): AckedCounts {
+  return acked;
+}
+
+/** Whether the server acknowledged the note with this client id. */
+export function noteAcked(cid: string): boolean {
+  return ackedNotes.has(cid);
+}
+
+/** Client ids of this tab's notes still on their way: waiting for a seq, or buffered. */
+export function pendingNoteCids(): string[] {
+  const out: string[] = [];
+  for (const item of pendingAllocations) {
+    const { draft } = item;
+    if (draft.kind === 'event' && draft.event.kind === 'note' && typeof draft.event.payload?.cid === 'string') out.push(draft.event.payload.cid);
+  }
+  for (const ev of getBuffer()) {
+    if (ev.kind === 'note' && typeof ev.payload?.cid === 'string') out.push(ev.payload.cid);
+  }
+  return out;
+}
+
 /** Fresh-session baseline; called by startSession before capture begins. */
 export function resetHealth(baseSeq = 0): void {
   lastSyncAt = Date.now();
   lastError = '';
   failures = 0;
   serverMaxSeq = baseSeq;
+  acked = { actions: 0, pages: 0, frames: 0, notes: 0 };
+  ackedNotes.clear();
 }
 
 export type RecorderHealthState = 'idle' | 'ok' | 'backlog' | 'offline' | 'dead';
@@ -950,7 +1005,8 @@ function allocatePending(): Promise<void> {
  */
 function queueCapture(draft: CaptureDraft, journaled?: Promise<boolean>): boolean {
   const accepted = getState();
-  if (!accepted || accepted.paused || accepted.dead) return false;
+  const note = draft.kind === 'event' && draft.event.kind === 'note';
+  if (!accepted || accepted.dead || (accepted.paused && !note)) return false;
   recoverAllocations();
   if (kv().withLock) {
     const key = `${ALLOCATION_PREFIX}${RECORDER_DOCUMENT_KEY}.${++captureNo}`;
@@ -1034,7 +1090,8 @@ export function isSessionLive(id: string): boolean {
 }
 
 /**
- * Append an event to the durable buffer (drops while paused or dead).
+ * Append an event to the durable buffer (drops while dead, and while paused
+ * except a note: the tester wrote it on purpose, so it queues and lands).
  * `tabId`/`tabHost`/`ts`/`seq` are filled here; capture layers pass
  * kind+payload plus the route they observed. With no session the event goes
  * to the flight recorder when the idle pill keeps one (memory only — never
@@ -1052,7 +1109,7 @@ export function pushEvent(
   if (leadState.following) return null;
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
-  if (rec.paused || rec.dead) return null;
+  if (rec.dead || (rec.paused && kind !== 'note')) return null;
   const ts = new Date().toISOString();
   const { tabId, tabHost } = route;
   const staged = images.length ? stageImages(rec.sessionId, images) : null;
@@ -1404,6 +1461,7 @@ async function flushInner(opts: { keepalive?: boolean }): Promise<boolean> {
   if (movedOn(rec)) return true;
   noteSync();
   serverMaxSeq = Math.max(serverMaxSeq, ...batch.map((event) => event.seq));
+  countAcked(batch);
   notify();
   // Remove EXACTLY the sent seqs — events pushed during the in-flight POST survive.
   const sent = new Set(batch.map((e) => e.seq));
@@ -1487,6 +1545,8 @@ export function __resetForTests(): void {
   kv().remove('seq');
   for (const key of kv().keys?.() ?? []) if (key.startsWith(ALLOCATION_PREFIX)) kv().remove(key);
   resetIdle();
+  acked = { actions: 0, pages: 0, frames: 0, notes: 0 };
+  ackedNotes.clear();
 }
 
 /** Test-only: the recorded events currently buffered (in order). */

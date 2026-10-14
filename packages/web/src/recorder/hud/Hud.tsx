@@ -300,7 +300,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         return;
       }
       if (s.pick) {
-        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, task, ...attachments });
+        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, ...attachments });
         setDraft('');
         setImages([]);
         saidSaved();

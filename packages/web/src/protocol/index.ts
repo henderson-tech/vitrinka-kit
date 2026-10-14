@@ -77,6 +77,16 @@ export interface NotePayload {
    * one that never arrives (the note lands without it).
    */
   attachments?: number[];
+  /**
+   * The note's client id, minted by the recorder. `replaces` names an
+   * earlier note's `cid` this one supersedes — an edit: the board shows the
+   * latest version and keeps the earlier ones in the thread. `refs` lists the
+   * `cid`s of other notes this one points at. Client ids, never seqs (a seq
+   * is allocated after the push). A server that predates them ignores all three.
+   */
+  cid?: string;
+  replaces?: string;
+  refs?: string[];
   [key: string]: unknown;
 }
 

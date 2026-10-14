@@ -19,7 +19,7 @@ import { type StagedImage, stageAttachments } from './attachments';
 import { primeNavigation } from './capture/nav';
 import { redactedRoute, redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
-import type { HudAttachment } from './hud/controller';
+import type { HudAttachment, HudNote } from './hud/controller';
 import {
   adoptStoredState,
   armReconcile,
@@ -339,14 +339,98 @@ function imagesOf(list: readonly HudAttachment[] | undefined): StagedImage[] {
 }
 
 /**
+ * A note's identity on the wire (recorder HUD polish D6/D7): `cid` names it,
+ * `replaces` supersedes an earlier note's whole content (the board shows the
+ * latest, the thread keeps the rest), `refs` points at other notes. All are
+ * the HUD's client ids, never seqs — a seq is allocated after the push.
+ */
+export interface NoteLink {
+  cid?: string;
+  replaces?: string;
+  refs?: readonly string[];
+}
+
+function linkOf(link: NoteLink | undefined): Record<string, unknown> {
+  if (!link) return {};
+  return {
+    ...(link.cid ? { cid: link.cid } : {}),
+    ...(link.replaces ? { replaces: link.replaces } : {}),
+    ...(link.refs?.length ? { refs: [...link.refs] } : {}),
+  };
+}
+
+/**
  * A plain note — `{text, route}`, the extension's shape. With attachments
  * (recorder attachments) each image becomes an `attachment` event whose seq
  * is allocated just before the note's, in this tab's lane, and the note
  * lists them: `{text, route, attachments: [seq…]}`; `text` may then be
  * empty. Their bytes upload through `/shot` before their rows ride (queue.ts).
  */
-export function addNote(text: string, attachments?: readonly HudAttachment[]): void {
-  pushEvent('note', { text, route: redactedRoute() }, route(), imagesOf(attachments));
+export function addNote(text: string, attachments?: readonly HudAttachment[], link?: NoteLink): void {
+  pushEvent('note', { text, route: redactedRoute(), ...linkOf(link) }, route(), imagesOf(attachments));
+}
+
+/** One page of `GET /sessions/{id}/events`, and how many pages a notes read walks at most. */
+const NOTES_PAGE = 500;
+const NOTES_PAGES = 40;
+
+interface WireEvent {
+  seq: number;
+  ts: string;
+  kind: string;
+  payload?: Record<string, unknown> | null;
+}
+
+/** A note event as the notes sheet lists it; null for one minted before notes had ids. */
+export function noteOf(ev: WireEvent): HudNote | null {
+  const p = ev.payload ?? {};
+  if (ev.kind !== 'note' || typeof p.cid !== 'string') return null;
+  const rect = p.rect as { w?: unknown; h?: unknown } | undefined;
+  const dpr = globalThis.devicePixelRatio || 1;
+  const refs = Array.isArray(p.refs) ? p.refs.filter((r): r is string => typeof r === 'string') : [];
+  return {
+    cid: p.cid,
+    text: typeof p.text === 'string' ? p.text : '',
+    at: Date.parse(ev.ts) || 0,
+    route: typeof p.route === 'string' ? p.route : '',
+    region: p.annotate === true,
+    ...(rect && typeof rect.w === 'number' && typeof rect.h === 'number'
+      ? { w: Math.round(rect.w / dpr), h: Math.round(rect.h / dpr) }
+      : {}),
+    ...(typeof p.replaces === 'string' ? { replaces: p.replaces } : {}),
+    ...(refs.length ? { refs } : {}),
+  };
+}
+
+/**
+ * The live recording's notes as the server holds them (every tab's), oldest
+ * first. Walks the event pages and keeps the notes; null when there is no
+ * live session or the read failed. Never rejects.
+ */
+export async function listNotes(): Promise<HudNote[] | null> {
+  const rec = getState();
+  if (!rec) return null;
+  const out: HudNote[] = [];
+  let after = 0;
+  try {
+    for (let page = 0; page < NOTES_PAGES; page++) {
+      const r = await api<{ events?: WireEvent[] }>(
+        'GET',
+        `/api/v1/sessions/${rec.sessionId}/events?after=${after}&limit=${NOTES_PAGE}`,
+      );
+      const events = r.events ?? [];
+      for (const ev of events) {
+        const note = noteOf(ev);
+        if (note) out.push(note);
+      }
+      if (events.length < NOTES_PAGE) return out;
+      after = events[events.length - 1]!.seq;
+    }
+    return out;
+  } catch (e) {
+    console.warn('vitrinka: could not read this recording’s notes', e);
+    return null;
+  }
 }
 
 /** A rect in CSS pixels (viewport coordinates). */
@@ -370,16 +454,18 @@ export function imagePixels(r: ViewRect): ViewRect {
 
 /**
  * An annotation — the extension's annotate-note `{text, rect, selector,
- * annotate: true}` (+ `task` when the tester chose the task destination);
- * vitrinka projects it into a board annotation. `selector` is '' for a free
- * region. The rect is in device pixels. An empty note is still a valid
- * annotation, matching the extension. `attachments` ride as for `addNote`.
+ * annotate: true}`; vitrinka projects it into a board annotation. `selector`
+ * is '' for a free region. The rect is in device pixels. An empty note is
+ * still a valid annotation, matching the extension. `attachments` ride as for
+ * `addNote`, `link` as `NoteLink` says. `task` files it as an intake draft
+ * too — only a bug report asks for that; the HUD's annotations land on the
+ * board alone.
  */
 export function addAnnotation(
   text: string,
   rect: ViewRect,
   selector: string,
-  opts: { task?: boolean; attachments?: readonly HudAttachment[] } = {},
+  opts: { task?: boolean; attachments?: readonly HudAttachment[]; link?: NoteLink } = {},
 ): void {
   pushEvent(
     'note',
@@ -390,6 +476,7 @@ export function addAnnotation(
       annotate: true,
       route: redactedRoute(),
       ...(opts.task ? { task: true } : {}),
+      ...linkOf(opts.link),
     },
     route(),
     imagesOf(opts.attachments),
