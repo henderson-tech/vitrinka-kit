@@ -23,7 +23,11 @@ export interface HudPrefs {
   verbose: boolean;
   /** The note / annotate / report sheet's width, CSS px; 0 = the HUD's default. */
   sheetW: number;
-  /** The cap its text box grows to before it scrolls, CSS px; 0 = the HUD's default (20 rows). */
+  /**
+   * The height its text box was dragged to, CSS px: it never stands shorter
+   * and still grows with its draft (a minimum, HUD polish D8); 0 = the HUD's
+   * default (fit the draft, up to 20 rows).
+   */
   sheetH: number;
 }
 

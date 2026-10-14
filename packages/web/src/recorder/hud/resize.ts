@@ -102,13 +102,17 @@ function roomOr(room: number): number {
 }
 
 /**
- * Size the text box to its draft: from its CSS min-height (at least `floor`)
- * up to `cap` (0 = `SHEET_ROWS` rows) within the sheet's `room`; past that it
- * scrolls. Its scroll position survives the measuring.
+ * Size the text box to its draft. `cap` is the height the tester dragged it
+ * to (HUD polish D8): the box never stands shorter than that and still grows
+ * with its draft up to the sheet's `room` — a dragged size is a MINIMUM, so a
+ * release never snaps it back. Undragged (`cap` 0) it grows from its CSS
+ * min-height to `SHEET_ROWS` rows. `floor` holds a resize in progress. Past
+ * the top it scrolls; its scroll position survives the measuring.
  */
 export function fitText(el: HTMLTextAreaElement, sheet: HTMLElement, cap: number, floor: number, room: number): void {
   const b = textBounds(el, sheet, room);
-  const top = Math.min(cap > 0 ? Math.max(cap, b.min) : b.rows, b.max);
+  const top = cap > 0 ? b.max : Math.min(b.rows, b.max);
+  floor = Math.max(floor, cap);
   const scroll = el.scrollTop;
   el.style.overflowY = 'hidden';
   el.style.height = 'auto';

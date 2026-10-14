@@ -116,6 +116,30 @@ export function NewTabIcon(): ReactElement {
   );
 }
 
+/** ↳ — a reference to another note. */
+export function ReplyIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="m15 10 5 5-5 5" />
+      <path d="M4 4v7a4 4 0 0 0 4 4h12" />
+    </svg>
+  );
+}
+
+/** The notes sheet's tray button. */
+export function ListIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="M3 5h.01" />
+      <path d="M3 12h.01" />
+      <path d="M3 19h.01" />
+      <path d="M8 5h13" />
+      <path d="M8 12h13" />
+      <path d="M8 19h13" />
+    </svg>
+  );
+}
+
 /** The board's build (the Building face). */
 export function LayersIcon(): ReactElement {
   return (

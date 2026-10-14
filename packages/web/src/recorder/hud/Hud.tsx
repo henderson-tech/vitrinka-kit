@@ -24,8 +24,12 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { RecorderStorage } from '../storage';
-import type { HudAttachment, HudController, HudLinkFlow, HudReport } from './controller';
+import type { HudAttachment, HudController, HudLinkFlow, HudNote, HudReport } from './controller';
 import { AnnotateOverlay, type Pick } from './AnnotateOverlay';
+import { DraftDrop } from './drop';
+import { AnnotateIcon, CloseIcon, ReplyIcon } from './icons';
+import { NotesSheet } from './NotesSheet';
+import { type NoteRow, noteRows } from './notes-rows';
 import { bindChords } from './chords';
 import { flowReducer, NO_FLOW } from './flow';
 import { createSheetHost, insideHud, sheetTarget } from './host';
@@ -57,8 +61,12 @@ interface SheetState {
   title: string;
   ctx: string;
   pick: Pick | null;
+  /** The pick's pixels, when the host can read them (D15); null = none (the page recorder never can). */
+  crop?: string | null;
   /** The bug report sheet; `pick` is then the mark on screen. */
   report?: true;
+  /** The notes sheet (D5): this recording's notes, not a composer. */
+  notes?: true;
 }
 
 /** What a pick names in the sheet's context line. */
@@ -190,42 +198,102 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       .catch((e: unknown) => setLink({ phase: 'error', flow: null, error: errorText(e) }));
   }, [controller]);
 
-  const closeSheet = useCallback(() => setSheet(null), []);
+  // A composer closed with words or images in it PARKS (D10/D13): the pill
+  // shows the draft drop until it is resumed, sent, or emptied.
+  const [parked, setParked] = useState<SheetState | null>(null);
+  const sheetNow = useRef(sheet);
+  sheetNow.current = sheet;
+  const draftNow = useRef({ draft, images });
+  draftNow.current = { draft, images };
+  const closeSheet = useCallback(() => {
+    const s = sheetNow.current;
+    const d = draftNow.current;
+    if (s && !s.report && !s.notes && (d.draft.trim() !== '' || d.images.length > 0)) setParked(s);
+    setSheet(null);
+  }, []);
   // A drag closes the composer (its draft survives) and the menu; the link sheet follows the dock.
   const onMoveStart = useCallback(() => {
-    setSheet(null);
+    closeSheet();
     setMenu(false);
-  }, []);
+  }, [closeSheet]);
+  // The notes this draft references (D7), and the live recording's notes for the sheet (D5).
+  const [refs, setRefs] = useState<readonly NoteRow[]>([]);
+  const [notes, setNotes] = useState<readonly HudNote[]>([]);
+  const [notesTick, setNotesTick] = useState(0);
+  const recId = rec?.sessionId ?? null;
+  const pendingKey = rec?.sync.pendingNotes?.join(',') ?? '';
+  useEffect(() => {
+    if (!recId || !controller.listNotes) {
+      setNotes([]);
+      return;
+    }
+    let live = true;
+    void controller.listNotes().then((list) => {
+      if (live) setNotes(list ?? []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [controller, recId, pendingKey, notesTick]);
+  const rows = useMemo(() => noteRows(notes, rec?.sync.pendingNotes ?? []), [notes, rec?.sync.pendingNotes]);
   const dock = useDock(onMoveStart, storage);
   const phone = useMedia(PHONE_QUERY);
   const openNote = useCallback(() => {
     if (!controller.getSnapshot().recording) return;
     controller.setAnnotating(false);
     setMenu(false);
+    setParked(null);
     setSheet({ title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
   }, [controller]);
+  // The composer that Reselect left: Esc in pick mode goes back to it unchanged (D9).
+  const reselectRef = useRef<SheetState | null>(null);
   const toggleAnnotate = useCallback(() => {
     const s = controller.getSnapshot();
     if (!s.recording) return;
-    setSheet(null);
+    reselectRef.current = null;
+    closeSheet();
     setMenu(false);
     setMarking(false);
     controller.setAnnotating(!s.annotating);
+  }, [controller, closeSheet]);
+  const reselect = useCallback(() => {
+    reselectRef.current = sheetNow.current;
+    setSheet(null);
+    controller.setAnnotating(true);
   }, [controller]);
+  const openNotes = useCallback(() => {
+    if (!controller.getSnapshot().recording) return;
+    controller.setAnnotating(false);
+    setMenu(false);
+    closeSheet();
+    setNotesTick((t) => t + 1);
+    setSheet({ title: 'Notes', ctx: '', pick: null, notes: true });
+  }, [controller, closeSheet]);
   const onPick = useCallback(
     (pick: Pick) => {
       controller.setAnnotating(false);
+      reselectRef.current = null;
       if (marking) {
         setMarking(false);
         setSheet(reportSheet(pick, controller.getSnapshot().recording !== null));
         return;
       }
-      setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx: pickCtx(pick), pick });
+      setParked(null);
+      setSheet({ title: pick.selector ? 'Annotate element' : 'Annotate region', ctx: '', pick, crop: null });
+      // The host's pixels, when it has any (the extension): the header shows them once they arrive.
+      void controller.captureRegion?.(pick.rect).then((crop) => {
+        if (crop) setSheet((s) => (s?.pick === pick ? { ...s, crop } : s));
+      });
     },
     [controller, marking],
   );
   const cancelAnnotate = useCallback(() => {
     controller.setAnnotating(false);
+    if (reselectRef.current) {
+      setSheet(reselectRef.current);
+      reselectRef.current = null;
+      return;
+    }
     if (!marking) return;
     // Back to the report as it was (its earlier mark, if any).
     setMarking(false);
@@ -328,10 +396,11 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     [controller, runReport, saidSaved],
   );
   const onSend = useCallback(
-    (text: string, task: boolean) => {
+    (text: string) => {
       const s = sheet;
       setSheet(null);
       if (!s) return;
+      setParked(null);
       // Images ride only while the host takes them (a policy switched off mid-draft drops them).
       const held = controller.getSnapshot().canAttach === true ? (s.report ? reportImages : images) : [];
       const attachments = held.length ? { attachments: held } : {};
@@ -339,21 +408,20 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '', ...attachments });
         return;
       }
-      const link = { cid: newCid() };
+      const link = { cid: newCid(), ...(refs.length ? { refs: refs.map((r) => r.cid) } : {}) };
       if (s.pick) {
         controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, ...attachments, link });
-        setDraft('');
-        setImages([]);
-        saidSaved(link.cid);
       } else if (text || held.length) {
         // An image can BE the note: text may be empty when it carries one.
         controller.note(text, held.length ? held : undefined, link);
-        setDraft('');
-        setImages([]);
-        saidSaved(link.cid);
-      }
+      } else return;
+      setDraft('');
+      setImages([]);
+      setRefs([]);
+      setNotesTick((t) => t + 1);
+      saidSaved(link.cid);
     },
-    [sheet, controller, saidSaved, fileReport, images, reportImages],
+    [sheet, controller, saidSaved, fileReport, images, reportImages, refs],
   );
   const onStart = useCallback(() => {
     if (!controller.getSnapshot().linked) {
@@ -427,6 +495,24 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     if (failedReport) controller.holdReport?.(false);
     dispatch({ type: 'dismiss' });
   }, [failedReport, controller]);
+  // The notes sheet's doors (D6/D7): an edit is a new note replacing the newest
+  // version; a reference opens the note composer with the note as a ↳ chip.
+  const onEditNote = useCallback(
+    (row: NoteRow, text: string) => {
+      const link = { cid: newCid(), replaces: row.latestCid };
+      controller.note(text, undefined, link);
+      setNotesTick((t) => t + 1);
+      saidSaved(link.cid);
+    },
+    [controller, saidSaved],
+  );
+  const onReferenceNote = useCallback(
+    (row: NoteRow) => {
+      setRefs((list) => (list.some((r) => r.cid === row.cid) ? list : [...list, row]));
+      setSheet({ title: 'Note', ctx: `step · ${location.pathname}`, pick: null });
+    },
+    [],
+  );
   const onRetryBuild = useCallback(
     (sessionId: string) => {
       controller.retryBuild?.(sessionId).catch((e: unknown) => console.warn('vitrinka: retry the board build —', errorText(e)));
@@ -671,13 +757,29 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       <div className="hud" data-size={snap.prefs.size}>
         {portal.own ? <style>{HUD_CSS}</style> : null}
         <div ref={layerRef} className={layerCls} style={layer.style}>
+          {shownSheet.notes ? (
+            <NotesSheet
+              className={`${motionCls} ${sheetP.cls}`}
+              origin={layer.origin}
+              rows={rows}
+              now={now}
+              onEdit={onEditNote}
+              onReference={onReferenceNote}
+              onClose={closeSheet}
+            />
+          ) : (
           <Sheet
             key={shownSheet.report ? 'report' : 'note'}
             className={`${motionCls} ${sheetP.cls}`}
             origin={layer.origin}
             title={shownSheet.title}
             ctx={shownSheet.ctx}
-            pick={shownSheet.pick !== null && !shownSheet.report}
+            head={shownSheet.pick && !shownSheet.report ? <PickHead pick={shownSheet.pick} crop={shownSheet.crop ?? null} onReselect={reselect} /> : null}
+            below={
+              !shownSheet.report && refs.length ? (
+                <RefChips refs={refs} onRemove={(cid) => setRefs((list) => list.filter((r) => r.cid !== cid))} />
+              ) : null
+            }
             draft={shownSheet.report ? reportDraft : draft}
             onDraft={shownSheet.report ? setReportDraft : setDraft}
             onSend={onSend}
@@ -700,6 +802,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
                 : { images, onImages: setImages, preparing, onPreparing: setPreparing }
               : {})}
           />
+          )}
         </div>
       </div>
     ) : null;
@@ -768,7 +871,20 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
           onDismiss={onDismiss}
           onRetryBuild={onRetryBuild}
           onTrayOpen={setTrayOpen}
+          {...(controller.listNotes ? { notesCount: rows.length } : {})}
+          onNotes={openNotes}
         />
+        {parked && !sheet && rec && !annotating && 'spot' in place ? (
+          <DraftDrop
+            text={draft}
+            crop={parked.crop ?? null}
+            side={colOf(place.spot) === 'r' ? 'start' : 'end'}
+            onResume={() => {
+              setSheet(parked);
+              setParked(null);
+            }}
+          />
+        ) : null}
       </div>
       {menuP.mounted ? (
         <Menu
@@ -864,5 +980,48 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         {status}
       </div>
     </div>
+  );
+}
+
+/**
+ * What an annotation points at (D9/D15): the host's crop of it when there
+ * is one (the extension), else just its size · route — never a made-up
+ * picture — and Reselect, which keeps the draft.
+ */
+function PickHead({ pick, crop, onReselect }: { pick: Pick; crop: string | null; onReselect: () => void }): ReactElement {
+  const what = pick.selector ? 'Element' : 'Region';
+  const size = `${Math.round(pick.rect.w)}×${Math.round(pick.rect.h)}`;
+  return (
+    <div className={crop ? 'selhead has-crop' : 'selhead'} data-e2e="pick-head">
+      {crop ? <img className="selcrop" src={crop} alt={`The picked ${what.toLowerCase()}`} /> : <AnnotateIcon />}
+      <span className="selmeta">
+        <b>
+          {what} {size}
+        </b>
+        <span>{pick.selector || location.pathname}</span>
+      </span>
+      <button type="button" className="fb" onClick={onReselect}>
+        Reselect
+      </button>
+    </div>
+  );
+}
+
+/** The notes a draft references (D7): ↳ chips, each removable. */
+function RefChips({ refs, onRemove }: { refs: readonly NoteRow[]; onRemove: (cid: string) => void }): ReactElement {
+  return (
+    <ul className="refs" aria-label="References">
+      {refs.map((r) => (
+        <li key={r.cid} className="ref">
+          <ReplyIcon />
+          <span className="t">
+            re <b>№{r.number}</b> · {r.text || '(no text)'}
+          </span>
+          <button type="button" aria-label={`Remove the reference to №${r.number}`} onClick={() => onRemove(r.cid)}>
+            <CloseIcon />
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -45,6 +45,7 @@ import {
   CircleCheckIcon,
   CloudOffIcon,
   LayersIcon,
+  ListIcon,
   MoreIcon,
   NewTabIcon,
   PauseIcon,
@@ -241,6 +242,9 @@ export interface RecorderPillProps {
   onRetryBuild: (sessionId: string) => void;
   /** The recording's tray unfolded or folded: the stats float follows it. */
   onTrayOpen: (open: boolean) => void;
+  /** This recording's notes so far (the tray's notes button counts them, D5); absent = the host lists none. */
+  notesCount?: number;
+  onNotes: () => void;
 }
 
 export function RecorderPill(p: RecorderPillProps): ReactElement {
@@ -516,6 +520,18 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
       <Seg on={face === 'rec' && unfolded} className="s-tray">
         <div className="tools seg-row">
           <span className="sep" />
+          {p.notesCount !== undefined ? (
+            <button
+              type="button"
+              className="tb b-notes"
+              aria-label={`Notes · ${p.notesCount}`}
+              data-tip="Notes"
+              onClick={p.onNotes}
+            >
+              <ListIcon />
+              {p.notesCount > 0 ? <span className="cnt">{p.notesCount}</span> : null}
+            </button>
+          ) : null}
           <button
             type="button"
             className="tb b-pause"
