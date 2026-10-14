@@ -145,12 +145,13 @@ function sameProjection(a: HudProjection | undefined, b: HudProjection): boolean
 }
 
 /**
- * Build a saved session's board again after a retryable failure
- * (`POST /api/v1/sessions/:id/project`), then wait for it as a stop does.
+ * Build a saved session's board again after a retryable failure, then wait
+ * for it as a stop does. A recorder token may not call `…/project`; closing
+ * the session again (`PATCH {status: done}`) re-requests the same final pass.
  * Rejects with the server's reason.
  */
 export async function retryBuild(sessionId: string): Promise<void> {
-  await api('POST', `/api/v1/sessions/${sessionId}/project`);
+  await api('PATCH', `/api/v1/sessions/${sessionId}`, { status: 'done' });
   updateRecent(sessionId, { projection: { state: 'queued' } });
   void awaitBoard(sessionId);
 }

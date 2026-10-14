@@ -43,6 +43,7 @@ import type { AttachmentPayload, RecorderEvent } from '../protocol';
 import { api, permanentStatus, uploadChunk, uploadImage, VitrinkaApiError } from './api';
 import type { StagedImage } from './attachments';
 import { pushFlightEvent } from './flight';
+import type { HudNote } from './hud/controller';
 import { leadState, notify } from './state';
 import { getRecorderStorage } from './storage';
 import { getRecorderBlobStore } from './storage/blobs';
@@ -213,8 +214,30 @@ export function getState(): SessionState | null {
 
 export function setState(rec: SessionState | null): void {
   recCache = rec;
-  if (rec === null) kv().remove(REC_KEY);
-  else safeSet(REC_KEY, JSON.stringify(stored(rec)));
+  if (rec === null) {
+    kv().remove(REC_KEY);
+    kv().remove(NOTE_LOG_KEY);
+  } else safeSet(REC_KEY, JSON.stringify(stored(rec)));
+}
+
+/**
+ * The live recording's notes as the notes sheet lists them (recorder HUD
+ * polish D5): every tab's, in this origin's recorder storage, for as long as
+ * the recording lives — a recorder token reads nothing back from the
+ * server, and the queue already keeps the same text here until delivery.
+ * Gone with the session record (`setState(null)`).
+ */
+const NOTE_LOG_KEY = 'notes';
+const MAX_LOGGED_NOTES = 200;
+
+export function noteLog(sessionId: string): HudNote[] {
+  const log = readJson<{ sessionId?: string; notes?: HudNote[] } | null>(NOTE_LOG_KEY, null);
+  return log?.sessionId === sessionId && Array.isArray(log.notes) ? log.notes : [];
+}
+
+export function logNote(sessionId: string, note: HudNote): void {
+  const notes = [...noteLog(sessionId), note].slice(-MAX_LOGGED_NOTES);
+  safeSet(NOTE_LOG_KEY, JSON.stringify({ sessionId, notes }));
 }
 
 /** The session this tab is stopping, its clock at the Stop, and when its mark was last renewed. */

@@ -165,9 +165,11 @@ attaches are sent; nothing is picked up on its own.
 
 Every note and annotation the HUD sends carries a client id, `cid` (a random
 id minted in the browser; it names the note, nothing about the tester or the
-page). The notes sheet lists the recording's notes — read back with
-`GET /api/v1/sessions/:id/events`, the same token, nothing new leaves the
-device — and two actions add fields to a NEW note event:
+page). The notes sheet lists the recording's notes from the device: the
+recorder storage keeps each note's text, route, kind, region size and ids
+(key `notes`) for as long as the recording lives and drops them when it ends
+— a recorder token reads nothing back from the server. Two actions add fields
+to a NEW note event:
 
 - **Edit** sends the corrected note as a new `note` event with
   `replaces: <cid of the note it corrects>`. The stream stays append-only:

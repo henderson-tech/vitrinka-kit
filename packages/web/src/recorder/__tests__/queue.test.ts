@@ -14,7 +14,9 @@ import {
   flush,
   getState,
   health,
+  logNote,
   noteAcked,
+  noteLog,
   pendingNoteCids,
   persistNow,
   pushEvent,
@@ -80,6 +82,16 @@ describe('queue', () => {
     expect(await flush()).toBe(true);
     const kinds = (eventsPosts()[0]!.body as { events: { kind: string }[] }).events.map((e) => e.kind);
     expect(kinds).toEqual(['note']);
+  });
+
+  it('logs the live recording’s notes for the sheet and forgets them with the session', () => {
+    setState(liveSession());
+    const note = { cid: 'c1', text: 'hi', at: 1, route: '/', region: false };
+    logNote('sess-1', note);
+    expect(noteLog('sess-1')).toEqual([note]);
+    expect(noteLog('sess-2')).toEqual([]);
+    setState(null);
+    expect(noteLog('sess-1')).toEqual([]);
   });
 
   it('keeps the buffer on a transient failure and schedules a retry', async () => {

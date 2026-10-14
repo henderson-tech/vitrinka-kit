@@ -27,7 +27,9 @@ import {
   disarmReconcile,
   drainBuffer,
   getState,
+  logNote,
   markStopping,
+  noteLog,
   persistNow,
   pruneBlobJournal,
   pushEvent,
@@ -367,70 +369,31 @@ function linkOf(link: NoteLink | undefined): Record<string, unknown> {
  * empty. Their bytes upload through `/shot` before their rows ride (queue.ts).
  */
 export function addNote(text: string, attachments?: readonly HudAttachment[], link?: NoteLink): void {
-  pushEvent('note', { text, route: redactedRoute(), ...linkOf(link) }, route(), imagesOf(attachments));
+  const at = pushEvent('note', { text, route: redactedRoute(), ...linkOf(link) }, route(), imagesOf(attachments));
+  remember(at, { cid: link?.cid ?? '', text, region: false, ...linkFields(link) });
 }
 
-/** One page of `GET /sessions/{id}/events`, and how many pages a notes read walks at most. */
-const NOTES_PAGE = 500;
-const NOTES_PAGES = 40;
-
-interface WireEvent {
-  seq: number;
-  ts: string;
-  kind: string;
-  payload?: Record<string, unknown> | null;
-}
-
-/** A note event as the notes sheet lists it; null for one minted before notes had ids. */
-export function noteOf(ev: WireEvent): HudNote | null {
-  const p = ev.payload ?? {};
-  if (ev.kind !== 'note' || typeof p.cid !== 'string') return null;
-  const rect = p.rect as { w?: unknown; h?: unknown } | undefined;
-  const dpr = globalThis.devicePixelRatio || 1;
-  const refs = Array.isArray(p.refs) ? p.refs.filter((r): r is string => typeof r === 'string') : [];
+function linkFields(link: NoteLink | undefined): Pick<HudNote, 'replaces' | 'refs'> {
   return {
-    cid: p.cid,
-    text: typeof p.text === 'string' ? p.text : '',
-    at: Date.parse(ev.ts) || 0,
-    route: typeof p.route === 'string' ? p.route : '',
-    region: p.annotate === true,
-    ...(rect && typeof rect.w === 'number' && typeof rect.h === 'number'
-      ? { w: Math.round(rect.w / dpr), h: Math.round(rect.h / dpr) }
-      : {}),
-    ...(typeof p.replaces === 'string' ? { replaces: p.replaces } : {}),
-    ...(refs.length ? { refs } : {}),
+    ...(link?.replaces ? { replaces: link.replaces } : {}),
+    ...(link?.refs?.length ? { refs: [...link.refs] } : {}),
   };
 }
 
 /**
- * The live recording's notes as the server holds them (every tab's), oldest
- * first. Walks the event pages and keeps the notes; null when there is no
- * live session or the read failed. Never rejects.
+ * The live recording's notes, every tab's, oldest first (the device log —
+ * `noteLog`); null with no live session. Never rejects.
  */
 export async function listNotes(): Promise<HudNote[] | null> {
   const rec = getState();
-  if (!rec) return null;
-  const out: HudNote[] = [];
-  let after = 0;
-  try {
-    for (let page = 0; page < NOTES_PAGES; page++) {
-      const r = await api<{ events?: WireEvent[] }>(
-        'GET',
-        `/api/v1/sessions/${rec.sessionId}/events?after=${after}&limit=${NOTES_PAGE}`,
-      );
-      const events = r.events ?? [];
-      for (const ev of events) {
-        const note = noteOf(ev);
-        if (note) out.push(note);
-      }
-      if (events.length < NOTES_PAGE) return out;
-      after = events[events.length - 1]!.seq;
-    }
-    return out;
-  } catch (e) {
-    console.warn('vitrinka: could not read this recording’s notes', e);
-    return null;
-  }
+  return rec ? noteLog(rec.sessionId) : null;
+}
+
+/** Log a note the queue accepted, under the live session; a note without a `cid` is not listable. */
+function remember(at: string | null, note: Omit<HudNote, 'at' | 'route'>): void {
+  const rec = getState();
+  if (!at || !rec || !note.cid) return;
+  logNote(rec.sessionId, { ...note, at: Date.parse(at), route: redactedRoute() });
 }
 
 /** A rect in CSS pixels (viewport coordinates). */
@@ -467,7 +430,7 @@ export function addAnnotation(
   selector: string,
   opts: { task?: boolean; attachments?: readonly HudAttachment[]; link?: NoteLink } = {},
 ): void {
-  pushEvent(
+  const at = pushEvent(
     'note',
     {
       text,
@@ -481,6 +444,14 @@ export function addAnnotation(
     route(),
     imagesOf(opts.attachments),
   );
+  remember(at, {
+    cid: opts.link?.cid ?? '',
+    text,
+    region: true,
+    w: Math.round(rect.w),
+    h: Math.round(rect.h),
+    ...linkFields(opts.link),
+  });
 }
 
 /**

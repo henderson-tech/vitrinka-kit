@@ -207,7 +207,7 @@ export interface HudAnnotation {
   link?: HudNoteLink;
 }
 
-/** One note of the live recording as the server holds it (`listNotes`). */
+/** One note of the live recording, as `listNotes` keeps it. */
 export interface HudNote {
   cid: string;
   text: string;
@@ -255,9 +255,10 @@ export interface HudController {
   note(text: string, attachments?: readonly HudAttachment[], link?: HudNoteLink): void;
   annotate(a: HudAnnotation): void;
   /**
-   * The live recording's notes as the server holds them, oldest first — the
-   * notes sheet merges them with what this HUD sent. Optional; never rejects
-   * (null = unknown).
+   * The live recording's notes, every tab's, oldest first — what the notes
+   * sheet lists (a recorder token reads nothing back from the server, so the
+   * host keeps them on the device for the recording's life). Optional; never
+   * rejects (null = no live recording).
    */
   listNotes?(): Promise<HudNote[] | null>;
   /**
