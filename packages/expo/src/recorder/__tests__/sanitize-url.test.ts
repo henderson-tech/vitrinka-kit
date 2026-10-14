@@ -124,8 +124,8 @@ describe('sanitizeUrl', () => {
   it('a sanitizer that throws or returns a non-string records the origin, or [redacted] — never the raw URL', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      setSanitizeUrl(() => {
-        throw new Error('boom');
+      setSanitizeUrl((url) => {
+        throw new Error(`no rule for ${url}`);
       });
       session.addNote('step');
       expect(events('note')[0]?.tabHost).toBe('[redacted]');
@@ -136,6 +136,8 @@ describe('sanitizeUrl', () => {
       setSanitizeUrl(() => undefined as unknown as string);
       expect(redactUrl('https://api.example.test/reset-password/s3cr3t')).toBe('https://api.example.test');
       expect(warn).toHaveBeenCalledTimes(2);
+      // The warning names how it failed, never the thrown value quoting the URL.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('s3cr3t');
     } finally {
       warn.mockRestore();
     }

@@ -89,20 +89,22 @@ function sanitizeUrl(url: string): string {
   const sanitize = hostSanitizer;
   if (!sanitize) return url;
   if (sanitizing) return originOf(url) ?? REDACTED;
-  let failure: unknown;
+  let failure: string;
   sanitizing = true;
   try {
     const out: unknown = sanitize(url);
     if (typeof out === 'string') return out;
-    failure = new TypeError(`sanitizeUrl returned ${typeof out}, not a string`);
-  } catch (e) {
-    failure = e;
+    failure = `returned ${typeof out}`;
+  } catch {
+    // Nothing of the thrown value: its message or name may quote the very URL it
+    // could not handle, and reading a property (or `instanceof`) can throw again.
+    failure = 'threw';
   } finally {
     sanitizing = false;
   }
   if (reportedSanitizer !== sanitize) {
     reportedSanitizer = sanitize;
-    console.warn('vitrinka: sanitizeUrl failed — such URLs are recorded as their origin only', failure);
+    console.warn(`vitrinka: sanitizeUrl ${failure} — such URLs are recorded as their origin only`);
   }
   return originOf(url) ?? REDACTED;
 }

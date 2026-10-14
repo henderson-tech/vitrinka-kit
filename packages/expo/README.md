@@ -119,8 +119,10 @@ const sanitizeUrl = (url: string) => SECRET_PATHS.reduce((u, [rx, to]) => u.repl
 - **Failure:** it fails closed. If it throws or returns a non-string, the
   recorder keeps only the URL's origin (`[redacted]` for a bare route),
   never the raw value. It logs one `vitrinka:` warning per sanitizer.
-- **Not covered:** request and response bodies and console lines stay under
-  the workspace policy, and keyframes show what the screen shows. The lane
+- **Not covered:** free text stays under the workspace policy: request and
+  response headers and bodies, and console lines (a router error that quotes
+  the path, say). Add a policy pattern for a token shape that shows up in
+  text. Keyframes show what the screen shows. The lane
   comes from expo-router's segments (`[token]`, never its value) or your own
   `lane`. `hideIdleGripOn` matches the raw pathname.
 
