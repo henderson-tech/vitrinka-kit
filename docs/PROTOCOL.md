@@ -178,7 +178,13 @@ conformance vectors in
   (OAuth callbacks, magic links, SAS URLs), with `;`-separated pairs handled
   — in request URLs, and in the web recorder also in every navigation URL
   (the page a session starts on included) and in the page URL rrweb stamps
-  on every full snapshot.
+  on every full snapshot. The web recorder's `route` fields (navigation,
+  clicks, notes, bug reports) pass the same scrub.
+- **URL paths**: a credential in a path segment (`/reset-password/<token>`)
+  is the host app's to name. The web recorder's `sanitizeUrl` option
+  rewrites every URL and route it captures before the scrub above, under
+  any policy (`fullFidelity` included). A sanitizer that fails records only
+  the URL's origin, never the raw value.
 - **Values**: a PEM private key (`-----BEGIN … PRIVATE KEY-----`, any key
   type, encrypted or not) is scrubbed wherever it appears — a body field
   under any name, a form value, a console line — even when a size cap cut

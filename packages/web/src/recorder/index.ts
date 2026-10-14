@@ -45,6 +45,14 @@ export interface VitrinkaRecorderRootProps {
    * last minute, so "Report a bug" is offered only while recording.
    */
   flightRecorder?: boolean;
+  /**
+   * Rewrites every URL and route the recorder captures (navigation, clicks,
+   * notes, network requests, rrweb page URLs, bug reports) before redaction —
+   * name the path segments that carry credentials (`/reset-password/:token`).
+   * It gets absolute URLs, relative request URLs and bare paths alike. A
+   * sanitizer that throws records only the URL's origin.
+   */
+  sanitizeUrl?: (url: string) => string;
   /** A router's pathname, when the History wrap is not enough. */
   route?: string | null;
   children?: ReactNode;
@@ -68,6 +76,7 @@ export function VitrinkaRecorderRoot(props: VitrinkaRecorderRootProps): ReactEle
         project: props.project,
         label: props.label,
         flightRecorder: props.flightRecorder,
+        sanitizeUrl: props.sanitizeUrl,
       },
     },
     createElement(RouteFeed, { route: props.route }),
