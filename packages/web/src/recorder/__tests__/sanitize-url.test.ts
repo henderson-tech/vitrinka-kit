@@ -128,16 +128,20 @@ describe('sanitizeUrl', () => {
   it('a sanitizer that throws or returns a non-string records the origin, or [redacted] — never the raw URL', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: (url) => { throw new Error(`cannot sanitize ${url}`); } });
+      configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: (url) => { throw Object.assign(new Error(`cannot sanitize ${url}`), { name: url }); } });
       setState(liveSession());
       noteNavigation(true);
       expect(payloads('nav')[0]).toEqual({ url: 'https://app.example.test', route: '[redacted]', spa: true });
       expect(redactUrl('/api/reset-password/s3cr3t')).toBe('[redacted]');
-      // Once, and never the thrown value: it quotes the secret URL.
-      expect(warn.mock.calls).toEqual([['vitrinka: sanitizeUrl threw Error — such URLs are recorded as their origin only']]);
+      // Once, and nothing of the thrown value: its message and name quote the secret URL.
+      expect(warn.mock.calls).toEqual([['vitrinka: sanitizeUrl threw — such URLs are recorded as their origin only']]);
       configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: () => undefined as unknown as string });
       expect(redactUrl(PAGE)).toBe('https://app.example.test');
       expect(redactUrl('about:blank')).toBe('[redacted]');
+      // A thrown value whose name getter throws again still falls back to the origin.
+      const hostile = Object.defineProperty(new Error('x'), 'name', { get: () => { throw new Error('getter'); } });
+      configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: () => { throw hostile; } });
+      expect(redactUrl(PAGE)).toBe('https://app.example.test');
     } finally {
       warn.mockRestore();
     }

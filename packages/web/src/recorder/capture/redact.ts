@@ -86,9 +86,10 @@ function sanitizeUrl(url: string): string {
     const out: unknown = sanitize(url);
     if (typeof out === 'string') return out;
     failure = `returned ${typeof out}`;
-  } catch (e) {
-    // Never the thrown value itself: it may quote the very URL it could not handle.
-    failure = `threw ${e instanceof Error ? e.name : typeof e}`;
+  } catch {
+    // Nothing of the thrown value: its message or name may quote the very URL it
+    // could not handle, and reading a property (or `instanceof`) can throw again.
+    failure = 'threw';
   }
   if (reportedSanitizer !== sanitize) {
     reportedSanitizer = sanitize;
