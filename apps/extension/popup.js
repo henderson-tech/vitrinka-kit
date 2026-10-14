@@ -50,6 +50,11 @@ function fail(text) {
 }
 
 const show = (id, on) => $(id).classList.toggle("hidden", !on);
+// ONE recorder: the page recorder recording in some tab ({tabId, host,
+// sessionId, state, refusal}), while this extension does not; and why the
+// last Pause / Stop sent to it failed, shown over the refusal until the next.
+let pageLed = null;
+let pageError = "";
 const fmtBytes = (n) => {
   if (!n) return "0 B";
   const u = ["B", "KB", "MB", "GB"];
@@ -131,9 +136,43 @@ async function renderBoard() {
 // ---------------------------------------------------------------------------
 // main refresh
 
+// ONE recorder: a page's own recorder records somewhere — Pause and Stop act
+// on it (D11), and Start / Continue would only be refused (D12). It runs on
+// its own configuration, so this needs none of the extension's (D15).
+// True when it painted the popup.
+async function renderPageLed() {
+  const probe = await send({ type: "vt-one-probe" });
+  const wasPageLed = !!pageLed;
+  pageLed = (probe && probe.page) || null;
+  if (wasPageLed && !pageLed) {
+    // Back to the extension's own idle state: its branches below disable
+    // Start where they must, and a matched project leaves it enabled.
+    pageError = "";
+    $("err").classList.add("hidden");
+    $("start").disabled = false;
+  }
+  if (!pageLed) return false;
+  const wrapping = pageLed.state === "stopping";
+  $("state").textContent = wrapping ? "Wrapping up" : pageLed.state === "paused" ? "Paused" : "Recording";
+  $("proj").textContent = "Recording with the page's recorder";
+  renderSub("page", `${pageLed.host}${pageLed.sessionId ? ` · #${pageLed.sessionId}` : ""}`);
+  show("title", false);
+  show("start", true);
+  $("start").disabled = true;
+  show("recRow", true);
+  iconText($("pause"), pageLed.state === "paused" ? "play" : "pause", pageLed.state === "paused" ? "Resume" : "Pause");
+  $("pause").disabled = wrapping || pageLed.state === "starting";
+  iconText($("stop"), "stop", wrapping ? "Stopping…" : "Stop");
+  $("stop").disabled = wrapping || pageLed.state === "starting";
+  fail(pageError || pageLed.refusal);
+  if (wrapping || pageLed.state === "starting") setTimeout(refresh, 800);
+  return true;
+}
+
 async function refresh() {
   const { base, workspace, token } = await config();
   if (!base) {
+    if (await renderPageLed()) return;
     $("proj").textContent = "Not configured";
     $("sub").textContent = "set the vitrinka base URL in settings";
     $("start").disabled = true;
@@ -148,6 +187,7 @@ async function refresh() {
   if (building) setTimeout(refresh, 1000);
 
   if (rec) {
+    pageLed = null;
     const wrapping = !!rec.stopping;
     $("state").textContent = rec.dead ? "Ended" : wrapping ? "Wrapping up" : rec.paused ? "Paused" : "Recording";
     $("proj").textContent = rec.title || `Session #${rec.sessionId}`;
@@ -163,6 +203,7 @@ async function refresh() {
     return;
   }
 
+  if (await renderPageLed()) return;
   $("state").textContent = "Recorder";
   show("recRow", false);
   show("start", true);
@@ -208,12 +249,27 @@ $("start").onclick = async () => {
   if (!r.ok) { fail(r.error); $("start").disabled = false; return; }
   refresh();
 };
-$("pause").onclick = async () => { await send({ type: "vt-pause" }); refresh(); };
+// A page-led recording's Pause / Stop go to the page's recorder in its tab
+// (ONE recorder D11); its own pill shows the stop's Saving → Saved.
+async function commandPage(op) {
+  $("err").classList.add("hidden");
+  const r = await send({ type: "vt-one-command", tabId: pageLed.tabId, op });
+  pageError = r.ok ? "" : r.error;
+  if (!r.ok) fail(r.error);
+  setTimeout(refresh, 300);
+}
+
+$("pause").onclick = async () => {
+  if (pageLed) return commandPage("pause");
+  await send({ type: "vt-pause" });
+  refresh();
+};
 
 // Stop keeps the popup OPEN and reports the real drain (D2). The work runs in
 // the service worker, so closing the popup mid-drain is safe — the upload
 // continues and the board notification still arrives.
 $("stop").onclick = async () => {
+  if (pageLed) return commandPage("stop");
   $("stop").disabled = true;
   iconText($("stop"), "stop", "Stopping…");
   $("err").classList.add("hidden");

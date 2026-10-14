@@ -28,7 +28,8 @@ A human types `/spot`; Codex `$spot`.
    - `bug` (default) for a defect that exists today; `task` for a follow-up
      that needs its own session, PR or QA record. A check on the work you
      are doing, a merge, a look, a verify is a STEP on the bound task
-     (`update {kind: "task", id, fields: {gates: [...]}}`, or `next` at
+     (`update {kind: "task", id, fields: {gates: [{name, kind}]}}` — the
+     new item alone, it merges — or `next` at
      hand-back) — never a child.
    - A call a human owns is asked now when a human is in the session; in
      a run nobody attends it is a `human` gate on the bound task (`kind:

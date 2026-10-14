@@ -35,7 +35,7 @@ const server = Bun.serve({
     if (url.pathname === '/__qa/mode' && req.method === 'POST') { mode = String((await req.json()).mode); return json({ mode }); }
     if (url.pathname === '/__qa/state') return json({ mode, sessions: [...sessions.values()], events, chunks, shots, attachments: attachments() });
     if (url.pathname === '/__qa/store.zip') {
-      const file = Bun.file(new URL('../../../dist/webstore/vitrinka-recorder-store-0.10.1.zip', import.meta.url));
+      const file = Bun.file(new URL('../../../dist/webstore/vitrinka-recorder-store-0.11.0.zip', import.meta.url));
       return await file.exists() ? new Response(file) : json({ error: 'Package the store build first' }, 404);
     }
     if (url.pathname === '/api/v1/recorder/resolve') return json({ workspace: 'qa', project: 'synthetic' });

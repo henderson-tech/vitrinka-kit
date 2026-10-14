@@ -57,6 +57,15 @@ function sidekickOptions(input, options) {
   const { readOnly, ...rest } = options
   return input.sidekick && !rest.agentType ? Object.assign(rest, { agentType: input.sidekick }) : rest
 }
+// The machine's judging lane (`vitrinka config reviewer`): codex makes the
+// Codex sidekick this run's `sidekick` from Prepare on — every readOnly call
+// site (mapping, review, verify) judges there — unless the run named one.
+// Prepare relays the lane with REVIEWER_STEP.
+const REVIEWER_STEP = 'Report reviewer: the `lane` field of `vitrinka config reviewer --json` (self | codex); self when the command is missing or fails.'
+function adoptReviewer(input, reviewer) {
+  if (!input.sidekick && reviewer === 'codex') input.sidekick = 'codex'
+  return input.sidekick || ''
+}
 // The runtime journals agent returns. Keep accounting deterministic on replay,
 // share the allowance with child workflows, and bound every fan-out to four.
 function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
@@ -284,6 +293,9 @@ const TARGET_SCHEMA = {
 
 // A Prepare that also starts the app (review-loop, code-loop, map, and
 // build-idea's quick check at the run target).
+// The judging lane Prepare relays (run.js REVIEWER_STEP, adoptReviewer).
+const REVIEWER_PROPERTY = { type: 'string', enum: ['self', 'codex'], description: 'the judging lane `vitrinka config reviewer --json` reports as data.lane' }
+
 const PREPARE_SCHEMA = {
   ...TARGET_SCHEMA,
   properties: {
@@ -945,6 +957,7 @@ const UILOOP_PREP_SCHEMA = {
     vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim (diagnostic text only); empty when there is no vybava binary' },
     owner: { type: 'string', description: 'this run\'s lease owner, review-loop-<uuid>, minted once; the same string every --owner took' },
     paused: { type: 'string', description: 'the detail of a PAUSED diagnostic step 4 or 5 printed (the loop was paused after step 2), verbatim; omit it when none did' },
+    reviewer: REVIEWER_PROPERTY,
     state: UILOOP_STATE,
     doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, claimed: { type: 'array', items: UILOOP_BATCH, description: `the batches --claim leased to this run, every one ([] when other runs hold every batch left); ${UILOOP_CLI_OWNED}` }, carried: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, from: { type: 'integer' } }, required: ['screen', 'from'] }, description: `the screens carried from an earlier pass, which no batch holds, every one; ${UILOOP_CLI_OWNED}` } }, required: ['screens', 'batches', 'done', 'left'] },

@@ -61,6 +61,10 @@ page only to override them:
 - The corner HUD shows rec · timer · pause · a pencil (note) · a crosshair (annotate).
   Shortcuts: `Alt+Shift+A` annotate (click an element or drag a region, type
   a note, Enter sends), `Alt+Shift+N` note, `Alt+Shift+P` pause.
+- An app that embeds its own recorder pill and this extension are one
+  recorder: whichever starts first records, the other's pill hides, and the
+  shortcuts work on whichever leads. Starting the second one is refused with
+  where the recording runs.
 - Before sending a snap, pick where it lands: **board** leaves it as an
   annotation on the frame, **task** also files it as a draft on the project for
   triage. The choice resets to board each time — and only ↑ Send commits it.

@@ -122,14 +122,14 @@ window's boards, then link it to the rolling release. Look up every shape,
 never recall it: `docs {topic:"artifact:docjson"}`,
 `docs {topic:"element:gallery"}`, `docs {topic:"element:chart"}`.
 
-- **Register**: `meta.direction: "release"`; `meta.accentColor` is the
-  document's colour; `meta.accent` is the phrase of the title to light up;
-  `meta.intro` is the 3–4 sentence lead; `meta.chips` are the facts (version,
+- **Register**: `payload.direction: "release"`; `payload.accentColor` is the
+  document's colour; `payload.accent` is the phrase of the title to light up;
+  `payload.intro` is the 3–4 sentence lead; `payload.chips` are the facts (version,
   window, PR count).
 - **Shape**: chapters are top-level sections with a numbered `label`
   (`01 · Booking`); features are sections nested in them, labelled
   `✨ New · for <who>` (🐛 Fixed / 🔧 Improved alike), one per feature.
-- **Screens**: a `gallery` block, never stacked figures — `bento` for 3–6
+- **Screens**: a `gallery` element, never stacked figures — `bento` for 3–6
   screens, `carousel` for many, `masonry` when the whole image matters.
   Pick from `scrape_board` image cards: `vs` ≥ 60, one per `dup` group (keep
   the card whose `id` equals `dup`); phone shots (`device`) go together into
@@ -137,7 +137,7 @@ never recall it: `docs {topic:"artifact:docjson"}`,
   scored yet — scrape again later rather than guess.
 - **Numbers**: a before/after is a `chart` with `viz: "compare"` and
   `better` — never a prose claim or a hand-toned delta.
-- **Audiences**: one document serves every reader. Tag blocks with
+- **Audiences**: one document serves every reader. Tag elements with
   `audience`: `public` for user prose, `technical` for PR and board
   provenance, `internal` for QA notes; untagged means everyone. The viewer's
   switch and every export filter by it.

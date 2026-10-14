@@ -56,8 +56,9 @@ only when the work needs it; the pickup never fetches them.
    `vitrinka task start [id]`. The run is how the team sees you on the plan.
 5. **NEXT** is the work queue, not a menu: the task's open steps first, then
    its children. A step (a `☐` row, no id of its own) is worked HERE and
-   ticked when done — `update {kind:"task", id, fields: {gates: [...]}}`
-   with `done: true` and its `evidence`; a step that outgrows one sitting is
+   ticked when done — `update {kind:"task", id, fields: {gates: [{name,
+   done: true, evidence}]}}`, that item alone: a checklist merges by item
+   (`replaceFields` only to drop items); a step that outgrows one sitting is
    promoted with `spot {fromStep}` (the spot skill), never retyped by hand.
    A step row's tail says when: `waiting — <cond>` is not due yet (leave
    it), `due — <cond>` fell due and is still undone; a BEFORE gate reading

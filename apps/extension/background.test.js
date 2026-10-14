@@ -12,7 +12,11 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
   const data = { base: "https://synthetic.test", workspace: "qa", captureNetwork: false,
     rec: { sessionId: 1, generation: "first", tabs: {}, seq: 0 } };
   const writes = [], captures = [], requests = [];
-  let messageListener;
+  // Open tabs, every chrome.scripting call, every message to a tab; `script`
+  // answers an injection (its per-frame results).
+  const tabs = [], injections = [], tabMessages = [], registered = new Set();
+  let script = () => [];
+  let messageListener, commandListener, navListener;
   const db = {
     put: async (item) => { // upserts by [sessionId, seq], like the IndexedDB keyPath
       const at = writes.findIndex((i) => i.sessionId === item.sessionId && i.seq === item.seq);
@@ -52,18 +56,28 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
         set: async (values) => { if (beforeSet) await beforeSet(values); Object.assign(data, clone(values)); },
         remove: async (keys) => { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
       } },
-      tabs: { get: async () => ({ active: true, windowId: 1 }), sendMessage: async () => ({}), captureVisibleTab: async () => { captures.push(true); return "data:image/png;base64,AA=="; }, onActivated: event(), onRemoved: event() },
-      scripting: { executeScript: async () => [] },
+      tabs: { get: async () => ({ active: true, windowId: 1 }), captureVisibleTab: async () => { captures.push(true); return "data:image/png;base64,AA=="; }, onActivated: event(), onRemoved: event(),
+        query: async (q) => tabs.filter((t) => !q.active || t.active),
+        sendMessage: async (tabId, msg) => { tabMessages.push({ tabId, msg }); return {}; } },
+      scripting: {
+        executeScript: async (inj) => { injections.push(inj); return script(inj); },
+        getRegisteredContentScripts: async ({ ids }) => ids.filter((id) => registered.has(id)).map((id) => ({ id })),
+        registerContentScripts: async (list) => { for (const s of list) registered.add(s.id); },
+        unregisterContentScripts: async ({ ids }) => { for (const id of ids) registered.delete(id); },
+      },
       debugger: { onEvent: event(), onDetach: event() },
       alarms: { onAlarm: event(), create() {} },
-      webNavigation: { onCommitted: event(), onHistoryStateUpdated: event() },
+      webNavigation: { onCommitted: { addListener(listener) { navListener = listener; } }, onHistoryStateUpdated: event() },
       action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
-      runtime: { onMessage: { addListener(listener) { messageListener = listener; } }, onStartup: event(), getManifest: () => ({ version: "0.10.0" }) },
-      commands: { onCommand: event() },
+      runtime: { onMessage: { addListener(listener) { messageListener = listener; } }, onStartup: event(), onInstalled: event(), getManifest: () => ({ version: "0.10.0" }) },
+      commands: { onCommand: { addListener(listener) { commandListener = listener; } } },
     },
   });
   runInContext(source, context);
-  return { data, writes, captures, requests, context, db,
+  return { data, writes, captures, requests, context, db, tabs, injections, tabMessages, registered,
+    answer(fn) { script = fn; },
+    command(name) { commandListener(name); return new Promise((r) => setTimeout(r, 0)); },
+    navigate(d) { return navListener(d); },
     message(msg) { return new Promise((resolve) => messageListener(msg, { tab: { id: 7, title: "Synthetic", url: "https://app.test/" } }, resolve)); },
     interceptSet(fn) { beforeSet = fn; },
     call(expression) { return runInContext(expression, context); } };
@@ -317,4 +331,156 @@ test("a stop bound to a recording never stops the one Start or Continue adopted 
   expect(w.data.rec).toMatchObject({ sessionId: 2, generation: "second" });
   expect(w.data.rec.stopping).toBeUndefined();
   expect(w.requests).toHaveLength(0);
+});
+
+// ONE recorder (extension + page recorder decisions 2026-10-12).
+const pageClaim = (state = "recording") => ({ v: 1, by: "page", id: "p.synthetic", state, sessionId: "42", since: 1 });
+
+test("a Start a page recorder would contest is refused before any network call, named where it records, and leaves no endpoint behind", async () => {
+  for (const [where, state, words] of [
+    [7, "recording", "this page's own recorder is already recording (#42) — use its pill, or stop it first"],
+    [7, "stopping", "this page's recorder is still saving #42 — try again in a moment"],
+    [8, "recording", "a page recorder is already recording in another tab (forge.example, #42) — stop it there first"],
+  ]) {
+    const w = worker();
+    w.data.rec = null;
+    w.tabs.push({ id: 7, active: true, url: "https://app.test/" }, { id: 8, url: "https://forge.example/studio" }, { id: 9, url: "chrome://extensions" });
+    w.answer((inj) => (inj.func && inj.func.name === "oneProbe"
+      ? [{ result: { host: inj.target.tabId === 7 ? "app.test" : "forge.example", holder: inj.target.tabId === where ? pageClaim(state) : null } }]
+      : []));
+    expect(await w.message({ type: "vt-start", title: "x" })).toEqual({ ok: false, error: words, code: "recorder_busy", leader: "page" });
+    expect(w.requests).toHaveLength(0);
+    // The probe installed the endpoint in every http(s) tab and claimed only the active one.
+    expect(w.injections.filter((i) => i.func && i.func.name === "oneProbe").map((i) => [i.target.tabId, i.args[1]])).toEqual([[7, true], [8, false]]);
+    // Refused: no registration, no stored state, every endpoint told to go with the claim it took.
+    expect(w.registered.size).toBe(0);
+    expect(w.data.oneState).toBeUndefined();
+    expect(w.tabMessages.filter((m) => m.msg.type === "vt-one").at(-1).msg).toMatchObject({ state: null, release: true });
+  }
+});
+
+test("Chrome commands relay to the active tab's recorder whether or not the extension records", async () => {
+  const w = worker();
+  w.data.rec = null;
+  w.tabs.push({ id: 7, active: true, url: "https://forge.example/" });
+  const relayed = () => w.injections.filter((i) => i.func && i.func.name === "relayChord").map((i) => [i.target.tabId, i.args[0]]);
+  // Idle: the page recorder leads, so the chord — ⌥⇧P included — goes to it.
+  for (const name of ["snap", "note", "toggle-pause"]) await w.command(name);
+  expect(relayed()).toEqual([[7, "KeyA"], [7, "KeyN"], [7, "KeyP"]]);
+  // Recording, the tab captured: snap/note reach its content script; ⌥⇧P pauses the extension's own recording.
+  w.data.rec = { sessionId: 1, generation: "first", tabs: { "7": { id: "tab1", host: "forge.example" } }, seq: 0, paused: false, resumeAt: "2026-10-12T10:00:00Z" };
+  await w.command("note");
+  expect(w.tabMessages.at(-1)).toEqual({ tabId: 7, msg: { type: "vt-note-ui" } });
+  await w.command("toggle-pause");
+  expect(w.data.rec.paused).toBe(true);
+  expect(relayed()).toHaveLength(3);
+});
+
+test("a tab whose content script met a page recorder's claim leaves the recording", async () => {
+  const w = worker();
+  w.data.captureNetwork = true;
+  const attaches = [];
+  w.context.chrome.debugger.attach = async (target) => { attaches.push(target); };
+  w.answer((inj) => (inj.files ? [{ result: "yield" }] : []));
+  expect(await w.call('attachTab(7, "https://forge.example/")')).toBe(false);
+  expect(w.data.rec.tabs).toEqual({});
+  expect(attaches).toEqual([]);
+  // The claim rode in ahead of content.js, under the recording's generation.
+  expect(w.injections[0].args[0]).toEqual({ generation: "first", sessionId: "1", state: "recording" });
+});
+
+test("a second Start while one is still probing is refused, and leaves the first's endpoints alone", async () => {
+  const w = worker();
+  w.data.rec = null;
+  w.tabs.push({ id: 7, active: true, url: "https://app.test/" });
+  const probing = deferred();
+  w.answer((inj) => (inj.func && inj.func.name === "oneProbe" ? probing.promise : []));
+  const first = w.message({ type: "vt-start", title: "first" });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(await w.message({ type: "vt-start", title: "second" })).toEqual({ ok: false, error: "a recording is already starting — try again in a moment" });
+  expect(w.tabMessages.filter((m) => m.msg.type === "vt-one").map((m) => m.msg.state)).toEqual(["starting"]);
+  probing.resolve([{ result: { host: "app.test", holder: pageClaim() } }]);
+  expect(await first).toMatchObject({ ok: false, code: "recorder_busy" });
+});
+
+test("after an extension reload, a tab whose page recorder started in the gap leaves the recording", async () => {
+  const w = worker();
+  w.data.rec = { sessionId: 1, generation: "first", tabs: { "7": { id: "tab1", host: "forge.example" }, "8": { id: "tab2", host: "forge.example" } }, seq: 0 };
+  w.tabs.push({ id: 7, url: "https://forge.example/a" }, { id: 8, url: "https://forge.example/b" });
+  w.answer((inj) => (inj.files && inj.files.includes("content.js") ? [{ result: inj.target.tabId === 8 ? "yield" : undefined }] : []));
+  await w.call("reattach()");
+  expect(Object.keys(w.data.rec.tabs)).toEqual(["7"]);
+  expect(w.registered.has("vitrinka-one")).toBe(true);
+});
+
+test("a captured tab that navigates while paused gets its content script back, and records no nav or shot", async () => {
+  const w = worker();
+  w.data.rec = { sessionId: 1, generation: "first", tabs: { "7": { id: "tab1", host: "forge.example" } }, seq: 0, paused: true };
+  await w.navigate({ frameId: 0, tabId: 7, url: "https://forge.example/next" });
+  expect(w.injections.find((i) => i.func)?.args[0]).toEqual({ generation: "first", sessionId: "1", state: "paused" });
+  expect(w.injections.some((i) => i.files && i.files.includes("content.js"))).toBe(true);
+  expect(w.data.rec.seq).toBe(0);
+  expect(w.captures).toHaveLength(0);
+});
+
+test("a note taken for a recording a new Start replaced is dropped, never filed into the next", async () => {
+  const w = worker();
+  w.data.rec = { sessionId: 2, generation: "second", tabs: { "7": { id: "tab1", host: "app.test" } }, seq: 0, policy: null };
+  expect(await w.message({ type: "vt-note", generation: "first", payload: { text: "for the first", route: "/" } }))
+    .toEqual({ ok: false, error: "the recording ended before the note arrived" });
+  expect(w.writes).toHaveLength(0);
+  expect(await w.message({ type: "vt-note", generation: "second", payload: { text: "for the second", route: "/" } })).toEqual({ ok: true });
+  expect(w.writes.map((i) => i.payload.text)).toEqual(["for the second"]);
+});
+
+test("an extension reload gives the lanes that stay their debugger back, the flag true to what attached", async () => {
+  const w = worker();
+  w.data.captureNetwork = true;
+  w.data.rec = { sessionId: 1, generation: "first", tabs: { "7": { id: "tab1", host: "a.test", cdp: true }, "8": { id: "tab2", host: "a.test", cdp: true } }, seq: 0 };
+  const attached = [];
+  w.context.chrome.debugger.detach = async () => {};
+  w.context.chrome.debugger.attach = async ({ tabId }) => { if (tabId === 8) throw new Error("Another debugger is already attached"); attached.push(tabId); };
+  w.context.chrome.debugger.sendCommand = async () => ({});
+  await w.call("reattach({ reloaded: true })");
+  expect(attached).toEqual([7]);
+  expect(w.data.rec.tabs).toMatchObject({ "7": { cdp: true }, "8": { cdp: false } });
+});
+
+test("content.js is injected into the very document its claim bootstrap landed in", async () => {
+  const w = worker();
+  w.answer((inj) => (inj.func ? [{ documentId: "doc-1" }] : []));
+  await w.call('attachTab(7, "https://forge.example/")');
+  expect(w.injections.find((i) => i.files && i.files.includes("content.js")).target).toEqual({ tabId: 7, documentIds: ["doc-1"] });
+});
+
+test("a replaced recording's tabs are told to retire, and its pills can no longer stop or pause the new one", async () => {
+  const w = worker();
+  w.data.rec = { sessionId: 1, generation: "old", tabs: { "8": { id: "tab1", host: "app.test" } }, seq: 0 };
+  w.tabs.push({ id: 7, active: true, url: "https://app.test/" });
+  w.answer((inj) => (inj.func && inj.func.name === "oneProbe" ? [{ result: { host: "app.test", holder: null } }] : []));
+  w.context.fetch = async (url, init) => {
+    w.requests.push({ url: String(url), ...init });
+    const body = String(url).includes("/recorder/resolve") ? { workspace: "qa" } : { id: 2, workspace: "qa", project: "p", status: "recording", maxSeq: 0 };
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  expect(await w.message({ type: "vt-start", title: "next" })).toMatchObject({ ok: true });
+  expect(w.tabMessages.filter((m) => m.msg.type === "vt-retire")).toEqual([{ tabId: 8, msg: { type: "vt-retire", generation: "old" } }]);
+  const stale = { ok: false, error: "this pill's recording was replaced by a newer one — use its pill" };
+  expect(await w.message({ type: "vt-stop", generation: "old" })).toEqual(stale);
+  expect(await w.message({ type: "vt-pause", generation: "old" })).toEqual(stale);
+  expect(w.data.rec).toMatchObject({ sessionId: 2, paused: false });
+  expect(w.data.rec.stopping).toBeUndefined();
+});
+
+test("a yield that lands after a new recording took the tab never drops the new recording's lane", async () => {
+  const w = worker();
+  const injected = deferred();
+  w.answer((inj) => (inj.files ? injected.promise : []));
+  const attach = w.call('attachTab(7, "https://forge.example/")');
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  // A new Start adopted meanwhile and attached the same tab, with the same lane id.
+  w.data.rec = { sessionId: 2, generation: "second", tabs: { "7": { id: "tab1", host: "forge.example" } }, seq: 0 };
+  injected.resolve([{ result: "yield" }]);
+  expect(await attach).toBe(false);
+  expect(w.data.rec.tabs).toEqual({ "7": { id: "tab1", host: "forge.example" } });
 });

@@ -11,13 +11,37 @@
 // Idempotent: re-injection (SPA navs, SW restarts) is a no-op while the
 // previous instance records. A NEW session in the same document (Start on
 // the HUD a stop left behind, or the popup) retires the previous instance —
-// its listeners, its HUD — before this one takes over.
+// its listeners, its HUD — before this one takes over; so does an instance
+// an extension reload orphaned.
+//
+// ONE recorder (extension + page recorder decisions 2026-10-12): a page can
+// embed @vitrinka/web's recorder too, and the two are ONE — the first to
+// start leads. Before anything else this claims the document (<html>
+// data-vitrinka-lead, through vendor/vitrinka-one.iife.js) under the
+// recording's generation, which the worker hands in as __vitrinkaInject; a
+// live page recorder already holding it makes this instance yield — it
+// captures nothing and evaluates to "yield", so the worker drops the tab.
 
 (() => {
   const prev = window.__vitrinkaRecorder;
-  if (prev && prev.live !== false) return;
+  // A Start that replaced a live recording hands in a new generation: the
+  // previous recording's instance retires too.
+  const next = globalThis.__vitrinkaInject;
+  const replaced = !!(prev && prev.generation && next && next.generation && next.generation !== prev.generation);
+  if (prev && prev.live !== false && !(prev.orphaned && prev.orphaned()) && !replaced) {
+    // The same recording, re-injected (a navigation's script, a refused
+    // Start's repair): its instance takes back a document claim left empty.
+    if (prev.reclaim) prev.reclaim();
+    return;
+  }
   if (prev && prev.retire) prev.retire();
-  const self = { live: true, retire: () => undefined };
+  // A reloaded or uninstalled extension leaves its scripts behind without a
+  // runtime: they must let go of the page (D5), and a fresh one takes over.
+  const runtime = chrome.runtime;
+  const orphaned = () => {
+    try { return !runtime || !runtime.id; } catch { return true; }
+  };
+  const self = { live: true, retire: () => undefined, orphaned };
   window.__vitrinkaRecorder = self;
   // Undone by endCapture (the session stopped) and retire (a new instance).
   const captureOff = [];
@@ -26,6 +50,25 @@
   const send = (msg) => new Promise((res) => {
     try { chrome.runtime.sendMessage(msg, res); } catch { res(null); }
   });
+
+  // The claim (D4): a synchronous check-and-set in this script's first task.
+  const ONE = globalThis.VitrinkaOne;
+  const oneEnv = ONE ? ONE.documentEnv() : null;
+  const inject = globalThis.__vitrinkaInject || null;
+  delete globalThis.__vitrinkaInject;
+  const generation = (oneEnv && inject && typeof inject.generation === "string" && inject.generation) || "";
+  const oneSelf = ONE ? { from: "extension", inst: ONE.nonce("e") } : null;
+  self.generation = generation;
+  self.reclaim = () => syncClaim();
+  if (generation) {
+    const took = ONE.takeClaim(oneEnv, oneSelf, {
+      id: generation, state: inject.state || "recording", sessionId: String(inject.sessionId || ""),
+    });
+    if (!took.ok) {
+      self.live = false;
+      return "yield";
+    }
+  }
   // Every recorder surface: the HUD host, a sheet it portals into a dialog,
   // the annotate stylesheet, the pair host. rrweb blocks them; clicks on them
   // are the tester's, not the journey's.
@@ -35,6 +78,11 @@
   // Settles once the HUD is mounted (or will not be); rrweb starts after it.
   let hudMountedDone = () => undefined;
   const hudMounted = new Promise((res) => { hudMountedDone = res; });
+  // A document injected while the recording is paused starts rrweb at the
+  // resume: the worker drops paused batches, and a dropped full snapshot
+  // would leave the replay nothing to apply this document's changes to.
+  let resumedDone = () => undefined;
+  const resumed = inject && inject.state === "paused" ? new Promise((res) => { resumedDone = res; }) : Promise.resolve();
 
   // -------------------------------------------------------------------------
   // click capture (capture phase — sees clicks the app swallows)
@@ -130,7 +178,7 @@
       // The snapshot also waits for the HUD to mount, so its blocked host is
       // IN the snapshot: added later, it is an <html>-level mutation, and
       // rrweb's replay loses every mutation after it on a seek.
-      Promise.all([send({ type: "vt-policy" }), hudMounted]).then(([r]) => {
+      Promise.all([send({ type: "vt-policy" }), hudMounted, resumed]).then(([r]) => {
         try {
           if (!self.live) return; // stopped before the policy answered
           // Only engine directives establish a policy. A missing/malformed
@@ -616,6 +664,20 @@
   //   link → the options page (its device-code dance); unlink is the options page's too
 
   const VERSION = `extension/${chrome.runtime.getManifest().version}`;
+  // ONE recorder state (the claim section below): the HUD's inline flow face
+  // (D7), capture ended here (vt-stop), and the HUD's Stop flow a remote stop
+  // runs (D11).
+  let face = "none";
+  let ended = false;
+  // Until the worker's state arrives (the mount below), the claim keeps the
+  // state it was taken with.
+  let adopted = false;
+  let remoteStop = null;
+  // Who leads this document when it is not this recording: the claim's holder.
+  const followingOf = () => {
+    const c = oneEnv ? ONE.readClaim(oneEnv) : null;
+    return c && c.id !== generation ? c.by : null;
+  };
   // The live recording as the HUD paints it; null once it ended.
   let live = null; // {sessionId, title, paused, activeMs, resumedAt, boardUrl}
   let health = null; // the worker's last health()
@@ -689,12 +751,17 @@
       version: VERSION,
       // The paperclip, while this recording's workspace takes images (D6).
       canAttach: !!recording && hud.canAttach === true,
+      // ONE recorder D8: another recorder holds this document — this pill is its remote.
+      ...(followingOf() ? { following: followingOf() } : {}),
     };
   };
   const listeners = new Set();
   let snap = build(), snapKey = JSON.stringify(snap);
   // getSnapshot hands back the SAME object until something in it changed.
+  // Every change re-derives this document's claim first (written on
+  // transitions only).
   const changed = () => {
+    syncClaim();
     const next = build(), key = JSON.stringify(next);
     if (key === snapKey) return;
     snap = next; snapKey = key;
@@ -714,7 +781,9 @@
     hud = h;
     changed();
   };
-  const fail = (r, fallback) => new Error((r && r.error) || fallback);
+  // A refused Start (ONE recorder D12) keeps its code and leader.
+  const fail = (r, fallback) => Object.assign(new Error((r && r.error) || fallback),
+    r && r.code ? { code: r.code, leader: r.leader } : {});
 
   // A tester's images (recorder attachments D5) cross to the worker as data
   // URLs: a runtime message is JSON, and a Blob would arrive as {}. The HUD
@@ -754,7 +823,7 @@
       const r = await send({ type: "vt-start", title });
       if (!r || !r.ok) throw fail(r, "the recorder did not answer — try again");
     },
-    async togglePause() { await send({ type: "vt-pause" }); }, // echoes back as vt-paused
+    async togglePause() { await send({ type: "vt-pause", generation }); }, // echoes back as vt-paused
     async stop() {
       stoppingHere = true;
       const boardBefore = snap.recording && snap.recording.boardUrl;
@@ -766,12 +835,12 @@
       // while the stop's answer is still on its way.
       saved = sessionId ? { recent, boardUrl: "" } : null;
       let r;
-      try { r = await send({ type: "vt-stop", hud: hudToken }); } finally { stoppingHere = false; }
+      try { r = await send({ type: "vt-stop", hud: hudToken, generation }); } finally { stoppingHere = false; }
       if (!r || !r.ok) {
         saved = null;
         throw fail(r, "the recorder did not answer — try again"); // the session is kept
       }
-      live = null; health = null;
+      live = null; health = null; ended = true;
       self.live = false;
       changed();
       adoptHud(await send({ type: "vt-hud" }));
@@ -789,7 +858,7 @@
     // Without images a note goes at once, its seq where the tester wrote it;
     // with them it goes once they are read, the images riding beside it.
     note(text, attachments) {
-      const msg = { type: "vt-note", payload: { text, route: location.pathname } };
+      const msg = { type: "vt-note", generation, payload: { text, route: location.pathname } };
       if (!attachments || !attachments.length) return void send(msg);
       wireAttachments(attachments).then((files) => {
         if (files.length || text) send({ ...msg, attachments: files });
@@ -797,7 +866,7 @@
     },
     annotate({ text, rect, selector, task, attachments }) {
       const s = imageScale();
-      const msg = { type: "vt-snap", route: location.pathname, payload: {
+      const msg = { type: "vt-snap", generation, route: location.pathname, payload: {
         rect: { x: Math.round(rect.x * s), y: Math.round(rect.y * s), w: Math.round(rect.w * s), h: Math.round(rect.h * s) },
         selector, note: text, task: !!task,
       } };
@@ -817,7 +886,129 @@
       adoptHud(await send({ type: "vt-hud-prefs", patch }));
     },
     async refreshRecents() { adoptHud(await send({ type: "vt-hud-recents" })); },
+    // D11: the HUD's own Stop flow, which a page's remote stop runs.
+    onRemoteStop(run) {
+      remoteStop = run;
+      return () => { if (remoteStop === run) remoteStop = null; };
+    },
+    // D7: the claim stays `saved` while Saving / Saved / failed shows here.
+    faceChanged(f) {
+      face = f;
+      changed();
+      retireWhereThePageLives();
+    },
   };
+
+  // -------------------------------------------------------------------------
+  // ONE recorder (extension + page recorder decisions 2026-10-12): while the
+  // extension leads this document its claim names the recording's
+  // generation — recording, paused, stopping, then `saved` while this pill's
+  // stop face shows (D7) — and a page recorder here follows: its pill hides,
+  // its pause, stop and note arrive as commands answered synchronously inside
+  // their dispatch (D11). Every hello ask is answered the same way, so a
+  // page never waits on an extension that is gone (D5).
+
+  const holding = () => !!generation && ONE.readClaim(oneEnv)?.id === generation;
+  const claimWanted = () => {
+    if (!adopted) return inject.state || "recording";
+    if (live) {
+      const draining = stoppingHere || ended || (!!health && health.state === "wrapping");
+      return draining ? "stopping" : live.paused ? "paused" : "recording";
+    }
+    return face === "saving" || face === "saved" || face === "failed" ? "saved" : null;
+  };
+  const liveOf = () => {
+    const c = holding() ? ONE.readClaim(oneEnv) : null;
+    return c ? { by: "extension", state: c.state, here: true, id: generation } : null;
+  };
+  let oneOff = [];
+  let orphanTimer = null;
+  const leaveChannel = () => {
+    oneOff.forEach((fn) => fn());
+    oneOff = [];
+    clearInterval(orphanTimer);
+    orphanTimer = null;
+  };
+  // Release the claim and say so; nothing more is answered from here.
+  const releaseClaim = () => {
+    if (holding() && ONE.releaseClaim(oneEnv, generation)) ONE.announce(oneEnv, oneSelf, null);
+    leaveChannel();
+  };
+  function syncClaim() {
+    if (!generation || !oneOff.length) return;
+    const want = claimWanted();
+    if (!want) return releaseClaim();
+    const cur = ONE.readClaim(oneEnv);
+    if (!cur) {
+      // Left empty under a live recording (a refused replacing Start released
+      // it): taken back. Another holder's claim is never taken (D14).
+      if (ONE.takeClaim(oneEnv, oneSelf, { id: generation, state: want, sessionId: live ? live.sessionId : "" }).ok) ONE.announce(oneEnv, oneSelf, liveOf());
+      return;
+    }
+    if (cur.id !== generation) return; // never over another holder
+    const sessionId = live ? live.sessionId : cur.sessionId;
+    if (cur.state === want && cur.sessionId === sessionId) return;
+    ONE.updateClaim(oneEnv, generation, { state: want, sessionId });
+    ONE.announce(oneEnv, oneSelf, liveOf());
+  }
+  // D7: one pill per document — the idle pill a stop leaves behind steps
+  // aside wherever a page recorder lives.
+  function retireWhereThePageLives() {
+    if (!ended || live || face !== "none" || !oneEnv || !ONE.pageMarked(oneEnv)) return;
+    releaseClaim();
+    removeUi();
+  }
+  // D5: the extension was reloaded or uninstalled under this script. Its
+  // claim goes (unless a fresh instance already answers for the same
+  // recording), its HUD and capture end, and the page hears it is gone.
+  const orphanRetire = () => {
+    const fresh = holding() && ONE.ask(oneEnv, oneSelf).some((h) => h.live && h.live.here && h.live.id === generation);
+    if (holding() && !fresh) ONE.releaseClaim(oneEnv, generation);
+    ONE.announce(oneEnv, oneSelf, null, { gone: true });
+    leaveChannel();
+    self.retire();
+  };
+  const onCommand = (c) => {
+    if (!holding()) return null;
+    if (orphaned()) {
+      orphanRetire();
+      return null;
+    }
+    if (!live || ended) return { ok: false, code: "not_recording", error: "the recording has ended" };
+    if (claimWanted() === "stopping") return { ok: false, code: "stopping", error: `still saving #${live.sessionId}` };
+    if (c.op === "pause") {
+      controller.togglePause();
+      return { ok: true };
+    }
+    if (c.op === "stop") {
+      if (remoteStop) remoteStop();
+      else controller.stop().catch((e) => console.warn("vitrinka: remote stop failed", e));
+      return { ok: true };
+    }
+    const text = (c.text || "").trim();
+    if (!text) return { ok: false, code: "bad_command", error: "a note needs text" };
+    if (health && health.state === "dead") return { ok: false, code: "not_recording", error: "the server ended this recording" };
+    if (live.paused) return { ok: false, code: "bad_command", error: "the recording is paused — resume it to add a note" };
+    controller.note(text);
+    return { ok: true };
+  };
+  if (generation) {
+    const answers = () => {
+      if (!orphaned()) return liveOf();
+      orphanRetire();
+      return null;
+    };
+    oneOff.push(ONE.serveHello(oneEnv, oneSelf, answers), ONE.serveCommands(oneEnv, oneSelf, onCommand));
+    orphanTimer = setInterval(() => { if (orphaned()) orphanRetire(); }, 2000);
+    ONE.announce(oneEnv, oneSelf, liveOf());
+  }
+  // The claim or the page mark changed under this pill: who it follows, and
+  // whether a leftover idle pill steps aside.
+  const docObserver = oneEnv ? new MutationObserver(() => {
+    changed();
+    retireWhereThePageLives();
+  }) : null;
+  if (docObserver) docObserver.observe(document.documentElement, { attributes: true, attributeFilter: [ONE.LEAD_ATTR, ONE.PAGE_ATTR] });
 
   // The HUD's own UI state (its dock spot) per origin in extension storage,
   // never the page's localStorage; RecorderStorage is synchronous, so it is
@@ -847,9 +1038,13 @@
     }
   };
   const removeUi = () => {
-    if (unmountHud) { unmountHud(); unmountHud = null; }
+    // Nulled first: unmounting reports the HUD's last face, which can land here again.
+    const unmount = unmountHud;
+    unmountHud = null;
+    if (unmount) unmount();
     pairHost.remove();
     placeObserver.disconnect();
+    if (docObserver) docObserver.disconnect();
   };
 
   // The stopping pill still paints drain health and its late board link, but
@@ -868,6 +1063,7 @@
     else if (msg.type === "vt-pick") chord("KeyA");
     else if (msg.type === "vt-note-ui") chord("KeyN");
     else if (msg.type === "vt-paused") {
+      if (!msg.paused) resumedDone();
       if (live) live = { ...live, paused: !!msg.paused, activeMs: msg.elapsedMs || 0, resumedAt: msg.paused ? null : Date.now() };
       changed();
     }
@@ -879,17 +1075,30 @@
       saved = { ...saved, boardUrl: String(msg.boardUrl) };
       changed();
     }
+    else if (msg.type === "vt-retire") {
+      // A Start or Continue replaced this recording: its pill, capture and claim go.
+      if (generation && msg.generation === generation) {
+        releaseClaim();
+        self.retire();
+      }
+    }
     else if (msg.type === "vt-pair") renderPair(msg.pair);
     else if (msg.type === "vt-pair-frame") applyPairFrame(msg.frame);
     else if (msg.type === "vt-stop") {
       sendVitals(); // the final page's vitals ride out before the SW drains
       endCapture();
+      ended = true;
       chrome.runtime.onMessage.removeListener(onMessage);
       if (stoppingHere) chrome.runtime.onMessage.addListener(onSavedBoard);
       // The pair panel lives exactly as long as the recording; the HUD stays
-      // only when it is the one stopping (its Saving → Saved faces).
+      // only when it is the one stopping (its Saving → Saved faces), and so
+      // does this document's claim: `stopping`, then `saved` (D7).
       pairHost.remove();
-      if (!stoppingHere) removeUi();
+      if (stoppingHere) changed();
+      else {
+        releaseClaim();
+        removeUi();
+      }
       // Ship the final sub-2s rrweb batch before the SW drains its buffer —
       // detachAll awaits this response, so the last DOM events aren't lost.
       const events = rrBuf;
@@ -904,8 +1113,11 @@
 
   self.retire = () => {
     endCapture();
-    chrome.runtime.onMessage.removeListener(onMessage);
-    chrome.runtime.onMessage.removeListener(onSavedBoard);
+    leaveChannel();
+    try {
+      chrome.runtime.onMessage.removeListener(onMessage);
+      chrome.runtime.onMessage.removeListener(onSavedBoard);
+    } catch { /* orphaned: the runtime is gone */ }
     removeUi();
   };
 
@@ -963,7 +1175,10 @@
     for (let i = 0; i < 6; i++) {
       const r = await send({ type: "vt-status" });
       if (r && r.rec) {
+        adopted = true;
         adoptRec(r.rec, r.elapsedMs);
+        // Resumed between the bootstrap and this script: no vt-paused will tell it.
+        if (!r.rec.paused) resumedDone();
         adoptHealth(r.health);
         renderPair(r.pair);
         seedPanel(r.pairPanel);
@@ -971,6 +1186,10 @@
       }
       await new Promise((res) => setTimeout(res, 600));
     }
+    // No recording answered: it ended while this script waited, and the
+    // claim it took goes with it.
+    adopted = true;
+    changed();
     adoptHud(await send({ type: "vt-hud" }));
     // Retired, or stopped while we waited: a pill mounted now would paint a
     // recording that has ended. (A HUD stop keeps a HUD only once mounted.)

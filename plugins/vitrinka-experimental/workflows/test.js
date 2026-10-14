@@ -214,6 +214,9 @@ const TARGET_SCHEMA = {
 
 // A Prepare that also starts the app (review-loop, code-loop, map, and
 // build-idea's quick check at the run target).
+// The judging lane Prepare relays (run.js REVIEWER_STEP, adoptReviewer).
+const REVIEWER_PROPERTY = { type: 'string', enum: ['self', 'codex'], description: 'the judging lane `vitrinka config reviewer --json` reports as data.lane' }
+
 const PREPARE_SCHEMA = {
   ...TARGET_SCHEMA,
   properties: {
@@ -907,7 +910,7 @@ const runBase = A.board || override.board || `${slugify(prep.branch)}-test-run`
 const board = await agent(withRunTargetPreamble(
   `Mint the run board for this device test run through the lanes door.\n` +
   `1. Count the boards whose slug starts with "${runBase}-" (\`list {kind: "board"${project ? `, project: "${project}"` : ''}}\`); n = that count + 1.\n` +
-  `2. \`create {kind: "board", slug: "${runBase}-<n>", title: "Test run <n> · ${prep.branch}", board_type: "review"${project ? `, project: "${project}"` : ''}, meta: {task: "${task}", branch: "${prep.branch}", sha: "${prep.headSha || ''}", thoroughness: "${thoroughness}"}, lanes: ${JSON.stringify(lanes.map(l => ({ key: l.key, label: l.label })))}}\` — ONE call: the server mints the run board (the Overview tab) and one child board per lane (each a tab); a 409 on the slug means the run exists — reuse it and read its lanes from the receipt or \`get\`.\n` +
+  `2. \`create {kind: "board", slug: "${runBase}-<n>", title: "Test run <n> · ${prep.branch}", board_type: "review"${project ? `, project: "${project}"` : ''}, meta: {taskRef: "${task}", branch: "${prep.branch}", sha: "${prep.headSha || ''}", thoroughness: "${thoroughness}"}, lanes: ${JSON.stringify(lanes.map(l => ({ key: l.key, label: l.label })))}}\` — ONE call: the server mints the run board (the Overview tab) and one child board per lane (each a tab); a 409 on the slug means the run exists — reuse it and read its lanes from the receipt or \`get\`.\n` +
   `Return the run board's server url and slug and, per lane key, the child board's slug and url.`
 ), { label: 'board', phase: 'Run board', schema: RUNBOARD_SCHEMA })
 if (!board || !board.lanes.length) throw new Error('test: the lanes door minted no run board')
