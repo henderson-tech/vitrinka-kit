@@ -124,9 +124,11 @@ const sanitizeUrl = (url: string) => SECRET_PATHS.reduce((u, [rx, to]) => u.repl
 - **Failure:** it fails closed. If it throws or returns a non-string, the
   recorder keeps only the URL's origin (or `[redacted]` when there is none),
   never the raw value. It logs one `vitrinka:` warning per sanitizer.
-- **Not covered:** request and response bodies and the DOM itself stay under
-  the workspace policy. If a page renders a credential as visible text or in
-  a link, mark that element `.rr-block`.
+- **Not covered:** free text and the DOM stay under the workspace policy:
+  request and response headers and bodies, console lines (a router error
+  that quotes the path, say), and the page's own text and links. Add a policy
+  pattern for a token shape that shows up in text. If a page renders a
+  credential as visible text or in a link, mark that element `.rr-block`.
 
 ### Env vars
 
