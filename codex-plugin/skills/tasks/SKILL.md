@@ -153,10 +153,16 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   revisions/builds; a cut release is not deployment. Agents may cite
   evidence (`create {kind:"candidate_evidence", verified: false}`), never
   verify it or declare shipment. Now and history work without Eve.
-- **Copilot** answers "where are we": `get {kind:"copilot", project}` is
-  the project Overview (Eve's brief and moves, needs you, gating bugs,
-  next, active sprints); `get {kind:"cockpit", project, id}` is one
-  sprint's panels. Both work without Eve.
+- **Overview** answers "what is built, what is building": `get
+  {kind:"overview", project}` is the project board — the human-level work
+  in Planned (top eight), Building, Built and Shipped (its `next` read by
+  `get {kind:"overview", after}`), the strip (open, shipped this month, live, prod, open release,
+  active goals) and the newest chapter ids (older ones by `chapters:
+  <chaptersNext>`); a card moves by changing its
+  work. **Copilot** answers "what needs doing": `get {kind:"copilot",
+  project}` (Eve's brief and moves, needs you, gating bugs, active
+  sprints); `get {kind:"cockpit", project, id}` is one sprint's panels.
+  All work without Eve.
 - **History** answers "what happened": `get {kind:"history_chapter"}` is
   one chapter's spread (cover, narrative, numbers, boards, documents);
   `update` rewrites its narrative or pins its cover; `create

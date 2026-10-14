@@ -69,6 +69,15 @@ function sidekickOptions(input, options) {
   const { readOnly, ...rest } = options
   return input.sidekick && !rest.agentType ? Object.assign(rest, { agentType: input.sidekick }) : rest
 }
+// The machine's judging lane (`vitrinka config reviewer`): codex makes the
+// Codex sidekick this run's `sidekick` from Prepare on — every readOnly call
+// site (mapping, review, verify) judges there — unless the run named one.
+// Prepare relays the lane with REVIEWER_STEP.
+const REVIEWER_STEP = 'Report reviewer: the `lane` field of `vitrinka config reviewer --json` (self | codex); self when the command is missing or fails.'
+function adoptReviewer(input, reviewer) {
+  if (!input.sidekick && reviewer === 'codex') input.sidekick = 'codex'
+  return input.sidekick || ''
+}
 // The runtime journals agent returns. Keep accounting deterministic on replay,
 // share the allowance with child workflows, and bound every fan-out to four.
 function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
@@ -296,6 +305,9 @@ const TARGET_SCHEMA = {
 
 // A Prepare that also starts the app (review-loop, code-loop, map, and
 // build-idea's quick check at the run target).
+// The judging lane Prepare relays (run.js REVIEWER_STEP, adoptReviewer).
+const REVIEWER_PROPERTY = { type: 'string', enum: ['self', 'codex'], description: 'the judging lane `vitrinka config reviewer --json` reports as data.lane' }
+
 const PREPARE_SCHEMA = {
   ...TARGET_SCHEMA,
   properties: {
@@ -1461,6 +1473,7 @@ const UILOOP_PREP_SCHEMA = {
     vybava: { type: 'string', description: 'the line `vybava --version` prints, verbatim (diagnostic text only); empty when there is no vybava binary' },
     owner: { type: 'string', description: 'this run\'s lease owner, review-loop-<uuid>, minted once; the same string every --owner took' },
     paused: { type: 'string', description: 'the detail of a PAUSED diagnostic step 4 or 5 printed (the loop was paused after step 2), verbatim; omit it when none did' },
+    reviewer: REVIEWER_PROPERTY,
     state: UILOOP_STATE,
     doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, claimed: { type: 'array', items: UILOOP_BATCH, description: `the batches --claim leased to this run, every one ([] when other runs hold every batch left); ${UILOOP_CLI_OWNED}` }, carried: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, from: { type: 'integer' } }, required: ['screen', 'from'] }, description: `the screens carried from an earlier pass, which no batch holds, every one; ${UILOOP_CLI_OWNED}` } }, required: ['screens', 'batches', 'done', 'left'] },
@@ -1755,9 +1768,13 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     (batchStep ? `4. ${batchStep}: \`vybava ui-loop batches --json --pass <state.pass> --claim ${reviewers} --owner <owner>${A.batch ? ` --size ${A.batch}` : ''}\` → its \`data\` as batches, \`claimed\` included: the batches it leased to this run ([] when other runs hold every batch left). Digests travel only with the batches this run claimed (in \`claimed\` and in their \`batches\` entries); every other entry of \`batches\` is relayed as {id, area, screens} — the run never reads another run's digests, and all of them would overflow your output. Then \`vybava ui-loop triage --pass <state.pass> --json\` → its \`data\` as triage: every group with every screen id. It writes <state.passDir>/triage.json and the Failure triage section of <state.passDir>/report.md, nothing else; every diagnostic it prints but NO_PREVIOUS goes to problems verbatim as "triage <code>: <detail>" (a CAPTURE_REVISION_MISSING means recipe-drift was not judged).\n` : '') +
     (laneStep ? `${batchStep ? 5 : 4}. ${laneStep}: \`vybava ui-loop lanes --json --pass <state.pass> --max ${UILOOP_MAX_LANES}${primFlag}\` → its \`data\` as lanes.\n` : '') +
     (rigStep ? `${4 + [batchStep, laneStep].filter(Boolean).length}. ${rigStep}: count the rig lane's work. \`vybava ui-loop check --labels --json\` → its \`data.labels\` as labels, also when it exits non-zero on LABEL_MISSING errors (omit labels when it prints none: the repo sets no uiLoop.labels.sources); \`${recipeFailedJq('<state.passDir>', true)}\` → recipeFailed; and only when <state.passDir>/triage.json exists, \`${recipeDriftJq('<state.passDir>', true)}\` → recipeDrift; and \`${checkpointsCommand('<state.pass>')} | jq -c '[.data.checkpoints[] | select(.key | startswith("rig/")) | {key, status}]'\` → rigCheckpoints, the rig lane's admitted checkpoints of the pass ([] when none).\n` : '') +
-    (batchStep || laneStep ? `A PAUSED diagnostic from ${batchStep && laneStep ? 'step 4 or 5' : 'step 4'} means the loop was paused after step 2: put its detail, verbatim, in paused (not problems) and stop.\n` : '')
+    (batchStep || laneStep ? `A PAUSED diagnostic from ${batchStep && laneStep ? 'step 4 or 5' : 'step 4'} means the loop was paused after step 2: put its detail, verbatim, in paused (not problems) and stop.\n` : '') +
+    `${REVIEWER_STEP}\n`
   )), { label: 'prepare', phase: 'Prepare', effort: 'low', schema: UILOOP_PREP_SCHEMA })
   if (!prep) throw new Error('review-loop (ui-loop): prepare failed')
+  // The batch reviewers and the verify gate are readOnly: they judge on the
+  // machine's lane (adoptReviewer), or on an explicit sidekick.
+  adoptReviewer(A, prep.reviewer)
   const wrongRepo = repoProblem(A.repo, prep.repo)
   if (wrongRepo) throw new Error(`review-loop (ui-loop): ${wrongRepo} — nothing was changed; relaunch with repo set to the checkout the pass belongs to`)
   if (!prep.configured) throw new Error(!prep.vybava ? 'review-loop (ui-loop): prepare found no `vybava` binary — install it with `brew install --cask vybava`, then rerun the stage' : 'review-loop (ui-loop): this repo has no uiLoop section in vybava.config.ts — run `vybava ui-loop init`, then `vitrinka:map` with scope "screens"')
@@ -1897,7 +1914,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const verifiedGate = gate => gatePassed(gate) && gate.treeCleanOfMine === true && !!state.capturedHeadSha && state.sourceUnchanged === true && gate.sourceUnchanged === true
   const verifyGate = () => run.agent(brief(
     `Verify this UI pass without editing or committing. Run the repo's type/build/test gates where CLAUDE.md prescribes; report testsExecuted from runner counts; zero tests cannot pass an expected suite. No source edits are allowed: treeCleanOfMine is false when the gates or you left a change in the application tree (staged, unstaged or untracked, outside ${cfg.out} and .vitrinka/) that was not there before you started. Then run \`vybava ui-loop state --json --cap ${cap} --pass ${state.pass}${primFlag}\` and return its \`data.sourceUnchanged\` verbatim as sourceUnchanged (false when it prints none). Return treeCleanOfMine, sourceUnchanged, green, ran, failures and headSha AFTER verification.`
-  ), { label: 'gate:ui-loop', phase: 'Verify', schema: uiGateSchema })
+  ), { label: 'gate:ui-loop', phase: 'Verify', readOnly: true, schema: uiGateSchema })
   const retryGate = (gate, open = []) => {
     const attempts = (A.gateRetries || 0) + 1
     const failures = [...((gate && gate.failures) || [])]
@@ -2114,11 +2131,11 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     // every pass, so the set boards are the area boards — never a second one.
     const boards = await run.agent(brief(withUiLoop(
       `Lay out pass ${cap1.pass} of the ui-loop on its area set boards${cfg.project ? ` in project ${cfg.project}` : ''}, area order ${JSON.stringify(cfg.areas)}. A vitrinka set key IS a board: \`vybava ui-loop publish\` keeps ONE set per area across every pass (key \`${prefix}-<area>\`, board slug \`<project>-<branch>-${prefix}-<area>\`) and each pass adds its shots to it. Compose onto those set boards: never create a board and never delete one — the index's \`legacy\` keys are old chunk boards and stay as they are.\n` +
-      `Read ${newDir}/publish/index.json: per area set its key, title, url, status and \`sections\` [{title: "Pass N · <viewport> · <theme>", viewport, theme, labels}]. Published sets: ${JSON.stringify((cap1.sets || []).filter(s => s.url))}.\n` +
+      `Read ${newDir}/publish/index.json: per area set its key, title, url, status and \`sections\` [{title: "Pass N · <viewport> · <theme>", viewport, theme, journey, pass, labels}]. Published sets: ${JSON.stringify((cap1.sets || []).filter(s => s.url))}.\n` +
       // One line per screen, never per shot: a coverage gap is one screen
       // without an ok shot, however many viewports and themes it missed.
       `The screens not captured are the pass's coverage gaps, one {id, reason} per screen: \`vybava ui-loop state --json --pass ${cap1.pass} | jq -c '.data.coverageGaps[]'\`. A gap belongs to the area its shot records name (\`.area\` of ${newDir}/shots/<id>/*.json). A retired screen is no gap and gets no line.\n` +
-      `On each area's set board (open it by the index url) upsert this pass's sections and lay out its existing shots as the listed sections, in order: one board section per entry, holding the cards whose labels it lists. At the head of the pass's first section put a "${title}" summary callout naming the shot count and how many are not ok. Render the area's coverage gaps as ONE text card "Not captured this pass", one line \`<id> — <reason>\` per gap (never one per viewport or theme), never as images; an area without gaps gets none. Earlier passes' sections stay untouched. Replay replaces this pass's summary and gaps card instead of duplicating them. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back.\n` +
+      `On each area's set board (open it by the index url) upsert this pass's sections and lay out its existing shots as the listed sections, in order: one board section per entry, holding the cards whose labels it lists. Each section frame's payload carries the entry's {journey, pass} — a capture pass of that journey chain, so a review plan scopes the latest pass by structure: compose the frame with them, or \`update_cards\` it — which replaces a payload wholesale, so send the frame's whole payload (title included) with journey and pass added (an index without them, from an older vybava: journey \`<area>-<viewport>-<theme>\`, pass ${cap1.pass}). At the head of the pass's first section put a "${title}" summary callout naming the shot count and how many are not ok. Render the area's coverage gaps as ONE text card "Not captured this pass", one line \`<id> — <reason>\` per gap (never one per viewport or theme), never as images; an area without gaps gets none. Earlier passes' sections stay untouched. Replay replaces this pass's summary and gaps card instead of duplicating them. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back.\n` +
       `Write [{area, url, slug, section}] to ${newDir}/publish/boards.json and return it: url and slug are the set board's, server-returned; section is the title of this pass's first section (the one the summary callout heads).`
     )), { label: 'boards', phase: 'Boards', agentType: 'vitrinka:vitrinka-publisher', schema: UILOOP_BOARDS_SCHEMA })
     if (boards) { out.boards = boards.boards; out.problems.push(...(boards.problems || [])) } else out.problems.push('boards: laying the pass out on the area set boards failed — the sets are published; rerun stage capture to lay them out')
@@ -2572,8 +2589,9 @@ const prep = await run.agent(brief(
   `4. Start the app for this branch the way CLAUDE.md prescribes (devbox when available, else locally); wait until it answers; return the reachable base URL${A.base ? ` (requested: ${A.base})` : ''}.\n` +
   `5. Task binding: ${A.task ? `the run is bound to task ${A.task}.` : 'if the checkout carries a vt-<id> task, return it; otherwise leave task empty (the QA record lands on the project\'s Unplanned runs epic).'}\n` +
   `6. Require a clean application tree at headSha BEFORE capture. ${sourceCheck}\n` +
+  `7. ${REVIEWER_STEP}\n` +
   `Never create tasks, boards or commits here.`
-), { label: 'prepare', phase: 'Prepare', schema: { ...PREPARE_SCHEMA, properties: { ...PREPARE_SCHEMA.properties, sourceUnchanged: sourceProperty, repo: { type: 'string' } }, required: [...PREPARE_SCHEMA.required, 'sourceUnchanged'] } })
+), { label: 'prepare', phase: 'Prepare', schema: { ...PREPARE_SCHEMA, properties: { ...PREPARE_SCHEMA.properties, sourceUnchanged: sourceProperty, repo: { type: 'string' }, reviewer: REVIEWER_PROPERTY }, required: [...PREPARE_SCHEMA.required, 'sourceUnchanged'] } })
 if (!prep) throw new Error('review-loop: prepare failed')
 const wrongRepo = repoProblem(A.repo, prep.repo)
 if (wrongRepo) throw new Error(`review-loop: ${wrongRepo}; relaunch with the intended repo`)
@@ -2582,8 +2600,24 @@ if (A.expectedHead && prep.headSha !== A.expectedHead) throw new Error('review-l
 if (A.continuation && !A.expectedHead) throw new Error('review-loop: a continuation requires expectedHead to bind its evidence')
 const task = A.task || prep.task || ''
 const project = A.project || prep.project || ''
+// Mapping, review and verify agents are readOnly: they judge on the
+// machine's lane (adoptReviewer), or on an explicit sidekick.
+const sidekick = adoptReviewer(A, prep.reviewer)
 const override = prep.override || {}
 const { type, matrix, checklist, exclude } = resolveMatrix(A.projectType || prep.projectType, Object.assign({}, override, A.matrix ? { matrix: A.matrix } : {}))
+// The checklist is judged beside the project rubric, so review_plan folds its
+// digest into the reuse key: a changed checklist re-judges every screen.
+const checklistKey = (() => {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57
+  for (const ch of checklist.join('\n')) {
+    const c = ch.codePointAt(0)
+    h1 = Math.imul(h1 ^ c, 2654435761)
+    h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return `review-loop:${(h2 >>> 0).toString(16).padStart(8, '0')}${(h1 >>> 0).toString(16).padStart(8, '0')}`
+})()
 if (!matrix.length) throw new Error(`review-loop: project type ${type} has no device matrix — nothing to shoot`)
 const boardSlug = A.board || override.board || `${prep.branch.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-review-loop`
 log(`review-loop: ${type} on ${prep.branch} at ${prep.baseUrl} (${prep.where}), ${matrix.length} devices, cap ${cap}, threshold ${threshold}`)
@@ -2593,7 +2627,7 @@ let terrain = A.routes ? { routes: A.routes, journeys: A.journeys || [] } : null
 if (!terrain) {
   terrain = await run.agent(brief(
     'Read-only: inventory every route/screen a user can reach in this repo (path, title, implementing file, auth, how to reach it with data on screen) and the 3-8 journeys a real user walks. Prefer the repo\'s own route tables and navigators over file-name guesses.'
-  ), { label: 'inventory', phase: 'Map', agentType: 'Explore', schema: TERRAIN_SCHEMA })
+  ), { label: 'inventory', phase: 'Map', ...(sidekick ? { readOnly: true } : { agentType: 'Explore' }), schema: TERRAIN_SCHEMA })
 }
 if (!terrain || !terrain.routes || !terrain.routes.length) throw new Error('review-loop: no routes to shoot')
 const allRoutes = terrain.routes.filter(r => !exclude.some(x => r.path === x || r.path.startsWith(x.replace(/\*$/, ''))))
@@ -2697,11 +2731,11 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
     `Local review (you are the reviewer, no server-side judge) of pass ${pass}, all devices ${matrix.map(d => d.name).join(', ')}, on board ${pub.boardSlug} (${pub.boardUrl}).\n` +
     `Cards in scope: ${JSON.stringify(pub.cards)}.\n` +
     `Read \`review_brief${project ? ` {project: "${project}"}` : ''}\` and judge against it PLUS this checklist:\n- ${checklist.join('\n- ')}\n` +
-    `Survey every card before filing anything with \`get_card_image {board, cardIds: [...]}\` — one labelled sheet per call, at most 12 cards (cross-cutting problems show only across the set) — then read each card you file on with \`get_card_image {board, cardId}\` and measure there. Image bytes never leave a tool result: no base64 in a shell command, no image files to tile yourself. File ONE \`annotate {board, agent: "claude-code", items: [...]}\` batch: each item keyed \`p${pass}-<device>-<n>\`, region measured on the source pixels, category = the rule id, severity blocker|major|minor, and detail naming the implementing files and what correct looks like. Sort defects as kind "finding" and taste as "suggestion".\n` +
+    `Plan the pass as a review run: \`review_plan {boards: ["${pub.boardSlug}"], sections: ["${pub.section || `Pass ${pass}`}"], checklist: "${checklistKey}"}\` (rare tier, callable by name; contract \`docs {topic: "review"}\`) — capture gaps, duplicates and earlier verdicts are resolved there; a plan with 0 sheets is already complete, so go straight to its receipt. Read its sheets in order with \`get_card_image {run, sheet}\`: sheet 1 prints a sight code you echo as \`sight\` on your next call (\`review_plan {run, sight}\` for a one-sheet run); a host that cannot read it sees no images — stop and return no findings. A crop tile shows only what differs from its \`vs\` card; \`prior\` findings are already open — never file them again. Read each card you file on with \`get_card_image {board, cardId}\` and measure there. Image bytes never leave a tool result: no base64 in a shell command, no image files to tile yourself. File ONE \`annotate {board, agent: "${sidekick.startsWith('codex') ? 'codex' : 'claude-code'}", run, items: [...]}\` batch: each item keyed \`p${pass}-<device>-<n>\`, region measured on the source pixels, category = the rule id, severity blocker|major|minor, and detail naming the implementing files and what correct looks like. Sort defects as kind "finding" and taste as "suggestion".\n` +
     (regressList.length ? `Regression check — these findings were fixed last pass; for each, look at the same route on this device and report fixed true/false with a note:\n${JSON.stringify(regressList.map(f => ({ key: f.key, id: f.id, route: f.route, summary: f.summary })))}\n` : '') +
     (stillOpen.length ? `Already filed and still open (accepted earlier, not fixed) — never file these again, under any key; file only defects not on this list:\n${JSON.stringify(stillOpen.map(f => ({ key: f.key, id: f.id, route: f.route, device: f.device || f.lane, summary: f.summary })))}\n` : '') +
-    `Return cardsRead with EVERY cardId whose image you read; screensRead is their count. Return every finding with its annotation id from the receipt, its route, device, an \`area\` (the component or route the fix lives in) and the files it names.`
-  ), { label: 'review:devices', phase: 'Review', schema: FINDINGS_SCHEMA })]
+    `Return cardsRead with EVERY cardId the run's receipt (\`review_plan {run, cards: true}\`) shows inspected, represented or reused — a capture gap or a blocked card is a problems line (route, device, why), never read; screensRead is their count. Return every finding with its annotation id from the receipt, its route, device, an \`area\` (the component or route the fix lives in) and the files it names.`
+  ), { label: 'review:devices', phase: 'Review', readOnly: true, schema: FINDINGS_SCHEMA })]
   const reviews = (await run.parallel(reviewers)).filter(Boolean)
   problems.push(...coverageProblems(routes, matrix, shots, journeys, ut.cases, reviews, walkOnly, pub ? pub.cards : []))
   problems.push(...shots.flatMap(s => s.problems || []))
@@ -2726,7 +2760,7 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
     phase('Gate')
     const gate = await run.agent(brief(
       `Verify this clean UI pass WITHOUT editing or committing: run the repo's type/build/test gates where CLAUDE.md prescribes. Report testsExecuted from the runner counts; an expected suite with zero executed tests fails. Return green, ran, failures and headSha from git rev-parse HEAD. The screenshots were captured at ${headSha}; a different HEAD fails this gate. ${sourceCheck}`
-    ), { label: 'gate:clean', phase: 'Gate', schema: routeGateSchema })
+    ), { label: 'gate:clean', phase: 'Gate', readOnly: true, schema: routeGateSchema })
     gateRed = !gatePassed(gate) || gate.headSha !== headSha || gate.sourceUnchanged !== true
     converged = !problems.length && convergedAfter({ clean: true, open: stillOpen, unwalked, gateRed })
     log(`${ph}: clean — ${converged ? 'loop converged' : [unwalked.length ? `${unwalked.length} fixed journeys never walked again` : '', gateRed ? 'a pass gate stayed red' : ''].filter(Boolean).join('; ') + ', so it did not converge'}`)

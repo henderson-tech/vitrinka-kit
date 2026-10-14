@@ -42,8 +42,10 @@ the board has several.
 
 ## Phase 0 — orient, one call each
 
-1. `list {kind: "section", board}` — `journeys[]` is the map: each chain's
-   key, pass count, latest pass. Pick the scope here.
+1. A journey argument, or `eve` mode: `list {kind: "section", board}` —
+   `journeys[]` is the map: each chain's key, pass count, latest pass. A
+   local run takes a named journey as its latest pass's section name in
+   the plan's `sections` (Phase 1); without one the plan's scope stands.
 2. `review_brief {project, persona?}` (CLI `vitrinka review brief
    [--project acme] [--persona "a senior mobile designer"]`) — the team's
    resolved rules (built-in ▸ workspace ▸ this project) as one prompt
@@ -56,39 +58,82 @@ the board has several.
    wait (a second request 409s). A recent `failed` with a timeout error
    after a deploy window — re-request.
 
-## Phase 1 (local) — review the screens yourself
+## Phase 1 (local) — judge a planned run
 
-1. Survey the set with `get_card_image {board, cardIds: […]}` — one
-   labelled sheet per call (≤12 cards): cross-cutting problems (one
-   contrast token, one spacing scale) show up only across the set. Then
-   `get_card_image {board, cardId}` for every screen you will file on and
-   measure on those pixels, never on a sheet, a thumbnail or the card's
-   text. Image bytes never leave a tool result: no base64 in a shell
-   command, no image files written to build your own montage — that is
-   what the sheet is for. In a code-mode script, hand the image block to
-   the host's image call (`image(block)`) and print only the text block;
-   never stringify or log the whole result. A first sheet that arrives as
-   `[image omitted]` means this host sees no tool-result images (a Codex
-   lane): stop there, file nothing, and offer a rerun in a Claude session
-   or as `eve`.
-2. Judge each screen against the brief from Phase 0. Every finding names
-   the rule it breaks, the region on the image, and what correct looks
-   like. Sort into `finding` (a defect) and `suggestion` (taste).
-3. File ONE `annotate {board, agent, items: [{key, cardId, cardVersion,
-   region, image: {width, height}, summary, detail, category, severity}]}`
-   batch for the whole scope — `image` is the size that read returned, so
-   a region measured on another basis is refused instead of landing wrong.
-   Read `covers` in each receipt: it lists the text under the filed region.
-   Findings land `staged` for the user's Accept/Dismiss. Never file
-   findings as document or `finding` cards via compose_board, never
-   `highlight` them. Doctrine: `docs {topic: "annotation"}`.
+The server decides what to judge; you judge it. Contract: `docs {topic:
+"review"}`.
 
-Nothing here calls a server-side reviewer; the findings are yours and the
-report says so.
+1. **Plan.** `review_plan {boards: […], scope?, sections?}` (rare tier,
+   callable by name; CLI `vitrinka review plan <board>…`), `sections`
+   naming a requested journey's latest pass — else each
+   journey's latest capture pass by default, with capture gaps, reused
+   images and duplicates already resolved. A `needs_scope` reply prices
+   every option: take the recommended one unless the user named another,
+   and call again. `full: true` only when the user asks to re-judge. A
+   plan with `sheets: 0` is already `complete` (everything reused or a
+   capture gap): skip to step 7 — it has no sheet and no code. Pass `run`
+   exactly as the reply's calls spell it: `"<workspace>/<id>"` when the
+   plan ran in another workspace.
+2. **Prove sight.** `get_card_image {run, sheet: 1}`. Its band prints a
+   SIGHT CODE: echo it on your next call — `get_card_image {run, sheet: 2,
+   sight}`, or `review_plan {run, sight}` for a one-sheet run. No band, no
+   image, or `[image omitted]` means this host sees no images: stop, file
+   nothing, offer a rerun where images reach the model or as `eve`. Never
+   guess a code — three wrong ones lock the run.
+3. **Read every sheet** in order. Cross-cutting problems (one contrast
+   token, one spacing scale) show only across a sheet. A crop tile (`crop`
+   + `vs` in the map) shows only what differs from its representative;
+   `prior` lists findings already open on that card version — never file
+   them again; `lint` lists measured candidates to confirm or reject.
+4. **Measure.** `get_card_image {board, cardId}` for every screen you will
+   file on, and measure on those pixels — never on a sheet. Image bytes
+   never leave a tool result: no base64 in a shell, no montage of your
+   own; in a code-mode script hand the image block to the host's image
+   call (`image(block)`) and print only the text block.
+5. **Judge** each screen against the brief: every finding names the rule
+   it breaks, the region, and what correct looks like; sort into `finding`
+   (a defect) and `suggestion` (taste).
+6. **File** ONE `annotate {board, agent, run, items: [{key, cardId,
+   cardVersion, region, image: {width, height}, summary, detail, category,
+   severity}]}` batch per board — `image` is the single read's size, so a
+   region measured on another basis is refused instead of landing wrong.
+   Read `covers` in each receipt (the text under the region); a
+   `duplicate` names the open finding you restated. Findings land `staged`
+   for the user's Accept/Dismiss. Never document or `finding` cards via
+   compose_board, never `highlight`. Doctrine: `docs {topic:
+   "annotation"}`.
+7. **Receipt.** `review_plan {run}` — every in-scope card inspected,
+   represented, reused, a capture gap or blocked. The report cites it.
 
-## Phase 1 (`eve`) — request the pass, then re-verify
+**Lane.** When the SessionStart line names `review lane: codex`
+(`vitrinka config reviewer`), steps 2–6 run on the Codex sidekick:
+plan here, hand the run id, the board slugs and the Phase 0 brief to one
+`codex` agent, then read the receipt and verify its findings as Phase 2
+groups them. Otherwise this session judges.
 
-`review_judge {board}` — or `{board, section}` for one journey section, or
+Nothing here calls a server-side reviewer; the findings are this run's
+and the report says so.
+
+## Phase 1 (`eve`) — Eve judges a planned run, then re-verify
+
+1. **Plan for Eve.** `review_plan {boards, judge: "eve", scope?,
+   sections?}` (CLI `vitrinka review plan <board>… --judge eve`) — the
+   local plan, gaps, reuse and duplicates resolved, a near-duplicate judged
+   by its crop; `needs_scope` answers as there. No `checklist`: Eve judges
+   the brief and its own rules.
+2. **Start it.** `review_judge {run}` (CLI `vitrinka review judge --run
+   <id>`) queues Eve on every tile; a repeat call answers the run's state.
+   The run is the whole scope — no board, rules or model beside it; a
+   rubric or Eve setting changed since the plan answers 409 with the
+   re-plan. No host reads an eve run's sheets, echoes its sight or files
+   on it.
+3. **Wait** on `review_plan {run}` — minutes, not seconds. Each tile
+   settles as its jobs end: covered, or `blocked` with why when Eve could
+   not judge it. Every evidence-backed failure lands `staged` on its board,
+   linked to its judgment and counted on the receipt.
+
+Without a plan — a published set, a calibration sample, steering
+`instructions` — request a pass: `review_judge {board}` — or `{board, section}` for one journey section, or
 `{board, journey}` to review a chain's LATEST pass with the previous pass as
 reviewer context (prefer it whenever a chain exists). CLI: `vitrinka review
 judge <board> [--rules a,b] [--model model]`. For a published set: `vitrinka
@@ -117,8 +162,8 @@ Then read: `review_judgments {board}` returns jobs, version-pinned
 judgments, independent audit assessments and per-rule triage.
 `cannot_judge` remains unresolved; missing evidence is never a pass. Read
 bounded evidence crops only as needed (`get_card_image {board, cardId,
-region}`). Each failed judgment is automatically audited; a supported
-finding still needs explicit selection to file — `review_job {id,
+region}`). Each failed judgment is automatically audited; outside a run a
+supported finding still needs explicit selection to file — `review_job {id,
 operation: "file", index}` carries a human's decision (the board review
 pane is where they make it). For local triage, `vitrinka review judge
 export <job>` prints `judgments.json` (`--candidates` selects mechanical
@@ -180,6 +225,9 @@ means nobody decided yet; it is not a zero-percent rejection rate.
 ## Red flags — STOP
 
 - A local run is calling `review_judge`, polling jobs, or naming Eve.
+- You are surveying with `cardIds` sheets or `scrape_board` instead of the
+  run's sheets, or filing without `run`.
+- You are echoing a sight code you did not read on sheet 1.
 - An `eve` run is filing `annotate` items of its own.
 - You are about to set a finding's verdict (`review_job feedback`, a
   state change) — that is the user's click.

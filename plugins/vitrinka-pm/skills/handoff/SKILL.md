@@ -51,11 +51,6 @@ carries each field's shape; the full contract is `docs {topic: "tasks"}`.
   `vitrinka qa session launch '<task url>' '<worktree abs path>'`:
   exit 0 → print its receipt line and stop; non-zero → print
   `/continue <task url>` and stop.
-- **A session another session opened** (`$VYBAVA_JOB` is set: Výbava's
-  `fleet continue` started it inside a job) tells its parent right after
-  `rendered`: `vybava fleet signal handed-back --url '<task url>'`. The
-  parent's wake mod then starts its turn at once; without the signal a
-  child idle at its prompt reads as still working until it ends.
 - **A decision is asked, never filed, while a human is in the session**:
   ask it before the hand-back (AskUserQuestion in Claude Code) and record
   the answer in `summary`. `decide: true`, or a `human` step that is a

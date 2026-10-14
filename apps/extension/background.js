@@ -1096,6 +1096,7 @@ async function reapDeadSessions() {
       await setState(null);
       await badge("off");
     });
+    await syncOne();
   }
 }
 
@@ -1104,20 +1105,56 @@ async function reapDeadSessions() {
 
 // What a recorded tab runs, in order: the manifest icons (the pair panel),
 // rrweb, the shared HUD (`@vitrinka/web`'s hud.iife.js, vendored by
-// tools/vendor-hud) and the content script that mounts it.
-const CONTENT_FILES = ["vendor/vitrinka-icons.js", "vendor/rrweb-record.min.js", "vendor/vitrinka-hud.iife.js", "content.js"];
+// tools/vendor-hud), the ONE recorder codec (one.iife.js, same pin) and the
+// content script that mounts the HUD.
+const CONTENT_FILES = ["vendor/vitrinka-icons.js", "vendor/rrweb-record.min.js", "vendor/vitrinka-hud.iife.js", "vendor/vitrinka-one.iife.js", "content.js"];
 
 async function tabInfo(tabId) {
   const rec = await getState();
   return rec && rec.tabs && rec.tabs[String(tabId)];
 }
 
+// content.js claims its document in its first task (ONE recorder D4), so the
+// recording's generation rides in ahead of it. Answers what the script
+// evaluated to: "yield" when a live page recorder already holds the document.
+// Both injections land in ONE document: a navigation between them throws
+// here instead of running content.js unclaimed in the next document, whose
+// own commit injects it again.
+async function injectContent(tabId, rec) {
+  const [boot] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (one) => { globalThis.__vitrinkaInject = one; },
+    args: [{ generation: rec.generation || "", sessionId: String(rec.sessionId), state: oneStateOf(rec) || "recording" }],
+  });
+  const target = boot && boot.documentId ? { tabId, documentIds: [boot.documentId] } : { tabId };
+  const [r] = await chrome.scripting.executeScript({ target, files: CONTENT_FILES });
+  return r ? r.result : undefined;
+}
+
+// A tab whose document a page recorder leads leaves the recording (D4): its
+// lane ends here and the debugger lets go; it rejoins at its next navigation.
+// Bound to the recording whose injection yielded: lane ids restart with every
+// recording, so a late yield never drops the next one's `tab1`.
+async function dropTab(tabId, laneId, rec) {
+  const dropped = await withLock(async () => {
+    const current = await getState();
+    const tab = sameRecording(current, rec) && current.tabs[String(tabId)];
+    if (!tab || tab.id !== laneId) return null;
+    delete current.tabs[String(tabId)];
+    await setState(current);
+    return tab;
+  });
+  if (dropped && dropped.cdp) chrome.debugger.detach({ tabId }).catch(() => {});
+}
+
+// Attaches a tab to the recording; true when it records (the page recorder
+// may lead it instead — then it stays out).
 async function attachTab(tabId, url) {
   const recording = await getState();
-  if (!recording || recording.tabs[String(tabId)]) return;
+  if (!recording || recording.tabs[String(tabId)]) return false;
   let host = "";
-  try { host = new URL(url).host; } catch { return; }
-  if (!host || !/^https?:/.test(url)) return;
+  try { host = new URL(url).host; } catch { return false; }
+  if (!host || !/^https?:/.test(url)) return false;
   const rec = await withLock(async () => {
     const current = await getState();
     if (!sameRecording(current, recording) || current.tabs[String(tabId)]) return null;
@@ -1126,17 +1163,32 @@ async function attachTab(tabId, url) {
     await setState(current);
     return current;
   });
-  if (!rec) return;
+  if (!rec) return false;
   const laneId = rec.tabs[String(tabId)].id;
 
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
+    if (await injectContent(tabId, rec) === "yield") {
+      await dropTab(tabId, laneId, rec);
+      return false;
+    }
   } catch (e) {
     console.warn("vitrinka: content inject failed", tabId, e);
   }
-  // CDP network capture (D2). Attach can fail (DevTools open, another
-  // debugger) — degrade to no-network rather than blocking the recording.
+  await attachCdp(tabId, rec, laneId);
+  return true;
+}
+
+// CDP network capture (D2) for a recorded lane, its `cdp` flag kept true to
+// what is attached. Attach can fail (DevTools open, another debugger) —
+// degrade to no-network rather than blocking the recording.
+async function attachCdp(tabId, rec, laneId) {
   if (!(await getConfig()).captureNetwork) return;
+  const mark = (cdp) => withLock(async () => {
+    const current = await getState();
+    if (!sameRecording(current, rec) || current.tabs[String(tabId)]?.id !== laneId) return;
+    current.tabs[String(tabId)].cdp = cdp;
+    await setState(current);
+  });
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
     await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
@@ -1151,14 +1203,10 @@ async function attachTab(tabId, url) {
       await chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach",
         { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
     }
-    await withLock(async () => {
-      const current = await getState();
-      if (!sameRecording(current, rec) || current.tabs[String(tabId)]?.id !== laneId) return;
-      current.tabs[String(tabId)].cdp = true;
-      await setState(current);
-    });
+    await mark(true);
   } catch (e) {
     console.warn("vitrinka: CDP attach failed — recording without network bodies", tabId, String(e));
+    await mark(false);
   }
 }
 
@@ -1179,6 +1227,315 @@ async function detachAll() {
 // In-flight CDP requests per "tabId:sessionId:requestId" (small + transient —
 // plain memory is fine; a SW restart only drops requests mid-flight).
 const inflight = new Map();
+
+// ---------------------------------------------------------------------------
+// ONE recorder (extension + page recorder decisions, 2026-10-12)
+//
+// A page can embed @vitrinka/web's recorder while this extension records;
+// the two are ONE recorder — the first to start leads, the other follows,
+// never two recordings at once. They share only the DOM: the claim on <html>
+// (data-vitrinka-lead) and window events, both spoken through @vitrinka/web's
+// own codec (vendor/vitrinka-one.iife.js, globalThis.VitrinkaOne). The
+// worker's part:
+// - one.js, the endpoint in tabs this recording does not capture (D6):
+//   registered at document_start while it records, injected into the open
+//   tabs by the Start probe, told every state change (`vt-one`), gone at Stop;
+// - the Start probe (D13): every http(s) tab is asked before the server is,
+//   and a live page recording anywhere refuses the Start where it was pressed
+//   (D12);
+// - the command relay (D10): ⌥⇧A/N/P reach the active tab's recorder whether
+//   or not this extension records.
+const ONE_SCRIPT = "vitrinka-one";
+const ONE_FILES = ["vendor/vitrinka-one.iife.js", "one.js"];
+// A frozen tab never answers a probe: past this it counts as unreadable and
+// the Start goes ahead (a session it holds waits, D14).
+const ONE_PROBE_MS = 1500;
+
+/** What the endpoints say of a recording; null = there is none. */
+function oneStateOf(rec) {
+  return !rec ? null : rec.stopping ? "stopping" : rec.paused ? "paused" : "recording";
+}
+
+async function httpTabs() {
+  return (await chrome.tabs.query({})).filter((t) => /^https?:/.test(t.url || "") && !t.discarded);
+}
+
+async function registerOne(on) {
+  const have = (await chrome.scripting.getRegisteredContentScripts({ ids: [ONE_SCRIPT] })).length > 0;
+  if (on && !have) {
+    await chrome.scripting.registerContentScripts([{
+      id: ONE_SCRIPT, js: ONE_FILES, matches: ["http://*/*", "https://*/*"],
+      runAt: "document_start", allFrames: false, world: "ISOLATED", persistAcrossSessions: true,
+    }]);
+  } else if (!on && have) {
+    await chrome.scripting.unregisterContentScripts({ ids: [ONE_SCRIPT] });
+  }
+}
+
+// Every endpoint learns where the recording stands — `oneState` for the
+// copies a navigation registers later, a message for the ones already in.
+// null ends them; `release` (an aborted Start) takes the claim its probe put
+// on the active tab with them.
+async function tellOne(state, generation, opts = {}) {
+  if (state) await chrome.storage.local.set({ oneState: { state, generation } });
+  else await chrome.storage.local.remove("oneState");
+  await registerOne(!!state);
+  const msg = { type: "vt-one", state, generation, ...(opts.release ? { release: true } : {}) };
+  for (const t of await httpTabs()) chrome.tabs.sendMessage(t.id, msg, { frameId: 0 }).catch(() => {});
+}
+
+// The generation a Start/Continue in flight has claimed the browser for; its
+// endpoints are its own until its recording is stored (or it is aborted).
+let oneStarting = null;
+
+// After every lifecycle transition: the endpoints follow the stored recording.
+async function syncOne() {
+  const rec = await getState();
+  if (oneStarting && (!rec || rec.generation !== oneStarting)) return;
+  const state = oneStateOf(rec);
+  const { oneState } = await chrome.storage.local.get("oneState");
+  if ((oneState ? oneState.state : null) === state && (!rec || oneState.generation === rec.generation)) return;
+  await tellOne(state, rec ? rec.generation : "");
+}
+
+// Runs in a tab's isolated world beside VitrinkaOne — D13's one task: the
+// document's claim is read (a holder that no longer answers is cleared under
+// its own id, D5), the active tab is claimed, and only then, with nothing
+// here refusing the Start, does the endpoint turn `starting` for this
+// recording: a page recorder lets go of its claim for a live extension
+// elsewhere (D14), so announcing first made the page yield to the very
+// Start it should refuse. A claim of `own` — the recording this Start
+// replaces — never refuses it. Answers the live holder a Start must yield to.
+function oneProbe(generation, claim, own) {
+  const ONE = globalThis.VitrinkaOne;
+  const env = ONE && ONE.documentEnv();
+  if (!env) return null;
+  const self = { from: "extension", inst: ONE.nonce("x") };
+  let holder = null;
+  if (claim) {
+    if (own) ONE.releaseClaim(env, own);
+    const took = ONE.takeClaim(env, self, { id: generation, state: "starting" });
+    if (!took.ok) holder = took.holder;
+  } else {
+    const cur = ONE.readClaim(env);
+    if (cur && cur.id !== generation && cur.id !== own && ONE.isLive(cur.state)) {
+      if (ONE.holderAnswers(env, self, cur)) holder = cur;
+      else ONE.releaseClaim(env, cur.id);
+    }
+  }
+  if (!holder && generation) {
+    const live = globalThis.__vitrinkaOne;
+    if (live && !live.orphaned()) live.set("starting", generation);
+    // An endpoint the Start installs next (probeTab) starts from this, not
+    // from a recording that does not exist yet.
+    else globalThis.__vitrinkaOneStart = { state: "starting", generation };
+  }
+  return { host: location.host, holder };
+}
+
+// One tab's probe; null when it cannot be read (a chrome page, a frozen tab).
+// The claim is read (and the active tab's taken) with the codec alone; `install`
+// (a Start) then puts the endpoint in, only where nothing refuses the Start. An
+// endpoint announces the extension live the moment it lands, and a page recorder
+// (web 0.5.1) lets go of its claim for a live extension elsewhere (D14): installed
+// first, it made the page drop the very claim this probe had to report.
+async function probeTab(tabId, { generation = "", claim = false, install = false, own = "" } = {}) {
+  const run = (async () => {
+    await chrome.scripting.executeScript({ target: { tabId }, files: [ONE_FILES[0]] });
+    const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: oneProbe, args: [generation, claim, own] });
+    const result = r ? r.result : null;
+    if (install && !(result && result.holder)) await chrome.scripting.executeScript({ target: { tabId }, files: [ONE_FILES[1]] });
+    return result;
+  })();
+  let late = false;
+  // An injection cannot be cancelled: a probe that lands after its Start
+  // moved on is repaired instead — its endpoint told where things stand now.
+  run.then((r) => { if (late && generation) repairLateProbe(tabId, generation, r); }, () => undefined);
+  return Promise.race([run.catch(() => null), sleep(ONE_PROBE_MS).then(() => { late = true; return null; })]);
+}
+
+// A Start probe that finished after its timeout ran `starting` (and, in the
+// active tab, a claim) for a generation the worker has since stored, aborted
+// or replaced: that endpoint follows the stored recording, and with none it
+// retires with the claim it took (a stale one is cleared by the next ping, D5).
+async function repairLateProbe(tabId, generation, result) {
+  if (oneStarting === generation) return;
+  const rec = await getState();
+  const msg = rec ? { type: "vt-one", state: oneStateOf(rec), generation: rec.generation } : { type: "vt-one", state: null, release: true };
+  chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }).catch(() => {});
+  if (rec && rec.generation === generation && result && result.holder && result.holder.by === "page") {
+    console.warn(`vitrinka: a page recorder in tab ${tabId} (${result.host}) was recording when this Start probed it too late — its session waits only if the page yields (D14)`);
+  }
+}
+
+/** Every live recording another recorder holds, by tab. */
+async function probeAll(opts, activeId) {
+  const tabs = await httpTabs();
+  const own = (await getState())?.generation || "";
+  const found = await Promise.all(tabs.map((t) => probeTab(t.id, { ...opts, own, claim: !!opts.generation && t.id === activeId })));
+  return found
+    .map((r, i) => (r && r.holder ? { tabId: tabs[i].id, host: r.host, holder: r.holder, here: tabs[i].id === activeId } : null))
+    .filter(Boolean)
+    .sort((a, b) => Number(b.here) - Number(a.here));
+}
+
+// D12: the refusal, named where the other recording lives.
+function busyError(found) {
+  const c = found.holder;
+  const n = c.sessionId ? `#${c.sessionId}` : "";
+  let msg;
+  if (c.by !== "page") msg = `another Vitrinka recorder is already recording ${found.here ? "this page" : `in another tab (${found.host})`}${n ? ` (${n})` : ""} — stop it there first`;
+  else if (found.here && c.state === "stopping") msg = `this page's recorder is still saving${n ? ` ${n}` : ""} — try again in a moment`;
+  else if (found.here) msg = `this page's own recorder is already recording${n ? ` (${n})` : ""} — use its pill, or stop it first`;
+  else msg = `a page recorder is already recording in another tab (${found.host}${n ? `, ${n}` : ""}) — stop it there first`;
+  return Object.assign(new Error(msg), { code: "recorder_busy", leader: c.by });
+}
+
+// A Start or Continue that replaced a live recording: every tab that recording
+// captured retires its content script — pill, capture, claim — so no old
+// instance answers for its generation or acts on the new recording.
+function retireReplaced(previous, generation) {
+  if (!previous || !previous.generation || previous.generation === generation) return;
+  for (const tabId of Object.keys(previous.tabs || {})) {
+    chrome.tabs.sendMessage(Number(tabId), { type: "vt-retire", generation: previous.generation }).catch(() => {});
+  }
+}
+
+// A note or snap names the recording its content script took it for: one a
+// Stop, Continue or new Start replaced meanwhile is dropped, never filed into
+// the next (a page's remote note included, ONE recorder D11). A message
+// without a generation (an instance from before it) is taken as before.
+const sentFor = (msg, rec) => !msg.generation || (!!rec && rec.generation === msg.generation);
+const endedBeforeNote = { ok: false, error: "the recording ended before the note arrived" };
+const replacedPill = { ok: false, error: "this pill's recording was replaced by a newer one — use its pill" };
+
+// A failed Start/Continue as its caller shows it: the words, and a refusal's
+// code and leader (the pill, the popup).
+function startFailure(e) {
+  return { ok: false, error: String((e && e.message) || e), ...(e && e.code ? { code: e.code, leader: e.leader } : {}) };
+}
+
+// D13: before any network call, the Start claims the browser — every tab's
+// endpoint turns `starting` and the active tab's document is claimed — or is
+// refused (D12).
+async function claimBrowser(generation, activeId) {
+  await tellOne("starting", generation);
+  const busy = await probeAll({ generation, install: true }, activeId);
+  if (busy.length) throw busyError(busy[0]);
+}
+
+// Start and Continue: `run` creates the recording under the generation the
+// browser was claimed for; a refusal or a failure before the recording is
+// stored leaves no endpoint and no claim behind — nothing was created.
+async function claimedStart(activeId, run) {
+  // One Start at a time: a second one would re-point the endpoints to its own
+  // generation mid-probe and could abort the first's. Checked and set in one task.
+  if (oneStarting) throw new Error("a recording is already starting — try again in a moment");
+  const generation = crypto.randomUUID();
+  oneStarting = generation;
+  try {
+    await claimBrowser(generation, activeId);
+    return await run(generation);
+  } catch (e) {
+    if ((await getState())?.generation !== generation) {
+      oneStarting = null;
+      await abortStart();
+    }
+    throw e;
+  } finally {
+    if (oneStarting === generation) oneStarting = null;
+  }
+}
+
+// An aborted Start leaves no endpoint and no claim behind; a recording it
+// would have replaced keeps its own.
+async function abortStart() {
+  await tellOne(null, "", { release: true });
+  if (await getState()) await reattach();
+}
+
+// The popup's read: a page recorder recording in any tab (D12), with what
+// its Pause / Stop act on (D11).
+async function pageRecording() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [found] = await probeAll({}, active ? active.id : -1);
+  if (!found || found.holder.by !== "page") return null;
+  const c = found.holder;
+  return { tabId: found.tabId, host: found.host, sessionId: c.sessionId, state: c.state, here: found.here, refusal: busyError(found).message };
+}
+
+// Runs in the page-led tab: a remote command to the claim's holder, answered
+// inside its own dispatch (D11); null = the holder no longer answers.
+function oneCommand(op) {
+  const ONE = globalThis.VitrinkaOne;
+  const env = ONE && ONE.documentEnv();
+  return env ? ONE.sendCommand(env, { from: "extension", inst: ONE.nonce("x") }, op) : null;
+}
+
+async function commandPage(tabId, op) {
+  if (op !== "pause" && op !== "stop") throw new Error(`the page's recorder takes pause or stop from here, not ${op}`);
+  await chrome.scripting.executeScript({ target: { tabId }, files: [ONE_FILES[0]] });
+  const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: oneCommand, args: [op] });
+  const ack = r && r.result;
+  if (!ack) throw new Error("the page's recorder no longer answers — reload that tab");
+  if (!ack.ok) throw new Error(ack.error || `the page's recorder refused (${ack.code || "unknown"})`);
+  return ack;
+}
+
+// Runs in the active tab (D10): the chord the HUD binds, as content.js's
+// chord() dispatches it, only where a recorder lives — a page recorder's mark
+// or any recorder HUD — so no other site ever sees a synthetic key.
+function relayChord(code) {
+  const root = document.documentElement;
+  if (!root || !(root.hasAttribute("data-vitrinka-page") || document.querySelector("[data-vitrinka-hud]"))) return false;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code, key: code.slice(3), altKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+  return true;
+}
+
+const COMMAND_CHORDS = { snap: "KeyA", note: "KeyN", "toggle-pause": "KeyP" };
+
+// D10: Chrome hands a bound command chord to this worker, never to the page,
+// so the worker is the only way the key reaches whichever recorder leads.
+// ⌥⇧P while this extension records stays its own pause, from any tab.
+async function relayCommand(command) {
+  const code = COMMAND_CHORDS[command];
+  if (!code) return;
+  const rec = await getState();
+  if (command === "toggle-pause" && rec && !rec.stopping) return void (await togglePause());
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || !/^https?:/.test(active.url || "")) return;
+  if (rec && rec.tabs[String(active.id)] && command !== "toggle-pause") {
+    const sent = await chrome.tabs.sendMessage(active.id, { type: command === "snap" ? "vt-pick" : "vt-note-ui" }).then(() => true, () => false);
+    if (sent) return;
+  }
+  await chrome.scripting.executeScript({ target: { tabId: active.id }, func: relayChord, args: [code] }).catch(() => {});
+}
+
+// An extension reload keeps `rec` but orphans every script it put in a page
+// (D5): the endpoints come back, and each captured tab's content script
+// re-claims its document under the same generation (`reloaded`: and its
+// debugger session). An aborted Start runs it too, for the recording it would
+// have replaced.
+async function reattach({ reloaded = false } = {}) {
+  const rec = await getState();
+  const state = oneStateOf(rec);
+  if (!state) return;
+  await tellOne(state, rec.generation);
+  await Promise.all((await httpTabs()).map((t) =>
+    chrome.scripting.executeScript({ target: { tabId: t.id }, files: ONE_FILES }).catch(() => {})));
+  // A page recorder that started in the reload gap keeps its document (D14):
+  // that tab leaves the recording, exactly as on a navigation. A reload also
+  // tore down every debugger session: the lanes that stay get CDP back.
+  await Promise.all(Object.entries(rec.tabs).map(async ([tabId, lane]) => {
+    const id = Number(tabId);
+    try {
+      if (await injectContent(id, rec) === "yield") return void (await dropTab(id, lane.id, rec));
+    } catch (e) { console.warn("vitrinka: re-inject failed", tabId, e); }
+    if (!reloaded) return;
+    await chrome.debugger.detach({ tabId: id }).catch(() => {});
+    await attachCdp(id, rec, lane.id);
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // redaction (SaaS data-security decision #2) — the shared @vitrinka/redact
@@ -1588,6 +1945,12 @@ async function startSession(title) {
   await refuseWhileFinishing();
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active || !/^https?:/.test(active.url || "")) throw new Error("open the app you want to record first");
+  // ONE recorder D13: a page recorder recording in any tab refuses this Start
+  // before the server is asked anything.
+  return claimedStart(active.id, (generation) => startClaimed(title, active, generation));
+}
+
+async function startClaimed(title, active, generation) {
   const host = new URL(active.url).host;
   // Which workspace records this host? The apex door searches every
   // membership's project rules (recorder_resolve.go); the options page's
@@ -1620,15 +1983,18 @@ async function startSession(title) {
   // A slow policy never blocks adoption: DOM stays strictly masked and shots
   // wait/drop until its asynchronous answer settles for this generation.
   const recording = {
-    generation: crypto.randomUUID(),
+    generation,
     sessionId: ses.id, project: ses.project, environment: ses.environment, workspace,
     title: ses.title, startedAt: ses.startedAt, seq: 0, paused: false, tabs: {},
     activeMs: 0, resumeAt: new Date().toISOString(),
   };
-  await withLock(async () => {
+  const replaced = await withLock(async () => {
     await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
+    const previous = await getState();
     await setState(recording);
+    return previous;
   });
+  retireReplaced(replaced, generation);
   const caps = {};
   applyPolicyWhenFetched(fetchPolicy(workspace, caps), recording, active.id, caps);
   serverMaxSeq = 0;
@@ -1643,8 +2009,8 @@ async function startSession(title) {
   // Anything still queued belongs to an earlier session; the reaper clears it
   // once the server confirms, and flush drops it on sight either way.
   await reapDeadSessions().catch(() => {});
-  await attachTab(active.id, active.url);
-  await shoot(active.id, { route: routeOf(active.url), title: active.title, url: active.url });
+  await syncOne();
+  if (await attachTab(active.id, active.url)) await shoot(active.id, { route: routeOf(active.url), title: active.title, url: active.url });
   await badge("rec");
   armReconcile();
   return ses;
@@ -1656,19 +2022,28 @@ async function startSession(title) {
 // set + board (import-set dedups what's already placed).
 async function continueSession(sessionId) {
   await refuseWhileFinishing();
+  // ONE recorder D13, as on a fresh Start.
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const recordable = !!active && /^https?:/.test(active.url || "");
+  return claimedStart(recordable ? active.id : -1, (generation) => continueClaimed(sessionId, recordable ? active : null, generation));
+}
+
+async function continueClaimed(sessionId, active, generation) {
   const ses = await api("GET", `/api/v1/sessions/${sessionId}`);
   const scope = await scopeOf(ses.workspace);
   await refuseForeignTail(ses.id, scope);
   await api("PATCH", `/api/v1/sessions/${sessionId}`, { status: "recording" });
   // Adopt the marker and generation atomically, preserving the durable tail's
   // seq range. Policy settles asynchronously just as on a fresh Start.
+  let replaced = null;
   const recording = await withLock(async () => {
     await chrome.storage.local.set({ [QUEUE_SCOPE + ses.id]: scope });
     const current = await getState();
+    replaced = current;
     const pending = await vtdb.sessionStats(ses.id);
     const localSeq = current?.sessionId === ses.id ? current.seq || 0 : 0;
     const next = {
-      generation: crypto.randomUUID(),
+      generation,
       sessionId: ses.id, project: ses.project, environment: ses.environment, workspace: ses.workspace || "",
       title: ses.title, startedAt: new Date().toISOString(),
       seq: Math.max(ses.maxSeq || 0, localSeq, pending.maxSeq),
@@ -1677,6 +2052,7 @@ async function continueSession(sessionId) {
     await setState(next);
     return next;
   });
+  retireReplaced(replaced, generation);
   const caps = {};
   applyPolicyWhenFetched(fetchPolicy(recording.workspace, caps), recording, null, caps);
   serverMaxSeq = Number(ses.maxSeq || 0);
@@ -1691,9 +2067,8 @@ async function continueSession(sessionId) {
     ...(ses.boardUrl ? { boardUrl: ses.boardUrl } : {}),
   });
   await reapDeadSessions().catch(() => {});
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (active && /^https?:/.test(active.url || "")) {
-    await attachTab(active.id, active.url);
+  await syncOne();
+  if (active && await attachTab(active.id, active.url)) {
     await shoot(active.id, { route: routeOf(active.url), title: active.title, url: active.url });
   }
   await badge("rec");
@@ -1725,6 +2100,7 @@ async function stopSession(pill = null, expected = null) {
   if (!rec) return null;
   await badge("wrap");
   await broadcastHealth();
+  await syncOne();
 
   // Detach FIRST: it awaits each tab's final rrweb batch, which must be in the
   // queue before the drain below.
@@ -1773,6 +2149,7 @@ async function stopSession(pill = null, expected = null) {
     disarmReconcile();
     await badge("off");
   });
+  await syncOne();
   // The device's recents (the HUD's ⋯ menu): saved with its length and the
   // server's board link, or unsaved when the server refused the close.
   const boardUrl = (done && (done.boardUrl || (done.board && done.board.url))) || "";
@@ -1819,6 +2196,7 @@ async function togglePause() {
   await api("PATCH", `/api/v1/sessions/${rec.sessionId}`, { status: rec.paused ? "paused" : "recording" }).catch(() => {});
   await badge(rec.paused ? "pause" : "rec");
   await broadcastHealth();
+  await syncOne();
   return rec.paused;
 }
 
@@ -2004,13 +2382,23 @@ function routeOf(url) {
 chrome.webNavigation.onCommitted.addListener(async (d) => {
   if (d.frameId !== 0) return;
   const rec = await getState();
+  // Paused, a captured tab still gets its content script back — its pill (a
+  // page recorder there follows hidden, ONE recorder D7) — capturing nothing
+  // until the resume; no nav, no shot.
+  if (rec && rec.paused && !rec.stopping && !rec.dead && rec.tabs[String(d.tabId)]) {
+    try {
+      if (await injectContent(d.tabId, rec) === "yield") await dropTab(d.tabId, rec.tabs[String(d.tabId)].id, rec);
+    } catch { /* chrome:// etc. */ }
+    return;
+  }
   if (!capturing(rec)) return;
   const known = rec.tabs[String(d.tabId)];
   if (known) {
-    // Full navigation re-injects the content script.
+    // Full navigation re-injects the content script — which yields where a
+    // page recorder already leads the new document (ONE recorder D14).
     await pushEvents([{ tabId: known.id, tabHost: known.host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url) } }]);
     try {
-      await chrome.scripting.executeScript({ target: { tabId: d.tabId }, files: CONTENT_FILES });
+      if (await injectContent(d.tabId, rec) === "yield") return void (await dropTab(d.tabId, known.id, rec));
     } catch { /* chrome:// etc. */ }
     await shoot(d.tabId, { route: routeOf(d.url), url: d.url });
     return;
@@ -2021,8 +2409,7 @@ chrome.webNavigation.onCommitted.addListener(async (d) => {
   if (!host) return;
   try {
     const r = await api("GET", `/api/v1/projects/resolve?host=${encodeURIComponent(host)}`);
-    if (r.matched && r.project === rec.project) {
-      await attachTab(d.tabId, d.url);
+    if (r.matched && r.project === rec.project && await attachTab(d.tabId, d.url)) {
       await pushEvents([{ tabId: (await tabInfo(d.tabId)).id, tabHost: host, kind: "nav", payload: { url: redactUrl(rec, d.url), route: routeOf(d.url) } }]);
       await shoot(d.tabId, { route: routeOf(d.url), url: d.url });
     }
@@ -2546,6 +2933,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tab) {
           // Fixed before the images decode (pushNote refuses any other).
           const startedIn = await getState();
+          if (!sentFor(msg, startedIn)) return sendResponse(endedBeforeNote);
           // An image can BE the note: one sent with images but no text stands
           // only while an image survives (attachmentsOf, the workspace switch).
           const asked = Array.isArray(msg.attachments) && msg.attachments.length > 0;
@@ -2563,6 +2951,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // stays a screenshot as before. The note and its shot both belong
           // to the recording the snap was asked in, fixed before the decode.
           const startedIn = await getState();
+          if (!sentFor(msg, startedIn)) return sendResponse(endedBeforeNote);
           await pushNote(startedIn, sender.tab.id,
             { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true, task: !!msg.payload.task },
             await attachmentsOf(msg.attachments), !!(msg.payload.note || msg.payload.task));
@@ -2702,14 +3091,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ ok: true, stats: await vtdb.stats() });
       case "vt-start":
         try { return sendResponse({ ok: true, session: await startSession(msg.title) }); }
-        catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
+        catch (e) { return sendResponse(startFailure(e)); }
       case "vt-stop":
+        // A pill (or a page's remote through it) acts only on its own recording.
+        if (!sentFor(msg, await getState())) return sendResponse(replacedPill);
         try { return sendResponse({ ok: true, done: await stopSession(sender.tab && msg.hud ? { tabId: sender.tab.id, token: String(msg.hud) } : null) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-pause":
+        if (!sentFor(msg, await getState())) return sendResponse(replacedPill);
         return sendResponse({ ok: true, paused: await togglePause() });
       case "vt-continue":
         try { return sendResponse({ ok: true, session: await continueSession(msg.sessionId) }); }
+        catch (e) { return sendResponse(startFailure(e)); }
+      // ONE recorder: the popup's read of a page-led recording, and its
+      // Pause / Stop acting on it (D11, D12).
+      case "vt-one-probe":
+        return sendResponse({ ok: true, page: await pageRecording() });
+      case "vt-one-command":
+        try { return sendResponse({ ok: true, ack: await commandPage(Number(msg.tabId), msg.op) }); }
         catch (e) { return sendResponse({ ok: false, error: String(e.message || e) }); }
       case "vt-ext-status":
         return sendResponse(await extUpdateStatus());
@@ -2803,17 +3202,18 @@ globalThis.__vt = { startSession, stopSession, togglePause, continueSession, get
 // browser profile (extension-update.spec.ts).
 globalThis.__vtUpdate = { extUpdateStatus, applyUpdate, seedConfig, hostCall, maybeSelfReload, boot: () => boot() };
 // e2e-only handles for the durable-queue paths (harmless in production).
-globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents, watchForBoard };
+globalThis.__vtTest = { vtdb, drainQueue, reconcile, reapDeadSessions, shoot, splitRRWebEvents, enqueue, hudState, hudSetPrefs, hudGetMe, sendPrefs, withLock, noteRecent, updateRecent, refreshRecents, watchForBoard,
+  // ONE recorder: Playwright cannot press a Chrome command, and the popup is a page of its own.
+  relayCommand, pageRecording, commandPage };
 
-// Keyboard commands relay to the active tab's HUD.
-chrome.commands.onCommand.addListener(async (command) => {
-  const rec = await getState();
-  if (!rec) return;
-  if (command === "toggle-pause") return void togglePause();
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (active && rec.tabs[String(active.id)]) {
-    chrome.tabs.sendMessage(active.id, { type: command === "snap" ? "vt-pick" : "vt-note-ui" }).catch(() => {});
-  }
+// Keyboard commands relay to the active tab's recorder, recording or not (D10).
+chrome.commands.onCommand.addListener((command) => {
+  relayCommand(command).catch((e) => console.warn("vitrinka: command relay failed", command, e));
+});
+
+// A reload keeps `rec`; the scripts it orphaned in the pages come back (D5).
+chrome.runtime.onInstalled.addListener(() => {
+  reattach({ reloaded: true }).catch((e) => console.warn("vitrinka: reattach failed", e));
 });
 
 // ---------------------------------------------------------------------------
@@ -2826,6 +3226,9 @@ async function boot() {
     armReconcile();
     await reconcile().catch(() => {});
   }
+  // The ONE endpoints follow the stored recording: a registration (or a
+  // Start's `starting`) that outlived its worker goes.
+  await syncOne().catch((e) => console.warn("vitrinka: ONE endpoints out of step", e));
   scheduleFlush(0);
   await reapDeadSessions().catch((e) => console.warn("vitrinka: reap failed", e));
   const { awaiting } = await chrome.storage.local.get("awaiting");

@@ -73,7 +73,7 @@ link, `[<artifact title>](<url>)`, the URL exactly as minted.
   token (`VITRINKA_TOKEN` or the OS keyring; self-hosted deployments set
   `VITRINKA_URL`) — never print it.
 - **The deploy documents itself.** Element payload contracts, component
-  props, doc.json block shapes, chart forms and the runtime shelf are served
+  props, the doc.json element shapes, chart forms and the runtime shelf are served
   by the deployment's own docs tree — the `docs` MCP tool (`artifact_docs`
   is its alias) or `vitrinka docs <topic>` (no topic → the index; `docs
   {family:"element"}` narrows to one layer; families element / board /

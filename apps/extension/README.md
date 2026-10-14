@@ -89,11 +89,19 @@ Two things to know before touching any of it:
   pinned at start from the host lookup or the options page) over the options
   page's global default — `activeWorkspace()` in `background.js` is the one
   reading; never read `workspace` straight from config on a session path.
-- **The HUD is `@vitrinka/web`'s, never drawn here.** `vendor/vitrinka-hud.iife.js`
-  is the package's `build/hud.iife.js` (`globalThis.VitrinkaHud.mount`),
+- **The HUD and the ONE recorder codec are `@vitrinka/web`'s, never written
+  here.** `vendor/vitrinka-hud.iife.js` is the package's `build/hud.iife.js`
+  (`globalThis.VitrinkaHud.mount`) and `vendor/vitrinka-one.iife.js` its
+  `build/one.iife.js` (`globalThis.VitrinkaOne`, the claim on `<html>` and the
+  `vitrinka:hello` / `command` / `ack` events a page recorder speaks), both
   pinned in `vendor/vitrinka-hud.pin.json` and written only by
   `go run ./tools/vendor-hud` (bump: edit the pin's `version`, run it, commit
-  both; `-check` in CI, `TestVendoredHudMatchesPin` offline). `content.js`
+  the pin and the bundles; `-check` in CI, `TestVendoredBundlesMatchPin`
+  offline). The extension adds only its chrome side: `content.js` claims a
+  captured document under the recording's `generation` (or yields to a page
+  recorder that holds it), `one.js` is the endpoint registered in every other
+  http(s) tab while it records, and `background.js` owns the Start probe, the
+  command relay and the endpoints' lifecycle. `content.js`
   supplies its `HudController` — a thin adapter over the worker's messages
   (`vt-status`/`vt-paused`/`vt-health` paint the recording; `vt-hud*` carry
   the account, prefs and recents `background.js` keeps in
@@ -131,7 +139,17 @@ manual banner — download, unzip over the folder, ↻.
 - **Start** from the popup on any tab whose host matches a project rule. Other
   tabs on the same project's domains join the session automatically (multi-tab
   journeys: admin + web side by side).
-- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.4.0):
+- **With a page's own recorder it is ONE recorder**
+  (`docs/specs/2026-10-12-extension-page-recorder-one-decisions.md`): a page
+  can embed `@vitrinka/web`'s recorder (forge.byadf.ai, FixIt web) while this
+  extension is installed. The first to start leads; the other hides its pill
+  and becomes a remote — the page recorder's pause, stop and note act on the
+  extension's recording, the popup's Pause / Stop act on a page's — and a
+  second Start anywhere is refused with where the recording lives. The
+  `Alt+Shift+A/N/P` commands reach the active tab's recorder whether or not
+  the extension records, because Chrome hands a bound command chord to the
+  worker and never to the page.
+- The **HUD** is the same pill the in-app recorder shows (`@vitrinka/web` 0.5.0):
   rec dot · timer · sync chip · pause · note · annotate · ■ stop · ⋯, at one of
   eight spots or tucked into an edge. Shortcuts: `Alt+Shift+A` annotate (click
   an element OR drag any region, note, Enter sends, ⇧Enter newline, Esc / ✕ /

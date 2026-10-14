@@ -71,6 +71,7 @@
     "restore": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />" },
     "reopen": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M20 20v-7a4 4 0 0 0-4-4H4\" /><path d=\"M9 14 4 9l5-5\" />" },
     "undo": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M9 14 4 9l5-5\" /><path d=\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\" />" },
+    "trash": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M10 11v6\" /><path d=\"M14 11v6\" /><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /><path d=\"M3 6h18\" /><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" />" },
     "align-left": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect width=\"9\" height=\"6\" x=\"6\" y=\"14\" rx=\"2\" /><rect width=\"16\" height=\"6\" x=\"6\" y=\"4\" rx=\"2\" /><path d=\"M2 2v20\" />" },
     "align-h-center": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect width=\"6\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\" /><rect width=\"6\" height=\"10\" x=\"16\" y=\"7\" rx=\"2\" /><path d=\"M12 2v20\" />" },
     "align-right": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect width=\"16\" height=\"6\" x=\"2\" y=\"4\" rx=\"2\" /><rect width=\"9\" height=\"6\" x=\"9\" y=\"14\" rx=\"2\" /><path d=\"M22 22V2\" />" },

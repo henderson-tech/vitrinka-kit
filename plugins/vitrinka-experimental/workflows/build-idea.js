@@ -213,6 +213,9 @@ const TARGET_SCHEMA = {
 
 // A Prepare that also starts the app (review-loop, code-loop, map, and
 // build-idea's quick check at the run target).
+// The judging lane Prepare relays (run.js REVIEWER_STEP, adoptReviewer).
+const REVIEWER_PROPERTY = { type: 'string', enum: ['self', 'codex'], description: 'the judging lane `vitrinka config reviewer --json` reports as data.lane' }
+
 const PREPARE_SCHEMA = {
   ...TARGET_SCHEMA,
   properties: {
@@ -776,7 +779,7 @@ const implPrompt = (s, isShared) => withRunTargetPreamble(
   `Implement ${isShared ? 'the SHARED foundation' : `slice "${s.name}"`} of the feature in ${A.brief} (task ${A.task}), in this worktree.\n` +
   `Goal: ${s.goal}\nFiles you own: ${JSON.stringify(s.files)}\n${s.acceptance ? `Acceptance: ${JSON.stringify(s.acceptance)}\n` : ''}${s.tests ? `Tests to write/extend: ${JSON.stringify(s.tests)}\n` : ''}` +
   (isShared ? 'Other slices build on what you leave; keep it minimal and typed.' : 'Other slices are being built in this same checkout right now: never edit files outside your list, never reformat shared code; a need outside your files is a `left` item with why.') +
-  ` A defect you notice outside the feature's scope is NOT yours: name it in \`left\` with why "off-scope" — never fix it here. Commit per coherent unit with a trailer naming the task. Return what is done, what is left and why, files and commits.`
+  ` A defect you notice outside the feature's scope is NOT yours: name it in \`left\` with why "off-scope" — never fix it here. Verify with focused checks only: the tests you wrote and the package or module your files live in. Never run the repo's broad suites (the full test suite, every e2e lane): the gate step after the slices runs them once on the integrated tree, and a broad run here repeats it on a tree another slice is still changing. Commit per coherent unit with a trailer naming the task. Return what is done, what is left and why, files and commits.`
 )
 const impl = []
 if (plan.shared && plan.shared.files && plan.shared.files.length) {
@@ -797,7 +800,7 @@ if (todo.length) {
 }
 
 const gate = await agent(withRunTargetPreamble(
-  `Gate the implementation: run every type/build/test gate CLAUDE.md names, where it says they run, plus the tests the slices wrote. Repair and commit what this branch broke; report what predates it. Return green, what ran, failures.`
+  `Gate the implementation: run every type/build/test gate CLAUDE.md names, where and how it says they run (a receipt-keyed gate answers from a pass on identical inputs), plus the tests the slices wrote. This is the one broad run on the integrated tree; the slices ran focused checks only. Repair and commit what this branch broke; report what predates it. Return green, what ran, failures.`
 ), { label: 'gate', phase: 'Implement', schema: GATE_SCHEMA })
 if (!gate || !gate.green) log(`build-idea: implementation gate red — ${JSON.stringify((gate && gate.failures) || ['no result'])}; continuing so the quick check shows the state`)
 
