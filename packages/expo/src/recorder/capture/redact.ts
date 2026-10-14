@@ -114,10 +114,17 @@ function sanitizeUrl(url: string): string {
   return originOf(url) ?? REDACTED;
 }
 
-/** `scheme://host[:port]` without credentials; a string parse, RN's URL may lack `origin`. */
+/**
+ * `scheme://host[:port]`, or null unless the authority is provably a plain
+ * host: a string parse (RN's URL may lack `origin`) that ends the authority at
+ * a backslash too, drops userinfo through the LAST `@`, and accepts only
+ * hostname or IP-literal characters after it.
+ */
 function originOf(url: string): string | null {
-  const m = /^([a-z][a-z\d+.-]*:\/\/)(?:[^/?#@]*@)?([^/?#@]+)/i.exec(url);
-  return m ? `${m[1]}${m[2]}`.toLowerCase() : null;
+  const m = /^([a-z][a-z\d+.-]*:)\/\/([^/?#\\]*)/i.exec(url);
+  if (!m) return null;
+  const host = m[2].slice(m[2].lastIndexOf('@') + 1);
+  return /^(?:[a-z\d.-]+|\[[a-f\d:.]+\])(?::\d+)?$/i.test(host) ? `${m[1]}//${host}`.toLowerCase() : null;
 }
 
 /**

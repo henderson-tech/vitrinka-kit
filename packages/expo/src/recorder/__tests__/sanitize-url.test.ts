@@ -138,6 +138,10 @@ describe('sanitizeUrl', () => {
       expect(warn).toHaveBeenCalledTimes(2);
       // The warning names how it failed, never the thrown value quoting the URL.
       expect(JSON.stringify(warn.mock.calls)).not.toContain('s3cr3t');
+      // An authority that is not provably a plain host keeps nothing of it.
+      expect(redactUrl('https://user:s3cr3t@pw-part@api.example.test/x')).toBe('https://api.example.test');
+      expect(redactUrl('https://api.example.test\\reset-password\\s3cr3t')).toBe('https://api.example.test');
+      expect(redactUrl('https://api.example.test%2Fs3cr3t/x')).toBe('[redacted]');
     } finally {
       warn.mockRestore();
     }
