@@ -9,11 +9,14 @@
  * or slow policy fetch means the defaults, never capture-everything.
  *
  * Capture layers import the bound helpers below so every call site stays a
- * one-liner and can never forget to pass the rules.
+ * one-liner and can never forget to pass the rules. URLs and routes also pass
+ * the host's own `sanitizeUrl` (config) first: credentials in PATHS are the
+ * app's to name, the engine only sees query and fragment pairs.
  */
 import type { eventWithTime, metaEvent } from '@rrweb/types';
 import {
   compileRules,
+  REDACTED,
   redactAndCap as engineRedactAndCap,
   redactHeaders as engineRedactHeaders,
   redactText as engineRedactText,
@@ -23,6 +26,9 @@ import {
   type RedactionPolicy,
   type RuleSet,
 } from '@vitrinka/redact';
+
+import { recorderConfig } from '../config';
+import { currentRoute } from '../state';
 
 // Engine primitives that need no binding, re-exported for tests and callers.
 export { isSecretKey, REDACTED, type RedactionPolicy } from '@vitrinka/redact';
@@ -62,9 +68,55 @@ export function redactAndCap(
   return engineRedactAndCap(rules, body, cap, contentType);
 }
 
-/** Scrub URL query/fragment secrets under the active rules. */
+/** The sanitizer whose failure was last reported: once, not on every URL. */
+let reportedSanitizer: unknown = null;
+
+/**
+ * The host's `sanitizeUrl` over one captured URL or route. FAIL CLOSED: a
+ * sanitizer that throws or returns a non-string leaves the URL's origin, or
+ * `[redacted]` when it has none (a relative URL, a route), never the raw
+ * value. It applies under `fullFidelity` too: it is the host's statement
+ * about its own URLs, not a workspace redaction rule.
+ */
+function sanitizeUrl(url: string): string {
+  const sanitize = recorderConfig().sanitizeUrl;
+  if (!sanitize) return url;
+  let failure: unknown;
+  try {
+    const out: unknown = sanitize(url);
+    if (typeof out === 'string') return out;
+    failure = new TypeError(`sanitizeUrl returned ${typeof out}, not a string`);
+  } catch (e) {
+    failure = e;
+  }
+  if (reportedSanitizer !== sanitize) {
+    reportedSanitizer = sanitize;
+    console.warn('vitrinka: sanitizeUrl failed — such URLs are recorded as their origin only', failure);
+  }
+  return originOf(url) ?? REDACTED;
+}
+
+function originOf(url: string): string | null {
+  try {
+    const { origin } = new URL(url);
+    return origin === 'null' ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scrub one URL or route under the active rules: the host's `sanitizeUrl`
+ * first (path credentials), then the engine's query/fragment scrub and
+ * patterns. Every URL-bearing field the recorder captures passes here.
+ */
 export function redactUrl(url: string): string {
-  return engineRedactUrl(rules, url);
+  return engineRedactUrl(rules, sanitizeUrl(url));
+}
+
+/** The `route` an event carries: the current pathname through `redactUrl`. */
+export function redactedRoute(): string {
+  return redactUrl(currentRoute.pathname);
 }
 
 /** rrweb's `EventType.Meta`; `@rrweb/types` is type-only here, so the value. */

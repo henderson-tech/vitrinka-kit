@@ -27,7 +27,7 @@
 import type { AttachmentPayload, RecorderEvent, SessionDone } from '../protocol';
 import { api, fetchPolicy, uploadChunk, uploadImage } from './api';
 import { stageAttachments } from './attachments';
-import { setRedactionPolicy } from './capture/redact';
+import { redactedRoute, setRedactionPolicy } from './capture/redact';
 import { checkoutRRWeb } from './capture/rrweb';
 import { recorderConfig, vitrinkaLinked } from './config';
 import { clipHasSnapshot, type FlightClip, flightActive, startFlightBuffer, stopFlightBuffer, takeFlightClip } from './flight';
@@ -206,7 +206,7 @@ function pathOf(href: string): string {
   try {
     return new URL(href).pathname;
   } catch {
-    return currentRoute.pathname;
+    return redactedRoute();
   }
 }
 
@@ -263,7 +263,7 @@ function buildJob(clip: FlightClip, note: ReportNote): ReportJob {
         selector: note.selector,
         annotate: true,
         task: true,
-        route: currentRoute.pathname,
+        route: redactedRoute(),
         ...(images.length ? { attachments: images.map((image) => image.seq) } : {}),
       },
     },

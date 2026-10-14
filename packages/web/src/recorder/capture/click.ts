@@ -8,7 +8,7 @@
  */
 import { pushEvent } from '../queue';
 import { currentRoute } from '../state';
-import { maskDirectives, redactText } from './redact';
+import { maskDirectives, redactedRoute, redactText } from './redact';
 import { elementText, shortSelector } from './selector';
 
 export { elementText, shortSelector };
@@ -56,7 +56,7 @@ export function installClickLane(opts: ClickLaneOptions): () => void {
           selector: shortSelector(el),
           text: clickText(el),
           rect: imageRect(el),
-          route: currentRoute.pathname,
+          route: redactedRoute(),
         },
         { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
       );

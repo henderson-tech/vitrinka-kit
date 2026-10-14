@@ -25,7 +25,7 @@ export function noteNavigation(force = false): boolean {
   lastUrl = url;
   return null !== pushEvent(
     'nav',
-    { url: redactUrl(url), route: loc.pathname, spa: true },
+    { url: redactUrl(url), route: redactUrl(loc.pathname), spa: true },
     { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
   );
 }

@@ -37,6 +37,16 @@ export interface RecorderConfig {
    * starts, and Report a bug is offered only during one.
    */
   flightRecorder?: boolean;
+  /**
+   * Rewrites every URL and route the recorder captures before the redaction
+   * engine scrubs it — for credentials an app keeps in its PATHS
+   * (`/reset-password/:token`), which the query/fragment scrub cannot see.
+   * It receives the string as captured: an absolute page URL, a request URL
+   * as the app passed it (often relative), or a bare route path. Fail closed:
+   * a sanitizer that throws (or returns a non-string) leaves the URL's origin,
+   * or `[redacted]` when it has none — never the raw value.
+   */
+  sanitizeUrl?: (url: string) => string;
 }
 
 const config: RecorderConfig = { url: '', key: '' };
@@ -49,6 +59,7 @@ export function configureRecorder(next: RecorderConfig): void {
   config.project = next.project;
   config.label = next.label;
   config.flightRecorder = next.flightRecorder;
+  config.sanitizeUrl = next.sanitizeUrl;
 }
 
 export function recorderConfig(): Readonly<RecorderConfig> {

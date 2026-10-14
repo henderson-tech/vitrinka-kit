@@ -17,7 +17,7 @@ import type { SessionDone } from '../protocol';
 import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
 import { type StagedImage, stageAttachments } from './attachments';
 import { primeNavigation } from './capture/nav';
-import { redactUrl, setRedactionPolicy } from './capture/redact';
+import { redactedRoute, redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
 import type { HudAttachment } from './hud/controller';
 import {
@@ -278,7 +278,7 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   primeNavigation();
   pushEvent(
     'nav',
-    { url: redactUrl(currentUrl()), route: currentRoute.pathname },
+    { url: redactUrl(currentUrl()), route: redactedRoute() },
     { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
   );
   notify();
@@ -346,7 +346,7 @@ function imagesOf(list: readonly HudAttachment[] | undefined): StagedImage[] {
  * empty. Their bytes upload through `/shot` before their rows ride (queue.ts).
  */
 export function addNote(text: string, attachments?: readonly HudAttachment[]): void {
-  pushEvent('note', { text, route: currentRoute.pathname }, route(), imagesOf(attachments));
+  pushEvent('note', { text, route: redactedRoute() }, route(), imagesOf(attachments));
 }
 
 /** A rect in CSS pixels (viewport coordinates). */
@@ -388,7 +388,7 @@ export function addAnnotation(
       rect: imagePixels(rect),
       selector,
       annotate: true,
-      route: currentRoute.pathname,
+      route: redactedRoute(),
       ...(opts.task ? { task: true } : {}),
     },
     route(),

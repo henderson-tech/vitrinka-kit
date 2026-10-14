@@ -88,6 +88,46 @@ can file each app's sessions into its own project: pass `project` per app.
 Without it, the host's project rule decides; a recorder key's project pin
 always wins, and a different `project` is refused.
 
+### Credentials in URL paths (`sanitizeUrl`)
+
+The redaction engine scrubs secrets in query strings and fragments
+(`?token=…`, `#access_token=…`), but it cannot know which path segments of
+your routes are credentials. A reset link at `/reset-password/<token>` or a
+guest cart at `/cart/<id>/<token>` would otherwise reach vitrinka in every
+navigation, click, note and bug report. Name them with `sanitizeUrl`:
+
+```tsx
+// Each rule rewrites a path segment that IS a credential into a placeholder.
+const SECRET_PATHS: [RegExp, string][] = [
+  [/\/(reset-password|set-password|invite|activation)\/[^/?#]+/g, '/$1/:token'],
+  [/\/cart\/([^/?#]+)\/[^/?#]+/g, '/cart/$1/:cartToken'],
+  [/\/verify-email\/[^/?#]+\/[^/?#]+/g, '/verify-email/:id/:hash'],
+];
+const sanitizeUrl = (url: string) => SECRET_PATHS.reduce((u, [rx, to]) => u.replace(rx, to), url);
+
+<VitrinkaRecorderRoot url={…} sanitizeUrl={sanitizeUrl}>
+```
+
+- **Coverage:** it runs on every URL and route the recorder captures:
+  - navigation `url` and `route`, including the page a session starts on;
+  - the `route` of clicks, notes and annotations;
+  - network request URLs;
+  - the page URL on each rrweb full snapshot;
+  - a bug report's navigation and note.
+- **Input:** it receives each string as captured: an absolute page URL, a
+  request URL as your code passed it (often relative), or a bare path. Match
+  on path segments, not on a URL you parse.
+- **Order:** it runs first. The query/fragment scrub and your workspace's
+  patterns still apply to what it returns, and routes now pass them too.
+- **`fullFidelity`:** it applies even under a `fullFidelity` policy. It is
+  your statement about your own URLs, not a workspace redaction rule.
+- **Failure:** it fails closed. If it throws or returns a non-string, the
+  recorder keeps only the URL's origin (or `[redacted]` when there is none),
+  never the raw value. It logs one `vitrinka:` warning per sanitizer.
+- **Not covered:** request and response bodies and the DOM itself stay under
+  the workspace policy. If a page renders a credential as visible text or in
+  a link, mark that element `.rr-block`.
+
 ### Env vars
 
 | Var | What |
@@ -330,11 +370,14 @@ same mount as one self-contained script with React bundled in:
 |---|---|---|
 | rrweb | `rrweb` | `{count}` + `blobKey` — the batch itself is uploaded as a chunk; inputs always masked, all text under a `maskAllText` policy; the page URL each full snapshot carries is scrubbed of query/fragment secrets; images recorded by URL, never inlined (inlining would alter the page's own `<img>`) |
 | clicks | `click` | `{selector, text, rect, route}` — `text` is never a form field's value, and empty at, inside or around `.rr-mask` / `.rr-block` and under `maskAllText` |
-| navigation | `nav` | `{url, route, spa}` — `url` scrubbed of query/fragment secrets, the start URL included |
+| navigation | `nav` | `{url, route, spa}` — `url` scrubbed of query/fragment secrets, the start URL included; `route` passes the value patterns |
 | network | `net` | `{method, url, status, ms, reqHeaders, resHeaders, reqBody, resBody, via}` — redacted, capped at 64 KiB per body; the recorder's own uploads are never recorded |
 | console | `console` | `{level: 'error', text}` |
 | notes | `note` | `{text, route}`; annotations add `{rect, selector, annotate: true, task?}`; a note with images adds `attachments: [seq…]` |
 | images | `attachment` | `{name, mime, bytes, w, h}` + `blobKey` — the image itself is uploaded to `/shot?seq=N` first; its seq sits just below its note's |
+
+Every `url` and `route` above, and the rrweb page URL, passes your
+[`sanitizeUrl`](#credentials-in-url-paths-sanitizeurl) first when you pass one.
 
 Data goes to your vitrinka server only. Details, the redaction rules and the
 policy fetch: [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md).

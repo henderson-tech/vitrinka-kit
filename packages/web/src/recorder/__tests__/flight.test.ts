@@ -234,6 +234,21 @@ describe('report', () => {
     expect(out.boardUrl).toBe('https://vitrinka.test/acme/b/example-session-1?x=1');
   });
 
+  it('a report records the host-sanitized page URL and route in its nav and note', async () => {
+    configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: (url) => url.replace(/\/orders\/\d+/, '/orders/:id') });
+    setSystemTime(new Date(T0));
+    wantFlight();
+    await syncFlight();
+    startFlightRRWeb();
+    holdReport(true);
+    stub.calls.length = 0;
+    await sendReport({ text: 'Wrong total', rect: null, selector: '' });
+    type Row = { kind: string; payload?: Record<string, unknown> };
+    const rows = stub.calls.filter((c) => c.path.endsWith('/events')).flatMap((c) => (c.body as { events: Row[] }).events);
+    expect(rows.find((e) => e.kind === 'nav')?.payload).toEqual({ url: 'https://app.example.test/orders/:id?token=[redacted]', route: '/orders/:id' });
+    expect(rows.find((e) => e.kind === 'note')?.payload).toMatchObject({ route: '/orders/:id' });
+  });
+
   it('a report frozen over an empty buffer takes one checkout and opens on a full snapshot; with a window held it takes none', async () => {
     setSystemTime(new Date(T0));
     wantFlight();
