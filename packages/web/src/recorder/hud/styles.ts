@@ -181,6 +181,7 @@ button.tb:focus-visible { outline:2px solid var(--rec); outline-offset:-2px; }
 .dot[data-sync="sending"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--fg-3); }
 .dot[data-sync="offline"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--warn); }
 .dot[data-sync="error"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--rec); }
+.detail.statsf { max-width:none; }
 .stats { display:inline-flex; align-items:center; gap:10px; white-space:nowrap; font-weight:600; color:var(--fg-3); }
 .stats .s-head { display:inline-flex; align-items:center; gap:5px; color:var(--ok); }
 .stats[data-kind="sending"] .s-head { color:var(--fg-2); }

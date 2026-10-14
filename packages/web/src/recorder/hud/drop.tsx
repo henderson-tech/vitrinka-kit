@@ -30,7 +30,9 @@ export function DraftDrop({ text, crop, side, onResume }: DraftDropProps): React
   return (
     <div className="draft" data-side={side} data-e2e="draft-drop">
       <svg className="fillet" viewBox="0 0 8 16" aria-hidden="true">
-        <path d="M0 0 C 3 4, 5 4, 8 3 L 8 13 C 5 12, 3 12, 0 16 Z" />
+        <path className="f-body" d="M0 0 C 3 4, 5 4, 8 3 L 8 13 C 5 12, 3 12, 0 16 Z" />
+        {/* the rim on the two concave curves only — the glass's 1px edge, so the neck reads on any page */}
+        <path className="f-rim" d="M0 0.5 C 3 4.5, 5 4.5, 8 3.5 M0 15.5 C 3 11.5, 5 11.5, 8 12.5" />
       </svg>
       <button type="button" className="bead glass" aria-label={`Resume the draft: ${line}`} onClick={onResume}>
         <span className="d-dot" />
@@ -51,7 +53,9 @@ export const DROP_CSS = `
 .draft { position:relative; display:flex; align-items:center; flex:none; }
 .draft[data-side="start"] { order:-1; margin-right:-1px; }
 .draft[data-side="end"] { order:1; margin-left:-1px; flex-direction:row-reverse; }
-.draft .fillet { width:8px; height:16px; flex:none; fill:var(--ink); }
+.draft .fillet { width:8px; height:16px; flex:none; overflow:visible; }
+.draft .fillet .f-body { fill:var(--ink-pop); }
+.draft .fillet .f-rim { fill:none; stroke:rgba(255,255,255,.16); stroke-width:1; vector-effect:non-scaling-stroke; }
 .draft[data-side="start"] .fillet { order:1; transform:scaleX(-1); }
 .hud .draft .bead { all:unset; box-sizing:border-box; cursor:pointer; display:inline-flex; align-items:center; height:18px; min-width:18px;
   padding:0 5px; border-radius:999px; color:var(--fg); font-size:calc(var(--fs) - 1px); font-weight:600;

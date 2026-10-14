@@ -907,7 +907,15 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       {detailP.mounted && detailRec ? (
         <div
           ref={detailRef}
-          className={['float detail grow', detailP.cls, snap.prefs.verbose ? '' : 'line', line ? 'bad' : ''].filter(Boolean).join(' ')}
+          className={[
+            'float detail grow',
+            detailP.cls,
+            snap.prefs.verbose ? '' : 'line',
+            line ? 'bad' : '',
+            snap.prefs.verbose || line ? '' : 'statsf',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           data-e2e="recorder-detail"
           aria-hidden="true"
         >
