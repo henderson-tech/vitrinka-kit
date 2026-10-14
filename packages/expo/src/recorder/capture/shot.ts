@@ -11,7 +11,7 @@ import type { RefObject } from 'react';
 import { Dimensions, PixelRatio, type View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
-import { pixelPolicy } from './redact';
+import { eventRoute, pixelPolicy } from './redact';
 
 import { uploadShot } from '../api';
 import {
@@ -25,7 +25,7 @@ import {
   scheduleFlush,
   trackCapture,
 } from '../queue';
-import { currentRoute, notify } from '../state';
+import { notify } from '../state';
 
 const SHOT_THROTTLE_MS = 700;
 
@@ -159,7 +159,7 @@ export async function captureHeldShot(): Promise<HeldShot | null> {
     discardTmp(tmpUri);
     return null;
   }
-  const route = { ...currentRoute };
+  const route = eventRoute();
   let settled = false;
   return {
     scale: frameScale,
@@ -251,7 +251,7 @@ async function doShoot(reason: 'nav' | 'touch' | 'start'): Promise<void> {
     countShot();
     notify();
     const ts = new Date().toISOString();
-    const route = { ...currentRoute };
+    const route = eventRoute();
     const payload = { route: route.tabHost, reason };
     try {
       const up = await uploadShot(origin, seq, tmpUri);

@@ -43,13 +43,20 @@ export type { RecorderStorage } from './storage';
  * navigation, hosts the screenshot capture root. `route` feeds the journey's
  * lane/pathname — expo-router apps take it from `useExpoRouterRecorderRoute()`
  * (the `/recorder/expo-router` subpath); other stacks pass their own.
+ *
+ * `sanitizeUrl` rewrites every route and network request URL the recorder
+ * captures before redaction — name the path segments that carry credentials
+ * (`/reset-password/[token]`). It gets bare pathnames and request URLs alike.
+ * A sanitizer that throws records only the URL's origin, or `[redacted]`.
  */
 export function VitrinkaRecorderRoot({
   children,
   route,
+  sanitizeUrl,
 }: {
   children: ReactNode;
   route?: RecorderRoute;
+  sanitizeUrl?: (url: string) => string;
 }) {
   // Inlined literals → statically true on any build without recorder env, so
   // everything below is dead code and never bundled.
@@ -58,7 +65,11 @@ export function VitrinkaRecorderRoot({
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { RecorderProvider } = require('./RecorderProvider') as typeof import('./RecorderProvider');
-  return <RecorderProvider route={route}>{children}</RecorderProvider>;
+  return (
+    <RecorderProvider route={route} sanitizeUrl={sanitizeUrl}>
+      {children}
+    </RecorderProvider>
+  );
 }
 
 /**

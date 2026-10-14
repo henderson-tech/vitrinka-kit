@@ -88,6 +88,45 @@ Unattended builds (CI, machine-driven runs) can still bake a token:
 EXPO_PUBLIC_VITRINKA_TOKEN=<vkr_ recorder key>   # admin-minted, ingest-only — never a workspace token
 ```
 
+## Credentials in URL paths (`sanitizeUrl`)
+
+The redaction engine scrubs secrets in query strings and fragments
+(`?token=…`), but it cannot know which path segments of your routes are
+credentials. An expo-router screen at `app/reset-password/[token].tsx`
+reports `/reset-password/<token>` as its pathname, and the pathname is the
+route of every event recorded on that screen. Name those segments with
+`sanitizeUrl`:
+
+```tsx
+// Each rule rewrites a path segment that IS a credential into a placeholder.
+const SECRET_PATHS: [RegExp, string][] = [
+  [/\/(reset-password|invite)\/[^/?#]+/g, '/$1/[token]'],
+];
+const sanitizeUrl = (url: string) => SECRET_PATHS.reduce((u, [rx, to]) => u.replace(rx, to), url);
+
+<VitrinkaRecorderRoot route={route} sanitizeUrl={sanitizeUrl}>
+```
+
+- **Coverage:** every route the recorder records (each event's `tabHost`,
+  the `route` of navigations, taps and keyframes) and every network request
+  URL.
+- **Input:** bare pathnames, and request URLs as your code passed them
+  (absolute or relative). Match on path segments, not on a URL you parse.
+- **Order:** it runs first. The query/fragment scrub and your workspace's
+  patterns still apply to what it returns, and routes pass them too.
+- **`fullFidelity`:** it applies even under a `fullFidelity` policy. It is
+  your statement about your own URLs, not a workspace redaction rule.
+- **Failure:** it fails closed. If it throws or returns a non-string, the
+  recorder keeps only the URL's origin (`[redacted]` for a bare route),
+  never the raw value. It logs one `vitrinka:` warning per sanitizer. A line
+  your sanitizer logs reaches the console but is never recorded.
+- **Not covered:** free text stays under the workspace policy: request and
+  response headers and bodies, and console lines (a router error that quotes
+  the path, say). Add a policy pattern for a token shape that shows up in
+  text. Keyframes show what the screen shows. The lane
+  comes from expo-router's segments (`[token]`, never its value) or your own
+  `lane`. `hideIdleGripOn` matches the raw pathname.
+
 ## The production-strip guarantee
 
 Three layers, all shipped here:

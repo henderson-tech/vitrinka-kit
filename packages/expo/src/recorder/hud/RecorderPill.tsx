@@ -307,7 +307,7 @@ export function RecorderPill({ hideIdleGripOn }: { hideIdleGripOn?: readonly str
 
   // Routes where the host app owns competing UI can opt the idle puck out;
   // a live recording stays visible there.
-  if (rec === null && (hideIdleGripOn?.includes(currentRoute.tabHost) ?? false)) return null;
+  if (rec === null && (hideIdleGripOn?.includes(currentRoute.pathname) ?? false)) return null;
 
   const view = { w: win.width, h: win.height };
   const spot = untuck(place);

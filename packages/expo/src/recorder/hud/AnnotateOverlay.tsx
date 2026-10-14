@@ -20,10 +20,11 @@ import { type GestureResponderEvent, Pressable, StyleSheet, Text, TextInput, Vie
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { eventRoute } from '../capture/redact';
 import { captureHeldShot, type HeldShot } from '../capture/shot';
 import { getState } from '../queue';
 import { addAnnotation, cornersToRect, type ViewRect } from '../session';
-import { annotateState, currentRoute, setAnnotating, subscribe } from '../state';
+import { annotateState, setAnnotating, subscribe } from '../state';
 
 const ACCENT = '#ff3b57';
 const DRAG_THRESHOLD = 6;
@@ -181,7 +182,7 @@ export function AnnotateOverlay() {
       {!composing && !flash ? <HintPill /> : null}
       {composing ? (
         <Composer
-          context={`⌖ ${Math.round(rect?.w ?? 0)}×${Math.round(rect?.h ?? 0)} · ${currentRoute.tabHost}`}
+          context={`⌖ ${Math.round(rect?.w ?? 0)}×${Math.round(rect?.h ?? 0)} · ${eventRoute().tabHost}`}
           note={note}
           onChangeNote={setNote}
           onSend={onSend}

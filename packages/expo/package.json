@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/expo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "vitrinka toolkit for Expo apps \u2014 the journey recorder: capture manual-testing sessions (screenshots, interactions, network, notes) straight into vitrinka boards.",
   "license": "Elastic-2.0",
   "repository": {

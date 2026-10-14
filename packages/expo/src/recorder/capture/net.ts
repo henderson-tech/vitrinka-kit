@@ -15,8 +15,7 @@
  */
 import { isVitrinkaUrl } from '../api';
 import { getState, pushEvent, trackCapture } from '../queue';
-import { currentRoute } from '../state';
-import { redactAndCap, redactHeaders, redactUrl } from './redact';
+import { eventRoute, redactAndCap, redactHeaders, redactUrl } from './redact';
 
 const BODY_CAP = 64 * 1024;
 /**
@@ -88,7 +87,7 @@ function recordNet(payload: Record<string, unknown>): void {
   // centrally, with the engine's dedicated URL scrub (query AND fragment,
   // split on both `&` and `;`).
   const url = typeof payload.url === 'string' ? redactUrl(payload.url) : payload.url;
-  pushEvent('net', { ...payload, url }, { ...currentRoute });
+  pushEvent('net', { ...payload, url }, eventRoute());
 }
 
 /**

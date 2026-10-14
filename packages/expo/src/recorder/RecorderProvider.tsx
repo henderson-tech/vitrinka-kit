@@ -11,7 +11,8 @@
  * (`useExpoRouterRecorderRoute`, the `/recorder/expo-router` subpath); any
  * other navigation stack passes `{ pathname, lane }` from its own source.
  * tabId = the lane (tab/section grouping for the journey timeline);
- * tabHost = the full pathname.
+ * tabHost = the full pathname, through the host's `sanitizeUrl` and the
+ * redaction engine (`eventRoute`).
  */
 import { type ReactNode, useEffect, useRef } from 'react';
 import { AppState, type GestureResponderEvent, View } from 'react-native';
@@ -19,6 +20,7 @@ import { AppState, type GestureResponderEvent, View } from 'react-native';
 import { patchConsole } from './capture/console';
 import { patchNetwork } from './capture/net';
 import { pressLabel } from './capture/press';
+import { eventRoute, setSanitizeUrl } from './capture/redact';
 import { setShotRoot, shoot } from './capture/shot';
 import { useRecorderControl } from './control';
 import {
@@ -32,11 +34,11 @@ import {
 } from './queue';
 import { installUnauthorizedHandler } from './link';
 import { armIdleStop, recoverRedactionPolicy } from './session';
-import { currentRoute, setCurrentRoute } from './state';
+import { setCurrentRoute } from './state';
 
 /** Where the recorder believes the user is; see the header for the mapping. */
 export interface RecorderRoute {
-  /** Full pathname, e.g. '/orders/42' — becomes the event's tabHost. */
+  /** Full pathname, e.g. '/orders/42' — the event's tabHost, once sanitized and redacted. */
   pathname: string;
   /** Timeline lane (tab/section name); defaults to 'root'. */
   lane?: string;
@@ -55,10 +57,14 @@ function RecorderDevToolsControl() {
 export function RecorderProvider({
   children,
   route,
+  sanitizeUrl,
 }: {
   children: ReactNode;
   route?: RecorderRoute;
+  sanitizeUrl?: (url: string) => string;
 }) {
+  // During render, so it is in place before any effect below captures.
+  setSanitizeUrl(sanitizeUrl);
   const rootRef = useRef<View | null>(null);
   const pathname = route?.pathname ?? '/';
   const lane = route?.lane ?? 'root';
@@ -112,21 +118,23 @@ export function RecorderProvider({
 
   useEffect(() => {
     setCurrentRoute(pathname, lane);
-    pushEvent('nav', { route: pathname }, { ...currentRoute });
+    const r = eventRoute();
+    pushEvent('nav', { route: r.tabHost }, r);
     void shoot('nav');
   }, [pathname, lane]);
 
   const onTouchCapture = (e: GestureResponderEvent): boolean => {
     const text = pressLabel(e);
+    const r = eventRoute();
     pushEvent(
       'click',
       {
         x: Math.round(e.nativeEvent.pageX),
         y: Math.round(e.nativeEvent.pageY),
-        route: currentRoute.tabHost,
+        route: r.tabHost,
         ...(text ? { text } : {}),
       },
-      { ...currentRoute },
+      r,
     );
     void shoot('touch');
     return false; // never claim the touch

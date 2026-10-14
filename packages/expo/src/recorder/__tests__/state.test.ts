@@ -17,8 +17,8 @@ import { currentRoute, notify, subscribe } from '../state';
 const INITIAL_ROUTE = { ...currentRoute };
 
 beforeEach(() => {
-  currentRoute.tabId = 'root';
-  currentRoute.tabHost = '/';
+  currentRoute.lane = 'root';
+  currentRoute.pathname = '/';
 });
 
 describe('subscribe / notify', () => {
@@ -66,18 +66,18 @@ describe('subscribe / notify', () => {
 
 describe('currentRoute', () => {
   it('is a live shared object the capture layers read through', () => {
-    currentRoute.tabId = 'orders';
-    currentRoute.tabHost = '/(personal)/(tabs)/orders';
+    currentRoute.lane = 'orders';
+    currentRoute.pathname = '/(personal)/(tabs)/orders';
     // Same module instance everywhere — capture layers stamp these onto events.
     expect(currentRoute).toMatchObject({
-      tabId: 'orders',
-      tabHost: '/(personal)/(tabs)/orders',
+      lane: 'orders',
+      pathname: '/(personal)/(tabs)/orders',
     });
   });
 
   it('defaults to the root lane before any navigation is observed', () => {
     // Uses the module-load snapshot, so this fails if state.ts's initializer
     // changes — unlike an assertion made after the suite's own reset.
-    expect(INITIAL_ROUTE).toEqual({ tabId: 'root', tabHost: '/' });
+    expect(INITIAL_ROUTE).toEqual({ lane: 'root', pathname: '/' });
   });
 });

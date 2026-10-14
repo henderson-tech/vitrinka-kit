@@ -1,5 +1,28 @@
 # @vitrinka/expo
 
+## 0.2.3
+
+- **Credentials in route paths no longer reach vitrinka (`sanitizeUrl`).**
+  The recorder stamped the router's pathname, unredacted, as the `tabHost`
+  of every event and the `route` of navigations, taps and keyframes. An
+  expo-router app with a `reset-password/[token]` or `invite/[token]` screen
+  uploaded the token with every event recorded on it. `VitrinkaRecorderRoot`
+  now takes an optional `sanitizeUrl: (url: string) => string`, the same
+  contract as `@vitrinka/web` 0.5.3. It rewrites every route and network
+  request URL before the redaction engine scrubs it, under `fullFidelity`
+  too. A sanitizer that throws or returns a non-string fails closed: the
+  recorder keeps only the URL's origin, or `[redacted]` for a bare route,
+  and logs one warning. See
+  [Credentials in URL paths](README.md#credentials-in-url-paths-sanitizeurl).
+- **Routes are redacted.** Every route now passes the same scrub as a URL,
+  under the policy in force when the event is recorded, so a workspace's
+  value patterns reach routes too. Without a `sanitizeUrl`, a route that
+  matches no pattern is recorded as before. A lane (`tabId`) is unchanged.
+  In the timeline's Domain view, routes that differ only in a sanitized
+  segment now share one lane.
+- `hideIdleGripOn` still matches the raw pathname, and the annotate
+  composer shows the route the note is filed under.
+
 ## 0.2.2
 
 - **The web HUD's design, native.** The right-edge rail, grip and mini tab
