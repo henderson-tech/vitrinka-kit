@@ -6,7 +6,7 @@
  * id, so a recent without a board link is refreshed through that reconcile
  * read (`GET /api/v1/sessions/:id`).
  */
-import type { HudRecent, HudRecentStatus } from './hud/controller';
+import type { HudProjection, HudRecent, HudRecentStatus } from './hud/controller';
 import { api, permanentStatus, VitrinkaApiError } from './api';
 import { notify } from './state';
 import { getRecorderStorage } from './storage';
@@ -69,7 +69,24 @@ interface SessionRead {
   deletedAt?: string | null;
   boardUrl?: string;
   board?: { url?: string };
-  projection?: { state?: string };
+  projection?: { state?: string; step?: string; done?: number; total?: number; error?: string; retryable?: boolean };
+}
+
+const PROJECTION_STATES: readonly HudProjection['state'][] = ['idle', 'queued', 'running', 'ready', 'empty', 'failed'];
+
+/** The session answer's board build as the HUD paints it; undefined for an unknown state. */
+export function projectionOf(s: SessionRead): HudProjection | undefined {
+  const p = s.projection;
+  const state = PROJECTION_STATES.find((st) => st === p?.state);
+  if (!p || !state) return undefined;
+  return {
+    state,
+    ...(p.step ? { step: p.step } : {}),
+    ...(typeof p.done === 'number' ? { done: p.done } : {}),
+    ...(typeof p.total === 'number' ? { total: p.total } : {}),
+    ...(p.error ? { error: p.error } : {}),
+    ...(p.retryable ? { retryable: true } : {}),
+  };
 }
 
 /** A session answer's board link: the server's `boardUrl`, or an older server's `board.url`. */
@@ -87,9 +104,11 @@ const awaiting = new Set<string>();
  * The server answered a stop (or a report) before the session's board was
  * built — it projects after the stop, stills first, 30–60 s. Read the
  * session until it names its board and put the link on the recent, where
- * the Saved face and the menu pick it up. Ends on a failed or empty
- * projection, a gone or refused session, or after `forMs`; a transient
- * error keeps waiting. Never rejects.
+ * the Saved face and the menu pick it up; every read in between puts the
+ * build's progress (`projection`) there too, for the Building face. Ends on a
+ * failed or empty projection (kept on the recent, so the face can say so), a
+ * gone or refused session, or after `forMs`; a transient error keeps
+ * waiting. Never rejects.
  */
 export async function awaitBoard(
   sessionId: string,
@@ -104,9 +123,12 @@ export async function awaitBoard(
       try {
         const s = await api<SessionRead>('GET', `/api/v1/sessions/${sessionId}`);
         const boardUrl = boardUrlOf(s);
-        if (boardUrl) return updateRecent(sessionId, { boardUrl });
-        if (s.deletedAt) return updateRecent(sessionId, { status: 'deleted' });
-        if (s.projection?.state === 'failed' || s.projection?.state === 'empty') return;
+        const projection = projectionOf(s);
+        if (boardUrl) return updateRecent(sessionId, { boardUrl, projection: undefined });
+        if (s.deletedAt) return updateRecent(sessionId, { status: 'deleted', projection: undefined });
+        if (projection && !sameProjection(readRecents().find((r) => r.sessionId === sessionId)?.projection, projection))
+          updateRecent(sessionId, { projection });
+        if (projection?.state === 'failed' || projection?.state === 'empty') return;
       } catch (e) {
         if (e instanceof VitrinkaApiError && e.status === 404) return updateRecent(sessionId, { status: 'deleted' });
         if (e instanceof VitrinkaApiError && permanentStatus(e.status)) return;
@@ -116,6 +138,22 @@ export async function awaitBoard(
   } finally {
     awaiting.delete(sessionId);
   }
+}
+
+function sameProjection(a: HudProjection | undefined, b: HudProjection): boolean {
+  return a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Build a saved session's board again after a retryable failure, then wait
+ * for it as a stop does. A recorder token may not call `…/project`; closing
+ * the session again (`PATCH {status: done}`) re-requests the same final pass.
+ * Rejects with the server's reason.
+ */
+export async function retryBuild(sessionId: string): Promise<void> {
+  await api('PATCH', `/api/v1/sessions/${sessionId}`, { status: 'done' });
+  updateRecent(sessionId, { projection: { state: 'queued' } });
+  void awaitBoard(sessionId);
 }
 
 /** Ids already asked this document — a refused read is not retried on every menu open. */

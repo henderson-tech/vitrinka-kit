@@ -23,7 +23,11 @@ export interface HudPrefs {
   verbose: boolean;
   /** The note / annotate / report sheet's width, CSS px; 0 = the HUD's default. */
   sheetW: number;
-  /** The cap its text box grows to before it scrolls, CSS px; 0 = the HUD's default (20 rows). */
+  /**
+   * The height its text box was dragged to, CSS px: it never stands shorter
+   * and still grows with its draft (a minimum, HUD polish D8); 0 = the HUD's
+   * default (fit the draft, up to 20 rows).
+   */
   sheetH: number;
 }
 
@@ -55,6 +59,34 @@ export interface HudSync {
   events: number;
   serverMaxSeq: number;
   deadReason: string;
+  /** What the server acknowledged from this tab, by kind (the stats float). Absent = the host does not count. */
+  acked?: HudAcked;
+  /** Client ids of this tab's notes not yet acknowledged; the "Saved" flash waits for its note to leave. */
+  pendingNotes?: readonly string[];
+}
+
+/** Acknowledged deliveries, as a tester names them. */
+export interface HudAcked {
+  /** Clicks. */
+  actions: number;
+  /** Navigations. */
+  pages: number;
+  /** DOM frames (rrweb events). */
+  frames: number;
+  /** Notes and annotations. */
+  notes: number;
+}
+
+/** The server's board build of a saved session (`GET /api/v1/sessions/{id}` → `projection`). */
+export interface HudProjection {
+  state: 'idle' | 'queued' | 'running' | 'ready' | 'empty' | 'failed';
+  /** What the running pass is doing, in the server's words. */
+  step?: string;
+  done?: number;
+  total?: number;
+  error?: string;
+  /** A failed build another `POST …/project` may fix. */
+  retryable?: boolean;
 }
 
 export interface HudRecording {
@@ -82,6 +114,8 @@ export interface HudRecent {
   durationMs?: number;
   status: HudRecentStatus;
   boardUrl?: string;
+  /** The board build while the HUD waits for it; absent once the link is known or nobody polls. */
+  projection?: HudProjection;
 }
 
 export interface HudSnapshot {
@@ -119,6 +153,13 @@ export interface HudSnapshot {
    * stays) and binds no shortcut. Absent = this HUD's host leads or is idle.
    */
   following?: 'page' | 'extension';
+  /**
+   * With `following`: the leader records in ANOTHER document (it holds no
+   * claim here), so this document shows no pill of its own — the HUD then
+   * shows a quiet "Recording in another tab" instead of hiding (HUD polish
+   * D11). False or absent: the leader's pill is in this document.
+   */
+  followingElsewhere?: boolean;
 }
 
 /** The pill's inline flow face (`hud/flow.ts`), as `faceChanged` reports it. */
@@ -158,14 +199,39 @@ export interface HudRect {
   h: number;
 }
 
+/**
+ * A note's identity (D6/D7): the HUD mints `cid`; `replaces` supersedes the
+ * named note (an edit), `refs` points at others. Client ids, never seqs.
+ */
+export interface HudNoteLink {
+  cid: string;
+  replaces?: string;
+  refs?: readonly string[];
+}
+
 export interface HudAnnotation {
   text: string;
   rect: HudRect;
   /** '' for a free region. */
   selector: string;
-  /** Also file it as an intake task. */
-  task: boolean;
   attachments?: readonly HudAttachment[];
+  link?: HudNoteLink;
+}
+
+/** One note of the live recording, as `listNotes` keeps it. */
+export interface HudNote {
+  cid: string;
+  text: string;
+  /** Epoch ms of capture. */
+  at: number;
+  route: string;
+  /** A region / element annotation, or a plain note. */
+  region: boolean;
+  /** CSS-pixel size of the region, when it is one. */
+  w?: number;
+  h?: number;
+  replaces?: string;
+  refs?: readonly string[];
 }
 
 /** What "Report a bug" sends from the sheet. */
@@ -197,8 +263,23 @@ export interface HudController {
   /** Drains, then closes the session; rejects (session kept) while unreachable. */
   stop(): Promise<HudSaved>;
   /** `attachments` only when `canAttach`; with them, `text` may be empty. */
-  note(text: string, attachments?: readonly HudAttachment[]): void;
+  note(text: string, attachments?: readonly HudAttachment[], link?: HudNoteLink): void;
   annotate(a: HudAnnotation): void;
+  /**
+   * The live recording's notes, every tab's, oldest first — what the notes
+   * sheet lists (a recorder token reads nothing back from the server, so the
+   * host keeps them on the device for the recording's life). Optional; never
+   * rejects (null = no live recording).
+   */
+  listNotes?(): Promise<HudNote[] | null>;
+  /**
+   * The picked region's pixels, for the composer's thumbnail (D15): a data
+   * URL, or null where the host cannot read pixels (the page recorder never
+   * can — it simply omits this). Never rejects.
+   */
+  captureRegion?(rect: HudRect): Promise<string | null>;
+  /** Ask the server to build a saved session's board again (a retryable failure). Rejects with the reason. */
+  retryBuild?(sessionId: string): Promise<void>;
   setAnnotating(active: boolean): void;
   link(): Promise<HudLinkFlow>;
   unlink(): void;

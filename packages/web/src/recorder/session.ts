@@ -19,7 +19,7 @@ import { type StagedImage, stageAttachments } from './attachments';
 import { primeNavigation } from './capture/nav';
 import { redactedRoute, redactUrl, setRedactionPolicy } from './capture/redact';
 import { recorderConfig } from './config';
-import type { HudAttachment } from './hud/controller';
+import type { HudAttachment, HudNote } from './hud/controller';
 import {
   adoptStoredState,
   armReconcile,
@@ -27,7 +27,9 @@ import {
   disarmReconcile,
   drainBuffer,
   getState,
+  logNote,
   markStopping,
+  noteLog,
   persistNow,
   pruneBlobJournal,
   pushEvent,
@@ -339,14 +341,59 @@ function imagesOf(list: readonly HudAttachment[] | undefined): StagedImage[] {
 }
 
 /**
+ * A note's identity on the wire (recorder HUD polish D6/D7): `cid` names it,
+ * `replaces` supersedes an earlier note's whole content (the board shows the
+ * latest, the thread keeps the rest), `refs` points at other notes. All are
+ * the HUD's client ids, never seqs — a seq is allocated after the push.
+ */
+export interface NoteLink {
+  cid?: string;
+  replaces?: string;
+  refs?: readonly string[];
+}
+
+function linkOf(link: NoteLink | undefined): Record<string, unknown> {
+  if (!link) return {};
+  return {
+    ...(link.cid ? { cid: link.cid } : {}),
+    ...(link.replaces ? { replaces: link.replaces } : {}),
+    ...(link.refs?.length ? { refs: [...link.refs] } : {}),
+  };
+}
+
+/**
  * A plain note — `{text, route}`, the extension's shape. With attachments
  * (recorder attachments) each image becomes an `attachment` event whose seq
  * is allocated just before the note's, in this tab's lane, and the note
  * lists them: `{text, route, attachments: [seq…]}`; `text` may then be
  * empty. Their bytes upload through `/shot` before their rows ride (queue.ts).
  */
-export function addNote(text: string, attachments?: readonly HudAttachment[]): void {
-  pushEvent('note', { text, route: redactedRoute() }, route(), imagesOf(attachments));
+export function addNote(text: string, attachments?: readonly HudAttachment[], link?: NoteLink): void {
+  const at = pushEvent('note', { text, route: redactedRoute(), ...linkOf(link) }, route(), imagesOf(attachments));
+  remember(at, { cid: link?.cid ?? '', text, region: false, ...linkFields(link) });
+}
+
+function linkFields(link: NoteLink | undefined): Pick<HudNote, 'replaces' | 'refs'> {
+  return {
+    ...(link?.replaces ? { replaces: link.replaces } : {}),
+    ...(link?.refs?.length ? { refs: [...link.refs] } : {}),
+  };
+}
+
+/**
+ * The live recording's notes, every tab's, oldest first (the device log —
+ * `noteLog`); null with no live session. Never rejects.
+ */
+export async function listNotes(): Promise<HudNote[] | null> {
+  const rec = getState();
+  return rec ? noteLog(rec.sessionId) : null;
+}
+
+/** Log a note the queue accepted, under the live session; a note without a `cid` is not listable. */
+function remember(at: string | null, note: Omit<HudNote, 'at' | 'route'>): void {
+  const rec = getState();
+  if (!at || !rec || !note.cid) return;
+  logNote(rec.sessionId, { ...note, at: Date.parse(at), route: redactedRoute() });
 }
 
 /** A rect in CSS pixels (viewport coordinates). */
@@ -370,18 +417,20 @@ export function imagePixels(r: ViewRect): ViewRect {
 
 /**
  * An annotation — the extension's annotate-note `{text, rect, selector,
- * annotate: true}` (+ `task` when the tester chose the task destination);
- * vitrinka projects it into a board annotation. `selector` is '' for a free
- * region. The rect is in device pixels. An empty note is still a valid
- * annotation, matching the extension. `attachments` ride as for `addNote`.
+ * annotate: true}`; vitrinka projects it into a board annotation. `selector`
+ * is '' for a free region. The rect is in device pixels. An empty note is
+ * still a valid annotation, matching the extension. `attachments` ride as for
+ * `addNote`, `link` as `NoteLink` says. `task` files it as an intake draft
+ * too — only a bug report asks for that; the HUD's annotations land on the
+ * board alone.
  */
 export function addAnnotation(
   text: string,
   rect: ViewRect,
   selector: string,
-  opts: { task?: boolean; attachments?: readonly HudAttachment[] } = {},
+  opts: { task?: boolean; attachments?: readonly HudAttachment[]; link?: NoteLink } = {},
 ): void {
-  pushEvent(
+  const at = pushEvent(
     'note',
     {
       text,
@@ -390,10 +439,19 @@ export function addAnnotation(
       annotate: true,
       route: redactedRoute(),
       ...(opts.task ? { task: true } : {}),
+      ...linkOf(opts.link),
     },
     route(),
     imagesOf(opts.attachments),
   );
+  remember(at, {
+    cid: opts.link?.cid ?? '',
+    text,
+    region: true,
+    w: Math.round(rect.w),
+    h: Math.round(rect.h),
+    ...linkFields(opts.link),
+  });
 }
 
 /**

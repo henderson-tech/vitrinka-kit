@@ -192,6 +192,8 @@ export async function startServers(entry = 'fixture/app.tsx', options: { host?: 
         `</head><body>` +
         `<div id="root"></div>` +
         `<script>window.__VT_CFG=${JSON.stringify({ url: stubUrl, key: (req.url ?? '').includes('nokey') ? '' : 'vkr_e2e' })}</script>` +
+        // The first-run hint shows only where a spec asks for it (`?hint`): everywhere else it has been seen.
+        ((req.url ?? '').includes('hint') ? '' : `<script>localStorage.setItem('vitrinka.recorder.hud.hinted','1')</script>`) +
         `<script src="/app.js"></script></body></html>`,
     );
   });

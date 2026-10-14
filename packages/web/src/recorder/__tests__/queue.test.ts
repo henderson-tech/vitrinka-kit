@@ -9,10 +9,15 @@ import {
   __bufferForTests,
   __chunksForTests,
   __dropCachesForTests,
+  ackedCounts,
   adoptStoredState,
   flush,
   getState,
   health,
+  logNote,
+  noteAcked,
+  noteLog,
+  pendingNoteCids,
   persistNow,
   pushEvent,
   pushRRWebBatch,
@@ -52,6 +57,53 @@ describe('queue', () => {
     expect(__bufferForTests()).toHaveLength(0);
     expect(posts[0]!.headers.authorization).toBe('Bearer vkr_test');
     expect(posts[0]!.init.credentials).toBe('omit');
+  });
+
+  it('counts what the server acknowledged by kind, and which notes landed', async () => {
+    setState(liveSession());
+    pushEvent('nav', { url: '/' }, ROUTE);
+    pushRRWebBatch([{ type: 4, data: {} }, { type: 2, data: {} }], ROUTE);
+    pushEvent('click', {}, ROUTE);
+    pushEvent('note', { text: 'n', cid: 'c1' }, ROUTE);
+    // Allocation is async: a note may still wait for its seq, then sits in the buffer.
+    await Promise.resolve();
+    expect(pendingNoteCids()).toEqual(['c1']);
+    expect(noteAcked('c1')).toBe(false);
+    expect(await flush()).toBe(true);
+    expect(ackedCounts()).toEqual({ actions: 1, pages: 1, frames: 2, notes: 1 });
+    expect(noteAcked('c1')).toBe(true);
+    expect(pendingNoteCids()).toEqual([]);
+  });
+
+  it('queues a note while paused but drops the capture lanes', async () => {
+    setState({ ...liveSession(), paused: true });
+    expect(pushEvent('click', {}, ROUTE)).toBeNull();
+    expect(pushEvent('note', { text: 'paused thought', cid: 'p1' }, ROUTE)).not.toBeNull();
+    expect(await flush()).toBe(true);
+    const kinds = (eventsPosts()[0]!.body as { events: { kind: string }[] }).events.map((e) => e.kind);
+    expect(kinds).toEqual(['note']);
+  });
+
+  it('logs the live recording’s notes for the sheet and forgets them with the session', () => {
+    setState(liveSession());
+    const note = { cid: 'c1', text: 'hi', at: 1, route: '/', region: false };
+    logNote('sess-1', note);
+    expect(noteLog('sess-1')).toEqual([note]);
+    expect(noteLog('sess-2')).toEqual([]);
+    setState(null);
+    expect(noteLog('sess-1')).toEqual([]);
+  });
+
+  it('evicts the oldest note with its whole edit chain, never an original alone', () => {
+    setState(liveSession());
+    const n = (cid: string, replaces?: string) => ({ cid, text: cid, at: 1, route: '/', region: false, ...(replaces ? { replaces } : {}) });
+    logNote('sess-1', n('first'));
+    logNote('sess-1', n('first-v2', 'first'));
+    for (let i = 0; i < 199; i++) logNote('sess-1', n(`n${i}`));
+    const cids = noteLog('sess-1').map((x) => x.cid);
+    expect(cids).not.toContain('first');
+    expect(cids).not.toContain('first-v2');
+    expect(cids).toHaveLength(199);
   });
 
   it('keeps the buffer on a transient failure and schedules a retry', async () => {

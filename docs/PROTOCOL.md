@@ -161,6 +161,25 @@ attaches are sent; nothing is picked up on its own.
   (database `vitrinka.recorder.blobs`) so it survives a reload, and deleted
   once the server acknowledged its event, or when its session ends.
 
+### Note history: edits and references (web HUD 0.6)
+
+Every note and annotation the HUD sends carries a client id, `cid` (a random
+id minted in the browser; it names the note, nothing about the tester or the
+page). The notes sheet lists the recording's notes from the device: the
+recorder storage keeps each note's text, route, kind, region size and ids
+(key `notes`) for as long as the recording lives and drops them when it ends
+— a recorder token reads nothing back from the server. Two actions add fields
+to a NEW note event:
+
+- **Edit** sends the corrected note as a new `note` event with
+  `replaces: <cid of the note it corrects>`. The stream stays append-only:
+  the earlier event is never rewritten; the board shows the latest version
+  and keeps the earlier ones in the annotation's thread.
+- **Reference** adds `refs: [<cid>, …]` — the notes this one points at.
+
+A note written while the recording is paused is queued and sent, like any
+note (capture lanes stay off while paused).
+
 ## Redaction
 
 Capture redacts secrets **before anything is buffered or sent**, driven by

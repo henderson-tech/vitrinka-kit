@@ -2,16 +2,20 @@
  * The HUD's face: ONE glass pill whose faces are collapsible segments, so a
  * change of face tweens the pill's size instead of swapping boxes.
  *
- * - Idle: a puck — a hollow ring before the device is linked, a muted dot
- *   once it is — whose label (and the ⋯ menu button) slide out on intent.
+ * - Idle: a puck — a hollow ring before the device is linked, a red record
+ *   dot once it is — whose label (and the ⋯ menu button) slide out on intent;
+ *   "Starting…" while a Start boots (HUD polish D3/D11).
  * - Recording: the handle (rec dot + clock) that unfolds into the tray
- *   (sync chip · ⏸ ✎ ⌖ ■ ⋯) on hover, focus or tap and folds back ~2.5s
- *   after the pointer and focus leave. On the middle row it stands up into a
- *   vertical pill (a measured morph, see useMorph).
+ *   (⏸ ✎ ⌖ ■ ⋯) on hover, focus or tap and folds back ~2.5s after the
+ *   pointer and focus leave. The dot's ring is the sync state; the counts
+ *   float above while the tray is open (`Stats`, D4). On the middle row it
+ *   stands up into a vertical pill (a measured morph, see useMorph).
  * - Flows (flow.ts): the pill itself asks "Stop & save?" / "Unlink this
- *   device?", spins while saving, says "Saved · Open board" until dismissed,
- *   or says why it could not save (a bug report: "Sending…", "Sent",
- *   "Couldn't send"). Always horizontal.
+ *   device?", spins while saving, then follows the board's build — "Building
+ *   board · 3/5", "Board ready · Open board", "Board build failed · Retry" —
+ *   until Done (D1/D2), or says why it could not save (a bug report:
+ *   "Sending…", "Sent", "Couldn't send"). Always horizontal.
+ * - Remote: the recording runs in another tab — a quiet "in another tab".
  * - Tucked: a 6px edge tab.
  * The handle, the puck and the tab are the drag handles. Tooltips are
  * `data-tip` / `data-keys` on the triggers (Tooltip.tsx paints them).
@@ -30,7 +34,7 @@ import {
   useState,
 } from 'react';
 
-import type { HudRecording, HudSnapshot } from './controller';
+import type { HudRecording, HudSnapshot, HudSync } from './controller';
 import type { Flow } from './flow';
 import { saveProgress } from './flow';
 import {
@@ -40,6 +44,8 @@ import {
   CloseIcon,
   CircleCheckIcon,
   CloudOffIcon,
+  LayersIcon,
+  ListIcon,
   MoreIcon,
   NewTabIcon,
   PauseIcon,
@@ -62,13 +68,60 @@ const FOLD_TOUCH_MS = 4000;
 /** The orientation morph (a resize: `--duration-resize`). */
 const MORPH_MS = 300;
 
-export type Face = 'tab' | 'idle' | 'rec' | 'flow';
+export type Face = 'tab' | 'idle' | 'rec' | 'flow' | 'remote';
+
+/** What the clock says after a note: `queued` until the server has it, then `saved`. */
+export type Flash = 'queued' | 'saved' | null;
 
 /** Which face the pill shows. A flow wins over the recording it belongs to. */
 export function faceOf(snap: HudSnapshot, flow: Flow, place: Place): Face {
   if ('tuck' in place) return 'tab';
   if (flow.face !== 'none') return 'flow';
+  if (snap.following && snap.followingElsewhere) return 'remote';
   return snap.recording ? 'rec' : 'idle';
+}
+
+/** A note's client id (D6/D7): random, names the note and nothing else. */
+export function newCid(): string {
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** The sync state and counts as one sentence — the handle's description (D4). */
+function syncSentence(chip: SyncChip, a: HudSync['acked']): string {
+  return a ? `${chip.title} · ${a.actions} actions · ${a.frames} frames · ${a.notes} notes · ${a.pages} pages` : chip.title;
+}
+
+/** The details float's default face (D4): what reached vitrinka, by kind. */
+export function Stats({ sync, now }: { sync: HudSync; now: number }): ReactElement {
+  const chip = syncChip(sync, now);
+  const a = sync.acked;
+  return (
+    <span className="stats" data-e2e="sync-chip" data-kind={chip.kind}>
+      <span className="s-head">
+        <SyncGlyph chip={chip} />
+        {chip.kind === 'synced' ? 'on vitrinka' : chip.label}
+      </span>
+      {a ? (
+        <>
+          <i />
+          <span>
+            <b>{a.actions}</b> actions
+          </span>
+          <span>
+            <b>{a.frames}</b> frames
+          </span>
+          <span>
+            <b>{a.notes}</b> notes
+          </span>
+          <span>
+            <b>{a.pages}</b> pages
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
 }
 
 function reducedMotion(): boolean {
@@ -168,8 +221,8 @@ export interface RecorderPillProps {
   snap: HudSnapshot;
   now: number;
   flow: Flow;
-  /** A note or annotation was just accepted: the clock briefly says so. */
-  flash: boolean;
+  /** A note or annotation was just sent: the clock says `queued`, then briefly `Saved`. */
+  flash: Flash;
   composing: boolean;
   starting: boolean;
   menuOpen: boolean;
@@ -190,6 +243,15 @@ export interface RecorderPillProps {
   onCancel: () => void;
   onRetry: () => void;
   onDismiss: () => void;
+  /** Build the saved session's board again (a retryable failed build). */
+  onRetryBuild: (sessionId: string) => void;
+  /** The host implements `retryBuild`: only then does a failed build offer Retry. */
+  canRetryBuild: boolean;
+  /** The recording's tray unfolded or folded: the stats float follows it. */
+  onTrayOpen: (open: boolean) => void;
+  /** This recording's notes so far (the tray's notes button counts them, D5); absent = the host lists none. */
+  notesCount?: number;
+  onNotes: () => void;
 }
 
 export function RecorderPill(p: RecorderPillProps): ReactElement {
@@ -246,6 +308,9 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     else if (open) foldIn(FOLD_MS);
   }, [hold, open, cancelFold, foldIn]);
   const unfolded = open || (hold && face !== 'flow');
+  const trayShown = unfolded && face === 'rec';
+  const { onTrayOpen } = p;
+  useEffect(() => onTrayOpen(trayShown), [trayShown, onTrayOpen]);
 
   // Hover is read with NATIVE pointerenter/leave: React synthesises enter
   // from over/out pairs and drops an `over` whose related target belongs to
@@ -329,7 +394,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
   const bad = live === 'offline' || live === 'error';
   const state = bad ? 'bad' : !rec || rec.paused || rec.dead ? 'paused' : 'rec';
   const unlinked = !p.snap.linked;
-  const puckLabel = unlinked ? 'Link recorder' : 'Start recording';
+  const puckLabel = unlinked ? 'Link recorder' : p.starting ? 'Starting…' : 'Start recording';
   const confirming = p.flow.face === 'confirm';
   const dataFace = face === 'flow' && confirming && rec ? 'flow-rec' : face;
   const progress = saveProgress(p.flow, rec?.sync.queued ?? 0);
@@ -374,6 +439,18 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
     shownFlow.face === 'saved'
       ? (shownFlow.boardUrl ?? p.snap.recents.find((r) => r.sessionId === shownFlow.sessionId)?.boardUrl)
       : undefined;
+  // The board's build after a stop (D1): building → ready, or a failure the tester can retry.
+  const savedSession = shownFlow.face === 'saved' ? shownFlow.sessionId : undefined;
+  const proj = savedSession ? p.snap.recents.find((r) => r.sessionId === savedSession)?.projection : undefined;
+  const build: 'building' | 'ready' | 'failed' | 'empty' = savedUrl
+    ? 'ready'
+    : proj?.state === 'failed'
+      ? 'failed'
+      : proj?.state === 'empty'
+        ? 'empty'
+        : 'building';
+  const buildTotal = proj?.total ?? 0;
+  const buildProgress = buildTotal > 0 ? Math.min(1, Math.max(0, (proj?.done ?? 0) / buildTotal)) : null;
   const failure = shownFlow.face === 'failed' ? shownFlow.message : '';
   // A bug report's send: "Sending…", "Sent", "Couldn't send" — and it can always be retried.
   const report = 'report' in shownFlow && shownFlow.report === true;
@@ -387,7 +464,7 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
       data-face={dataFace}
       data-orient={orient}
       data-state={state}
-      data-open={unfolded && face !== 'flow' ? '' : undefined}
+      data-open={(unfolded || p.starting) && face !== 'flow' ? '' : undefined}
       onPointerDown={onTouch}
       onFocus={onFocus}
       onBlur={onBlur}
@@ -425,23 +502,28 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
         </button>
       </Seg>
       <Seg on={face === 'rec' || (confirming && rec !== null)} className="s-handle">
+        {/* The sync ring and the stats float are visual; this says both to assistive tech (D4). */}
+        <span id="vt-sync-desc" className="sr">
+          {chip ? syncSentence(chip, shownRec?.sync.acked) : ''}
+        </span>
         <button
           type="button"
           className="handle"
           aria-label="Recorder controls"
+          aria-describedby="vt-sync-desc"
           aria-expanded={unfolded && face === 'rec'}
           onClick={toggle}
           {...p.handle}
         >
-          <span className="dot" />
+          <span className="dot" data-sync={chip?.kind} />
           <span className="clock">
-            <Seg on={!p.flash} className="c-time">
+            <Seg on={p.flash === null} className="c-time">
               <span className="time">{shownRec ? fmtClock(elapsedOf(shownRec, p.now)) : '00:00'}</span>
             </Seg>
-            <Seg on={p.flash} className="c-flash">
-              <span className="flash" data-e2e="saved-flash">
-                <CheckIcon />
-                <span>Saved</span>
+            <Seg on={p.flash !== null} className="c-flash">
+              <span className="flash" data-e2e="saved-flash" data-word={p.flash ?? 'saved'}>
+                {p.flash === 'queued' ? <ArrowUpIcon /> : <CheckIcon />}
+                <span>{p.flash === 'queued' ? 'queued' : 'Saved'}</span>
               </span>
             </Seg>
           </span>
@@ -450,15 +532,17 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
       <Seg on={face === 'rec' && unfolded} className="s-tray">
         <div className="tools seg-row">
           <span className="sep" />
-          {chip ? (
-            <span className="sync" data-kind={chip.kind} data-tip={chip.title} role="status" aria-label={chip.title} data-e2e="sync-chip">
-              <span className="swap" key={`glyph-${chip.kind}`}>
-                <SyncGlyph chip={chip} />
-              </span>
-              <span className="word swap" key={`word-${chip.label}`}>
-                {chip.label}
-              </span>
-            </span>
+          {p.notesCount !== undefined ? (
+            <button
+              type="button"
+              className="tb b-notes"
+              aria-label={`History · ${p.notesCount}`}
+              data-tip="History"
+              onClick={p.onNotes}
+            >
+              <ListIcon />
+              {p.notesCount > 0 ? <span className="cnt">{p.notesCount}</span> : null}
+            </button>
           ) : null}
           <button
             type="button"
@@ -551,35 +635,81 @@ export function RecorderPill(p: RecorderPillProps): ReactElement {
         </div>
       </Seg>
       <Seg on={p.flow.face === 'saved'} className="s-saved">
-        <div className="flow saved" data-e2e="saved">
-          <span className="ok t-check" data-state={flowShown === 'saved' ? 'in' : undefined}>
-            <CheckIcon />
-          </span>
-          <span>{report ? 'Sent' : 'Saved'}</span>
-          {savedUrl ? (
-            <a
-              ref={(el) => {
-                savedRef.current = el;
-              }}
-              className="fb"
-              href={savedUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open board <NewTabIcon />
-            </a>
+        <div className="flow saved" data-e2e="saved" data-build={build}>
+          {build === 'building' ? (
+            <>
+              <LayersIcon />
+              <span>{report ? 'Sent · building board' : 'Building board'}</span>
+              {proj?.step ? <span className="muted step">{proj.step}</span> : null}
+              {buildTotal > 0 ? (
+                <span className="frac">
+                  {proj?.done ?? 0}/{buildTotal}
+                </span>
+              ) : null}
+              <span
+                className="bar-track"
+                data-indeterminate={buildProgress === null ? '' : undefined}
+                role="progressbar"
+                aria-label="Building the board"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={buildProgress === null ? undefined : Math.round(buildProgress * 100)}
+                style={{ '--p': String(buildProgress ?? 0) } as Record<string, string>}
+              >
+                <i />
+              </span>
+            </>
+          ) : build === 'failed' ? (
+            <>
+              <span className="warn">
+                <AlertIcon />
+              </span>
+              <span data-tip={proj?.error}>Board build failed</span>
+              <span className="sr">{proj?.error}</span>
+              {proj?.retryable && savedSession && p.canRetryBuild ? (
+                <button type="button" className="fb" onClick={() => p.onRetryBuild(savedSession)}>
+                  Retry
+                </button>
+              ) : null}
+            </>
           ) : (
-            <span className="muted">in Recents</span>
+            <>
+              <span className="ok t-check" data-state={flowShown === 'saved' ? 'in' : undefined}>
+                <CheckIcon />
+              </span>
+              <span>{build === 'ready' ? (report ? 'Sent' : 'Board ready') : report ? 'Sent' : 'Saved'}</span>
+              {savedUrl ? (
+                <a
+                  ref={(el) => {
+                    savedRef.current = el;
+                  }}
+                  className="fb primary"
+                  href={savedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open board <NewTabIcon />
+                </a>
+              ) : (
+                <span className="muted">nothing to build</span>
+              )}
+            </>
           )}
+          {/* D2: the exit says what it does — it dismisses this face, nothing more. */}
           <button
             ref={savedUrl ? undefined : (el) => void (savedRef.current = el)}
             type="button"
-            className="fb icon"
-            aria-label="Dismiss"
+            className="fb"
             onClick={p.onDismiss}
           >
-            <CloseIcon />
+            Done
           </button>
+        </div>
+      </Seg>
+      <Seg on={face === 'remote'} className="s-remote">
+        <div className="flow remote" data-e2e="recorder-remote">
+          <span className="dot" />
+          <span className="muted">Recording in another tab</span>
         </div>
       </Seg>
       <Seg on={p.flow.face === 'failed'} className="s-failed">

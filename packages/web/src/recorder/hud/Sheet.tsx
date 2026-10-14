@@ -1,15 +1,16 @@
 /**
  * The composer sheet — the extension's hud.html, as a component: 440px wide
  * by default, anchored to the dock (a bottom sheet on phones), a 14px textarea
- * (16px on touch, so iOS never zooms) that grows with the draft up to a cap
- * and then scrolls, a resize grip on the corner away from the dock (width
- * and cap are HUD prefs — resize.ts), ✕ in the title row, a three-column footer
- * (board|task · context · ↑ Send) and the hint line (hidden on touch). Enter sends, ⇧Enter newlines, Esc
- * cancels. The DRAFT is owned by the caller so a cancel keeps it until the
- * next send (recorder-hud-polish D3); the board|task choice resets on every
- * open — a destination is per observation, not a mode. The bug report is the
- * same sheet: a required description and "Mark on screen" in the board|task
- * slot.
+ * (16px on touch, so iOS never zooms) that grows with the draft and then
+ * scrolls, a resize grip on the corner away from the dock (width and the
+ * dragged height — a minimum — are HUD prefs, resize.ts), ✕ in the title
+ * row, the caller's `head` (what an annotation points at) under it and its
+ * `below` (↳ references) under the text, a footer (context · ↑ Send) and the
+ * hint line (hidden on touch). Enter sends, ⇧Enter newlines, Esc cancels.
+ * The DRAFT is owned by the caller so a cancel keeps it until the next send
+ * (recorder-hud-polish D3). Everything lands on the board — there is no
+ * destination to pick (HUD polish 2026-10-14). The bug report is the same
+ * sheet: a required description and "Mark on screen" left of the context.
  *
  * Images (recorder attachments), only when the caller passes `images`: the
  * paperclip beside Send picks them, an image paste on the textarea and a
@@ -26,6 +27,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactElement,
+  type ReactNode,
   type SetStateAction,
   useEffect,
   useRef,
@@ -78,16 +80,18 @@ export interface SheetProps {
   origin: string;
   title: string;
   ctx: string;
-  /** True when the sheet composes an annotation (shows board|task). */
-  pick: boolean;
+  /** Under the title: what the annotation points at (its crop or size · route chip, Reselect — HUD polish D9/D15). */
+  head?: ReactNode;
+  /** Under the text box: the notes this one references (↳ chips, D7). */
+  below?: ReactNode;
   draft: string;
   onDraft: (text: string) => void;
-  onSend: (text: string, task: boolean) => void;
+  onSend: (text: string) => void;
   onClose: () => void;
   placeholder?: string;
   /** Send stays off until the description has text. */
   required?: boolean;
-  /** Shows "Mark on screen" (instead of board|task): pick a region or element. */
+  /** Shows "Mark on screen": pick a region or element. */
   onMark?: () => void;
   /** Something is marked (the button reads pressed). */
   marked?: boolean;
@@ -120,7 +124,8 @@ export function Sheet({
   origin,
   title,
   ctx,
-  pick,
+  head,
+  below,
   draft,
   onDraft,
   onSend,
@@ -145,7 +150,6 @@ export function Sheet({
   const ta = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const size = useSheetSize({ sheet: pop, text: ta, width: sheetW, cap: sheetH, room, grip, onResize, onLayout });
-  const [task, setTask] = useState(false);
   const [refusal, setRefusal] = useState('');
   const [dropping, setDropping] = useState(false);
   useEffect(() => {
@@ -167,7 +171,7 @@ export function Sheet({
       ta.current?.focus();
       return;
     }
-    onSend(draft.trim(), task);
+    onSend(draft.trim());
   };
   // Normalize in order (the strip keeps the order they came in); the cap is
   // re-checked as each lands, so two quick adds never pass it. The work can
@@ -268,6 +272,7 @@ export function Sheet({
           <CloseIcon />
         </button>
       </div>
+      {head}
       <textarea
         ref={ta}
         placeholder={placeholder}
@@ -277,6 +282,7 @@ export function Sheet({
         onKeyDown={onTaKey}
         {...(onImages ? { onPaste } : {})}
       />
+      {below}
       {images && (images.length > 0 || busy > 0) ? (
         <ul className="atts" aria-label="Attached images">
           {images.map((image) => (
@@ -289,20 +295,11 @@ export function Sheet({
           ))}
         </ul>
       ) : null}
-      <div className={pick || onMark ? 'row' : 'row nodest'}>
+      <div className={onMark ? 'row' : 'row nodest'}>
         {onMark ? (
           <span className="dest">
             <button type="button" aria-pressed={marked} onClick={onMark}>
               Mark on screen
-            </button>
-          </span>
-        ) : pick ? (
-          <span className="dest" role="group" aria-label="Where this snap lands">
-            <button type="button" aria-pressed={!task} onClick={() => setTask(false)}>
-              board
-            </button>
-            <button type="button" aria-pressed={task} onClick={() => setTask(true)}>
-              task
             </button>
           </span>
         ) : null}
