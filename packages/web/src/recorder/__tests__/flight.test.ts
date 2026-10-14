@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, setSystemTime } from 'bun:test';
 import { type eventWithTime, EventType } from '@rrweb/types';
 
+import { setRedactionPolicy } from '../capture/redact';
 import { startFlightRRWeb, stopRRWeb } from '../capture/rrweb';
 import { configureRecorder } from '../config';
 import { flightActive, pushFlightRRWeb, startFlightBuffer, takeFlightClip } from '../flight';
@@ -247,6 +248,22 @@ describe('report', () => {
     const rows = stub.calls.filter((c) => c.path.endsWith('/events')).flatMap((c) => (c.body as { events: Row[] }).events);
     expect(rows.find((e) => e.kind === 'nav')?.payload).toEqual({ url: 'https://app.example.test/orders/:id?token=[redacted]', route: '/orders/:id' });
     expect(rows.find((e) => e.kind === 'note')?.payload).toMatchObject({ route: '/orders/:id' });
+  });
+
+  it('a report’s start route meets route-only rules: it is the raw path redacted, not the scrubbed href’s', async () => {
+    setSystemTime(new Date(T0));
+    wantFlight();
+    await syncFlight();
+    setRedactionPolicy({ patterns: ['^/orders/[0-9]+$'] });
+    startFlightRRWeb();
+    holdReport(true);
+    stub.calls.length = 0;
+    await sendReport({ text: 'Wrong total', rect: null, selector: '' });
+    const [, lanes] = stub.calls;
+    expect((lanes!.body as { events: { kind: string; payload?: unknown }[] }).events[0]).toMatchObject({
+      kind: 'nav',
+      payload: { url: HREF, route: '[redacted]' },
+    });
   });
 
   it('a report frozen over an empty buffer takes one checkout and opens on a full snapshot; with a window held it takes none', async () => {

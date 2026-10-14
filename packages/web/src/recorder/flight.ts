@@ -22,7 +22,8 @@
  */
 import type { eventWithTime } from '@rrweb/types';
 
-import { isMetaEvent } from './capture/redact';
+import { isMetaEvent, redactUrl } from './capture/redact';
+import { currentRoute } from './state';
 
 export const FLIGHT_CHECKOUT_MS = 30_000;
 export const FLIGHT_MAX_RRWEB_BYTES = 4 * 1024 * 1024;
@@ -48,6 +49,11 @@ export interface FlightWindow {
   bytes: number;
   /** The Meta event's (already redacted) page URL. */
   href: string;
+  /**
+   * The page's route when the window opened: the raw path through `redactUrl`,
+   * so route-only rules apply (never re-derived from the scrubbed `href`).
+   */
+  route: string;
 }
 
 /** What a report sends: oldest window first, lanes in capture order. */
@@ -115,7 +121,9 @@ export function pushFlightRRWeb(ev: eventWithTime): void {
   if (!active) return;
   const oldest = windows[0];
   if (isMetaEvent(ev)) {
-    windows.push({ events: [], bytes: 0, href: ev.data.href });
+    // rrweb stamps the Meta event synchronously: the document is still on its page.
+    const path = globalThis.location?.pathname ?? currentRoute.pathname;
+    windows.push({ events: [], bytes: 0, href: ev.data.href, route: redactUrl(path) });
     if (windows.length > 2) windows.shift();
   }
   const current = windows.at(-1);

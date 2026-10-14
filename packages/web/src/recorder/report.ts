@@ -202,14 +202,6 @@ function viewportRect(): ViewRect {
   return { x: 0, y: 0, w: globalThis.innerWidth || 0, h: globalThis.innerHeight || 0 };
 }
 
-function pathOf(href: string): string {
-  try {
-    return new URL(href).pathname;
-  } catch {
-    return redactedRoute();
-  }
-}
-
 function buildJob(clip: FlightClip, note: ReportNote): ReportJob {
   const tab = { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost };
   const events: RecorderEvent[] = [];
@@ -217,7 +209,7 @@ function buildJob(clip: FlightClip, note: ReportNote): ReportJob {
   const first = clip.windows[0];
   const startMs = first?.events[0]?.timestamp;
   if (first && startMs !== undefined) {
-    events.push({ seq: ++seq, ts: new Date(startMs).toISOString(), ...tab, kind: 'nav', payload: { url: first.href, route: pathOf(first.href) } });
+    events.push({ seq: ++seq, ts: new Date(startMs).toISOString(), ...tab, kind: 'nav', payload: { url: first.href, route: first.route } });
   }
   for (const e of clip.lanes) {
     events.push({ seq: ++seq, ts: e.ts, tabId: e.tabId, tabHost: e.tabHost, kind: e.kind, ...(e.payload ? { payload: e.payload } : {}) });
