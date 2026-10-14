@@ -65,7 +65,9 @@ function build(): HudSnapshot {
     version: RECORDER_ID,
     canReport: canReport(),
     canAttach: canAttach(),
-    ...(leadState.following ? { following: leadState.following } : {}),
+    ...(leadState.following
+      ? { following: leadState.following, followingElsewhere: leadStatus().claim?.by !== leadState.following }
+      : {}),
   };
 }
 

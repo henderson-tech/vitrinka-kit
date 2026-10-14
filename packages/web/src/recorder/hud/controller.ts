@@ -149,6 +149,13 @@ export interface HudSnapshot {
    * stays) and binds no shortcut. Absent = this HUD's host leads or is idle.
    */
   following?: 'page' | 'extension';
+  /**
+   * With `following`: the leader records in ANOTHER document (it holds no
+   * claim here), so this document shows no pill of its own — the HUD then
+   * shows a quiet "Recording in another tab" instead of hiding (HUD polish
+   * D11). False or absent: the leader's pill is in this document.
+   */
+  followingElsewhere?: boolean;
 }
 
 /** The pill's inline flow face (`hud/flow.ts`), as `faceChanged` reports it. */

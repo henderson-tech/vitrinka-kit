@@ -4,9 +4,12 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import type { HudSync } from '../hud/controller';
+import type { HudSnapshot, HudSync } from '../hud/controller';
 import { type Flow, flowReducer, NO_FLOW, saveProgress } from '../hud/flow';
+import { faceOf } from '../hud/RecorderPill';
+import type { Place } from '../hud/spots';
 import { SENDING_AFTER_MS, syncChip } from '../hud/status';
+import { projectionOf } from '../recents';
 
 describe('flow', () => {
   it('stop: ask → confirm → saving → saved, which stays until dismissed', () => {
@@ -97,5 +100,43 @@ describe('syncChip', () => {
       label: 'ended',
       title: 'session was deleted',
     });
+  });
+});
+
+describe('faces', () => {
+  const base = {
+    linked: true,
+    canUnlink: false,
+    annotating: false,
+    recording: null,
+    account: null,
+    prefs: { size: 'md', verbose: false, sheetW: 0, sheetH: 0 },
+    recents: [],
+    workspaceUrl: '',
+    version: 'web/test',
+  } as const satisfies HudSnapshot;
+  const spot = { spot: 'br' } as const satisfies Place;
+
+  it('a leader in another document shows the remote face; one in this document hides behind its own pill', () => {
+    expect(faceOf({ ...base, following: 'extension', followingElsewhere: true }, NO_FLOW, spot)).toBe('remote');
+    expect(faceOf({ ...base, following: 'extension', followingElsewhere: false }, NO_FLOW, spot)).toBe('idle');
+    expect(faceOf({ ...base, following: 'extension', followingElsewhere: true }, { face: 'confirm', action: 'stop' }, spot)).toBe('flow');
+  });
+});
+
+describe('projectionOf', () => {
+  it('reads the build progress the Building face paints, and ignores an unknown state', () => {
+    expect(projectionOf({ projection: { state: 'running', step: 'laying out', done: 3, total: 5 } })).toEqual({
+      state: 'running',
+      step: 'laying out',
+      done: 3,
+      total: 5,
+    });
+    expect(projectionOf({ projection: { state: 'failed', error: 'boom', retryable: true } })).toEqual({
+      state: 'failed',
+      error: 'boom',
+      retryable: true,
+    });
+    expect(projectionOf({ projection: { state: 'weird' } })).toBeUndefined();
   });
 });

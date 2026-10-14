@@ -44,7 +44,7 @@ import { type LinkPhase, LinkSheet } from './LinkSheet';
 import { listen } from './listen';
 import { Menu } from './Menu';
 import { alignFor, type FloatSide, towardCentre } from './place';
-import { RecorderPill } from './RecorderPill';
+import { type Flash, newCid, RecorderPill, Stats } from './RecorderPill';
 import { gripFor } from './resize';
 import { Sheet } from './Sheet';
 import { colOf, rowOf } from './spots';
@@ -82,6 +82,8 @@ function reportSheet(mark: Pick | null, recording: boolean): SheetState {
 const MIN_SAVING_MS = 700;
 /** How long the clock says "Saved" after a note or annotation. */
 const FLASH_MS = 1600;
+/** The HUD storage key that remembers the first-run hint was seen. */
+const HINTED_KEY = 'hud.hinted';
 
 /** A clock that ticks every second while `active` (the timer, ages, the sync chip). */
 function useNow(active: boolean): number {
@@ -125,7 +127,22 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   const [starting, setStarting] = useState(false);
   const [menu, setMenu] = useState(false);
   const [flow, dispatch] = useReducer(flowReducer, NO_FLOW);
-  const [flash, setFlash] = useState(false);
+  // The clock's word after a note (D11): `queued` until the server has it, then `saved`.
+  const [flash, setFlash] = useState<Flash>(null);
+  const [flashCid, setFlashCid] = useState<string | null>(null);
+  // The tray is unfolded on the recording face: the stats float shows (D4).
+  const [trayOpen, setTrayOpen] = useState(false);
+  // The first-run hint (D3): once per origin, the idle puck says what Start does.
+  const [hinted, setHinted] = useState(() => storage.getString(HINTED_KEY) === '1');
+  const hintRef = useRef<HTMLDivElement>(null);
+  const markHinted = useCallback(() => {
+    setHinted(true);
+    try {
+      storage.set(HINTED_KEY, '1');
+    } catch (e) {
+      console.warn('vitrinka: could not remember the first-run hint', e);
+    }
+  }, [storage]);
   const annotating = snap.annotating;
   const now = useNow(rec !== null || menu || flow.face !== 'none');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -232,11 +249,34 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     controller.setAnnotating(true);
   }, [sheet, controller]);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const saidSaved = useCallback(() => {
+  const sayFlash = useCallback((word: 'saved') => {
     clearTimeout(flashTimer.current);
-    setFlash(true);
-    flashTimer.current = setTimeout(() => setFlash(false), FLASH_MS);
+    setFlash(word);
+    flashTimer.current = setTimeout(() => setFlash(null), FLASH_MS);
   }, []);
+  // A note went out under `cid`: "queued" while its event waits, "Saved" once
+  // the server acknowledged it. A host that does not report pending notes
+  // (an older extension) says Saved at once, as before.
+  const saidSaved = useCallback(
+    (cid?: string) => {
+      const pending = controller.getSnapshot().recording?.sync.pendingNotes;
+      if (!cid || pending === undefined) {
+        setFlashCid(null);
+        sayFlash('saved');
+        return;
+      }
+      clearTimeout(flashTimer.current);
+      setFlashCid(cid);
+      setFlash('queued');
+    },
+    [controller, sayFlash],
+  );
+  const pendingNotes = rec?.sync.pendingNotes;
+  useEffect(() => {
+    if (flashCid === null || pendingNotes === undefined || pendingNotes.includes(flashCid)) return;
+    setFlashCid(null);
+    sayFlash('saved');
+  }, [flashCid, pendingNotes, sayFlash]);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
   // The frozen last minute lives while the report is composed (sheet open or
   // marking); any other close drops it. A send already took it.
@@ -299,18 +339,18 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
         fileReport({ text, rect: s.pick?.rect ?? null, selector: s.pick?.selector ?? '', ...attachments });
         return;
       }
+      const link = { cid: newCid() };
       if (s.pick) {
-        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, ...attachments });
+        controller.annotate({ text, rect: s.pick.rect, selector: s.pick.selector, ...attachments, link });
         setDraft('');
         setImages([]);
-        saidSaved();
+        saidSaved(link.cid);
       } else if (text || held.length) {
         // An image can BE the note: text may be empty when it carries one.
-        if (held.length) controller.note(text, held);
-        else controller.note(text);
+        controller.note(text, held.length ? held : undefined, link);
         setDraft('');
         setImages([]);
-        saidSaved();
+        saidSaved(link.cid);
       }
     },
     [sheet, controller, saidSaved, fileReport, images, reportImages],
@@ -387,6 +427,12 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
     if (failedReport) controller.holdReport?.(false);
     dispatch({ type: 'dismiss' });
   }, [failedReport, controller]);
+  const onRetryBuild = useCallback(
+    (sessionId: string) => {
+      controller.retryBuild?.(sessionId).catch((e: unknown) => console.warn('vitrinka: retry the board build —', errorText(e)));
+    },
+    [controller],
+  );
   const onRetry = useCallback(() => {
     // A refused Start has nothing to retry (and must never run a Stop).
     if (flow.face === 'failed' && flow.start) return;
@@ -596,10 +642,26 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
   useFloat(menuRef, anchor, side, align, menuP.mounted);
   const tucked = 'tuck' in dock.place;
   const line = rec ? healthLine(rec.sync, now) : '';
+  // The details float (D4): the stats pill while the tray is unfolded, the
+  // health line whenever something is wrong, everything in verbose mode.
   const detailOn =
-    rec !== null && (snap.prefs.verbose || line !== '') && !menu && !layerOpen && flow.face === 'none' && !dock.dragging && !tucked;
+    rec !== null &&
+    (snap.prefs.verbose || line !== '' || trayOpen) &&
+    !menu &&
+    !layerOpen &&
+    flow.face === 'none' &&
+    !dock.dragging &&
+    !tucked;
   const detailP = usePresence(detailOn, 150);
   useFloat(detailRef, anchor, side, align, detailP.mounted);
+  // A first recording, however it began (puck, shortcut, the hint), has taught it.
+  useEffect(() => {
+    if (rec && !hinted) markHinted();
+  }, [rec, hinted, markHinted]);
+  const hintOn =
+    !hinted && rec === null && snap.linked && following === null && !menu && !layerOpen && flow.face === 'none' && !dock.dragging && !tucked;
+  const hintP = usePresence(hintOn, 150);
+  useFloat(hintRef, anchor, side, align, hintP.mounted);
   const lastRec = useRef(rec);
   if (rec) lastRec.current = rec;
   const detailRec = rec ?? lastRec.current;
@@ -663,8 +725,11 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
       : { 'data-row': rowOf(place.spot), 'data-col': colOf(place.spot) };
 
   // A remote shows nothing (D7: one pill per document) — except a refused
-  // Start's face, which says why the pill steps aside until it is dismissed.
-  const hidden = following !== null && !(flow.face === 'failed' && flow.start === true);
+  // Start's face, which says why the pill steps aside until it is dismissed,
+  // and a leader in ANOTHER document: this one would otherwise show no
+  // recorder at all, so the pill says where the recording is (HUD polish D11).
+  const hidden =
+    following !== null && snap.followingElsewhere !== true && !(flow.face === 'failed' && flow.start === true);
 
   return (
     <div
@@ -701,6 +766,8 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
           onCancel={onCancel}
           onRetry={onRetry}
           onDismiss={onDismiss}
+          onRetryBuild={onRetryBuild}
+          onTrayOpen={setTrayOpen}
         />
       </div>
       {menuP.mounted ? (
@@ -751,9 +818,32 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
               </dl>
               {line ? <div className="warnline">{line}</div> : null}
             </>
-          ) : (
+          ) : line ? (
             line
+          ) : (
+            <Stats sync={detailRec.sync} now={now} />
           )}
+        </div>
+      ) : null}
+      {hintP.mounted ? (
+        <div ref={hintRef} className={`float firstrun pop grow ${hintP.cls}`} role="dialog" aria-label="Record this session">
+          <b>Record this session</b>
+          <p>Clicks, pages, network and your notes go to a vitrinka board. Nothing is captured until you start.</p>
+          <div className="row2">
+            <button
+              type="button"
+              className="fb primary"
+              onClick={() => {
+                markHinted();
+                onStart();
+              }}
+            >
+              Start recording
+            </button>
+            <button type="button" className="fb" onClick={markHinted}>
+              Got it
+            </button>
+          </div>
         </div>
       ) : null}
       {sheetEl && portal ? createPortal(sheetEl, portal.mount) : null}

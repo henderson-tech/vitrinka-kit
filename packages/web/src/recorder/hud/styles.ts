@@ -112,8 +112,11 @@ textarea, .code { user-select:text; -webkit-user-select:text; }
 .dock[data-col="r"] .puck { flex-direction:row-reverse; }
 .ring { width:10px; height:10px; flex:none; border-radius:50%; box-shadow:inset 0 0 0 1.5px var(--fg-2);
   transition: background-color var(--duration-quick) var(--ease-out), box-shadow var(--duration-quick) var(--ease-out); }
-.puck[data-state="ready"] .ring { background:var(--fg-2); box-shadow:none; }
-.puck[data-state="busy"] .ring { background:var(--fg-3); box-shadow:none; animation:breathe 1.2s var(--ease-in-out) infinite; }
+/* ready = a red record dot (HUD polish D3): the puck reads as the action that starts a recording */
+.puck[data-state="ready"] .ring { background:var(--rec); box-shadow:none; }
+.puck[data-state="busy"] .ring { background:var(--rec); box-shadow:none; animation:breathe 1.2s var(--ease-in-out) infinite; }
+/* the idle ⋯ keeps the tray's inset from the pill's round end */
+.s-more > .seg-in { padding-left:3px; padding-right:3px; }
 @keyframes breathe { 50% { opacity:.35; } }
 .lab { display:grid; grid-template-columns:0fr; opacity:0;
   transition: grid-template-columns var(--duration-resize) var(--ease-smooth-out), opacity var(--duration-quick) var(--ease-out); }
@@ -127,7 +130,7 @@ textarea, .code { user-select:text; -webkit-user-select:text; }
 .pill[data-open] .lab, .puck:focus-visible .lab { grid-template-columns:1fr; opacity:1; }
 .puck:focus-visible, .handle:focus-visible { outline:2px solid var(--rec); outline-offset:2px; }
 @media (hover: hover) {
-  .puck[data-state="ready"]:hover .ring { background:var(--rec); }
+  .puck[data-state="ready"]:hover .ring { box-shadow:0 0 0 3px var(--rec-soft); }
   .puck[data-state="unlinked"]:hover .ring { box-shadow:inset 0 0 0 1.5px var(--fg); }
 }
 
@@ -165,20 +168,20 @@ button.tb:focus-visible { outline:2px solid var(--rec); outline-offset:-2px; }
   button.tb.b-stop:hover { background:var(--rec-soft); color:var(--rec); }
 }
 
-/* the sync chip: legible at a glance — icon + word, colour by state */
-.sync { display:inline-flex; align-items:center; gap:4px; height:var(--b); padding:0 7px 0 5px; margin-right:2px; border-radius:999px;
-  font-size:var(--fs-s); font-weight:600; line-height:1; white-space:nowrap; color:var(--fg-3); background:transparent;
-  transition: color var(--duration-quick) var(--ease-out), background-color var(--duration-quick) var(--ease-out); }
-.sync svg { font-size:calc(var(--ic) * .95); }
-.sync[data-kind="synced"] svg { color:var(--ok); }
-.sync[data-kind="sending"] { color:var(--fg-2); }
-.sync[data-kind="offline"] { color:var(--warn); background:rgba(240,166,58,.12); }
-.sync[data-kind="error"] { color:var(--rec); background:var(--rec-soft); }
-.sync .swap { display:inline-flex; animation:swap-in var(--duration-quick) var(--ease-in-out) both; }
-.pill[data-orient="v"] .sync { width:var(--b); padding:0; margin:0 0 2px; justify-content:center; }
-.pill[data-orient="v"] .sync .word { display:none; }
-.dock[data-col="r"] .pill[data-orient="h"] .sync { margin:0 0 0 2px; }
-@keyframes swap-in { from { opacity:0; transform:translateY(var(--distance-micro)); filter:blur(var(--blur-small)); } }
+/* sync (HUD polish D4): a ring on the rec dot — green synced, amber sending, warn offline, red ended;
+   the counts ride the details float (.stats) while the tray is open */
+.dot[data-sync] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--ok);
+  transition: box-shadow var(--duration-quick) var(--ease-out); }
+.dot[data-sync="sending"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--fg-3); }
+.dot[data-sync="offline"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--warn); }
+.dot[data-sync="error"] { box-shadow:0 0 0 2px var(--ink-solid), 0 0 0 3.5px var(--rec); }
+.stats { display:inline-flex; align-items:center; gap:10px; white-space:nowrap; font-weight:600; color:var(--fg-3); }
+.stats .s-head { display:inline-flex; align-items:center; gap:5px; color:var(--ok); }
+.stats[data-kind="sending"] .s-head { color:var(--fg-2); }
+.stats[data-kind="offline"] .s-head { color:var(--warn); }
+.stats[data-kind="error"] .s-head { color:var(--rec); }
+.stats > i { width:1px; height:12px; background:var(--edge); }
+.stats b { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums; }
 .spin { animation:spin .9s var(--ease-linear) infinite; transform-origin:50% 50%; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
@@ -211,7 +214,21 @@ button.tb:focus-visible { outline:2px solid var(--rec); outline-offset:-2px; }
 .bar-track[data-indeterminate] > i { width:35%; animation:slide 1.1s var(--ease-in-out) infinite; }
 @keyframes slide { from { transform:translateX(-100%); } to { transform:translateX(290%); } }
 .saved .ok { display:inline-flex; color:var(--ok); }
-.failed .warn { display:inline-flex; color:var(--warn); }
+.saved .warn, .failed .warn { display:inline-flex; color:var(--warn); }
+/* the board's build (D1): Building board · step · k/n over the save's bar */
+.saved[data-build="building"] { position:relative; }
+.saved[data-build="building"] > svg { color:var(--fg-2); }
+.flow .step { max-width:calc(150px * var(--s)); overflow:hidden; text-overflow:ellipsis; }
+.flow .frac { color:var(--fg-2); font-variant-numeric:tabular-nums; }
+.flash[data-word="queued"] { color:var(--fg-2); }
+/* the first-run hint (D3): once, beside the idle puck */
+.firstrun { width:calc(240px * var(--s)); padding:calc(11px * var(--s)) calc(12px * var(--s)); font-size:calc(var(--fs) - .5px); line-height:1.4; color:var(--fg-2); }
+.firstrun b { display:block; margin-bottom:3px; color:var(--fg); font-size:var(--fs); }
+.firstrun p { margin:0; }
+.firstrun .row2 { display:flex; gap:6px; margin-top:9px; }
+/* a recording in another tab (D11): the dot and where it is, nothing to press */
+.flow.remote { padding-right:calc(var(--h) * .42); }
+.flow.remote .dot { margin-right:2px; }
 .failed .msg { max-width:calc(220px * var(--s)); overflow:hidden; text-overflow:ellipsis; }
 
 /* the success check (transitions.dev 10, tuned to a 13px glyph) */
