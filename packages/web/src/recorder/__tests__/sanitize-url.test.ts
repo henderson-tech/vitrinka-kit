@@ -128,12 +128,13 @@ describe('sanitizeUrl', () => {
   it('a sanitizer that throws or returns a non-string records the origin, or [redacted] — never the raw URL', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: () => { throw new Error('boom'); } });
+      configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: (url) => { throw new Error(`cannot sanitize ${url}`); } });
       setState(liveSession());
       noteNavigation(true);
       expect(payloads('nav')[0]).toEqual({ url: 'https://app.example.test', route: '[redacted]', spa: true });
       expect(redactUrl('/api/reset-password/s3cr3t')).toBe('[redacted]');
-      expect(warn).toHaveBeenCalledTimes(1);
+      // Once, and never the thrown value: it quotes the secret URL.
+      expect(warn.mock.calls).toEqual([['vitrinka: sanitizeUrl threw Error — such URLs are recorded as their origin only']]);
       configureRecorder({ url: `${BASE}/`, key: 'vkr_test', sanitizeUrl: () => undefined as unknown as string });
       expect(redactUrl(PAGE)).toBe('https://app.example.test');
       expect(redactUrl('about:blank')).toBe('[redacted]');

@@ -81,17 +81,18 @@ let reportedSanitizer: unknown = null;
 function sanitizeUrl(url: string): string {
   const sanitize = recorderConfig().sanitizeUrl;
   if (!sanitize) return url;
-  let failure: unknown;
+  let failure: string;
   try {
     const out: unknown = sanitize(url);
     if (typeof out === 'string') return out;
-    failure = new TypeError(`sanitizeUrl returned ${typeof out}, not a string`);
+    failure = `returned ${typeof out}`;
   } catch (e) {
-    failure = e;
+    // Never the thrown value itself: it may quote the very URL it could not handle.
+    failure = `threw ${e instanceof Error ? e.name : typeof e}`;
   }
   if (reportedSanitizer !== sanitize) {
     reportedSanitizer = sanitize;
-    console.warn('vitrinka: sanitizeUrl failed — such URLs are recorded as their origin only', failure);
+    console.warn(`vitrinka: sanitizeUrl ${failure} — such URLs are recorded as their origin only`);
   }
   return originOf(url) ?? REDACTED;
 }
