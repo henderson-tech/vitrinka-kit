@@ -3,8 +3,7 @@
  * "vitrinka:" and skipped, or a failed flush would feed itself forever.
  */
 import { pushEvent } from '../queue';
-import { currentRoute } from '../state';
-import { redactText } from './redact';
+import { eventRoute, redactText } from './redact';
 
 const TEXT_CAP = 8 * 1024;
 
@@ -33,7 +32,7 @@ export function patchConsole(): void {
         if (text.startsWith('vitrinka:')) return;
         // Logged objects routinely carry tokens/headers — same redaction pass
         // as network bodies.
-        pushEvent('console', { level, text: redactText(text) }, { ...currentRoute });
+        pushEvent('console', { level, text: redactText(text) }, eventRoute());
       } catch {
         // capture must never break logging
       }

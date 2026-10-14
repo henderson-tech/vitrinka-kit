@@ -18,7 +18,7 @@ import { Platform } from 'react-native';
 
 import type { SessionDone } from '../protocol';
 import { api, fetchPolicy, permanentStatus, VitrinkaApiError } from './api';
-import { setRedactionPolicy } from './capture/redact';
+import { eventRoute, setRedactionPolicy } from './capture/redact';
 import type { HeldShot } from './capture/shot';
 import {
   armReconcile,
@@ -40,7 +40,7 @@ import {
 // native-import-free state module (capture layers import them from there).
 export { currentRoute, notify, subscribe } from './state';
 
-import { currentRoute, notify } from './state';
+import { notify } from './state';
 
 // Wire shape from ../protocol, re-exported for existing callers.
 export type { SessionDone } from '../protocol';
@@ -196,7 +196,8 @@ export async function startSession(opts: StartOptions = {}): Promise<SessionStat
   await attachTags(ses.id, opts.tags);
   armReconcile();
   armIdleStop();
-  pushEvent('nav', { route: currentRoute.tabHost }, { ...currentRoute });
+  const route = eventRoute();
+  pushEvent('nav', { route: route.tabHost }, route);
   notify();
   return getState() as SessionState;
 }
@@ -309,7 +310,7 @@ export async function togglePause(): Promise<boolean> {
 }
 
 export function addNote(text: string): void {
-  pushEvent('note', { text }, { ...currentRoute });
+  pushEvent('note', { text }, eventRoute());
 }
 
 /** A marquee rect in VIEW points (as the gesture reported it). */
@@ -350,7 +351,7 @@ export function addAnnotation(text: string, rect: ViewRect, held: HeldShot): voi
     w: Math.round(rect.w * s),
     h: Math.round(rect.h * s),
   };
-  const ts = pushEvent('note', { text, rect: px, annotate: true }, { ...currentRoute });
+  const ts = pushEvent('note', { text, rect: px, annotate: true }, eventRoute());
   // A dropped note (session ended / paused mid-compose) must not emit an
   // orphan keyframe — the rect would have nothing binding to it.
   if (ts) held.commit(ts);

@@ -5,8 +5,13 @@
  * and it is what `session.ts` re-exports, so callers keep one import site.
  */
 
-/** Current route, maintained by the nav capture layer; used by every event. */
-export const currentRoute = { tabId: 'root', tabHost: '/' };
+/**
+ * Current route, maintained by the nav capture layer, RAW: the pathname as the
+ * app reported it, for on-device chrome (the idle-grip opt-out). Events never
+ * carry it as is: they stamp `eventRoute()` (capture/redact), the pathname
+ * through the host's `sanitizeUrl` and the redaction engine.
+ */
+export const currentRoute = { lane: 'root', pathname: '/' };
 
 /**
  * Update the current route (called by RecorderProvider when its `route` prop
@@ -15,9 +20,9 @@ export const currentRoute = { tabId: 'root', tabHost: '/' };
  * Returns true when the route actually changed.
  */
 export function setCurrentRoute(pathname: string, lane: string): boolean {
-  if (currentRoute.tabHost === pathname && currentRoute.tabId === lane) return false;
-  currentRoute.tabId = lane;
-  currentRoute.tabHost = pathname;
+  if (currentRoute.pathname === pathname && currentRoute.lane === lane) return false;
+  currentRoute.lane = lane;
+  currentRoute.pathname = pathname;
   notify();
   return true;
 }
