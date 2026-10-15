@@ -80,8 +80,8 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
 ## The doors
 
 - **Project settings**: `get` / `update {kind:"project_settings"}` share the
-  human settings door. Read before writing: omitted fields stay; `types`
-  and `commits` replace their whole section. Empty `historyTheme` restores
+  human settings door. Read before writing: omitted fields stay; `domains`,
+  `apps`, `types` and `commits` replace their whole section. Empty `historyTheme` restores
   the house look; empty `types` clears overrides.
 - **Intake is the ONLY way a draft becomes a task**: `propose_tasks`
   (deduped, `list {kind:"intake"}` shows the verdict) → a human's
