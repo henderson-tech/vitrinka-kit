@@ -198,6 +198,15 @@ test("annotate serializes attachments beside the vt-snap payload", async () => {
     attachments: [{ name: "expected.webp", dataUrl: "data:image/webp;base64,cGl4ZWxz", w: 20, h: 10 }] });
 });
 
+test("History reads the worker's accepted notes under this document's generation", async () => {
+  const rec = recorder(masked, { inject: { generation: "history", sessionId: "1", state: "recording" } });
+  await rec.start();
+  const notes = [{ cid: "other-tab", text: "Accepted elsewhere", at: 1, route: "/other", region: false }];
+  rec.runtime.sendMessage = (msg, callback) => { rec.messages.push(msg); callback({ ok: true, notes }); };
+  expect(await rec.controller.listNotes()).toEqual(notes);
+  expect(rec.messages.at(-1)).toEqual({ type: "vt-notes", generation: "history" });
+});
+
 // ONE recorder (extension + page recorder decisions 2026-10-12).
 const inject = { generation: "gen-1", sessionId: "1", state: "recording" };
 const page = { from: "page", inst: "p.synthetic" };

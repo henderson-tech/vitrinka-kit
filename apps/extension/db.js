@@ -34,8 +34,9 @@ const DB_NAME = "vitrinka-recorder";
 // v2 re-keyed the store to [sessionId, seq]; a keyPath cannot be altered in
 // place, so the upgrade drops and recreates. Only a pre-release build of this
 // same PR can hold a v1 store — nothing shipped on v1.
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = "queue";
+const NOTES = "notes";
 
 let dbPromise = null;
 
@@ -43,10 +44,14 @@ function openDB() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
-      if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
-      db.createObjectStore(STORE, { keyPath: ["sessionId", "seq"] });
+      if (event.oldVersion < 2) {
+        if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+        db.createObjectStore(STORE, { keyPath: ["sessionId", "seq"] });
+      }
+      // v3 is additive: never recreate a shipped v2 queue during upgrade.
+      if (!db.objectStoreNames.contains(NOTES)) db.createObjectStore(NOTES, { keyPath: ["sessionId", "seq"] });
     };
     req.onsuccess = () => {
       // A version change from another context (options page upgrading) must
@@ -101,21 +106,47 @@ export const vtdb = {
   // committed: all of them land or none do. A note and the attachment events
   // it names are one fact — a worker killed between two puts must never leave
   // images on disk whose note is gone.
-  async putAll(items) {
+  async putAll(items, note = null) {
     for (const item of items) {
       if (!item.sessionId || !item.seq) throw new Error("vtdb.putAll: sessionId and seq are required");
     }
     const recs = items.map((item) => ({ ...item, bytes: sizeOf(item), needsBlob: item.blob ? 1 : 0 }));
     const db = await openDB();
-    const t = db.transaction(STORE, "readwrite");
+    const t = db.transaction(note ? [STORE, NOTES] : [STORE], "readwrite");
     const done = new Promise((resolve, reject) => {
       t.oncomplete = () => resolve();
       t.onabort = () => reject(t.error || new Error("vtdb.putAll: transaction aborted"));
     });
     const store = t.objectStore(STORE);
-    for (const rec of recs) store.put(rec);
+    try {
+      for (const rec of recs) store.put(rec);
+      if (note) t.objectStore(NOTES).put(note);
+    } catch (error) {
+      t.abort(); // a synchronous clone/key error must roll back earlier puts too
+      await done.catch(() => {}); // consume our deliberate abort; preserve its cause below
+      throw error;
+    }
     await done;
     return recs;
+  },
+
+  // History outlives queue draining, but never the recording that owns it.
+  // One append per accepted note; the full log is read only when opened.
+  async notes(sessionId, generation) {
+    const db = await openDB();
+    const rows = await wrap(db.transaction(NOTES, "readonly").objectStore(NOTES).getAll(sessionRange(sessionId)));
+    return rows.filter((row) => row.generation === generation).map((row) => row.note);
+  },
+
+  async clearNotes() {
+    const db = await openDB();
+    const t = db.transaction(NOTES, "readwrite");
+    const done = new Promise((resolve, reject) => {
+      t.oncomplete = () => resolve();
+      t.onabort = () => reject(t.error || new Error("vtdb.clearNotes: transaction aborted"));
+    });
+    t.objectStore(NOTES).clear();
+    await done;
   },
 
   // head returns THIS session's oldest `limit` items in seq order — the
@@ -214,12 +245,26 @@ export const vtdb = {
     const db = await openDB();
     const store = tx(db, "readwrite");
     const n = await wrap(store.count(sessionRange(sessionId)));
-    await wrap(tx(db, "readwrite").delete(sessionRange(sessionId)));
+    const t = db.transaction([STORE, NOTES], "readwrite");
+    const done = new Promise((resolve, reject) => {
+      t.oncomplete = () => resolve();
+      t.onabort = () => reject(t.error || new Error("vtdb.dropSession: transaction aborted"));
+    });
+    t.objectStore(STORE).delete(sessionRange(sessionId));
+    t.objectStore(NOTES).delete(sessionRange(sessionId));
+    await done;
     return n;
   },
 
   async clear() {
     const db = await openDB();
-    await wrap(tx(db, "readwrite").clear());
+    const t = db.transaction([STORE, NOTES], "readwrite");
+    const done = new Promise((resolve, reject) => {
+      t.oncomplete = () => resolve();
+      t.onabort = () => reject(t.error || new Error("vtdb.clear: transaction aborted"));
+    });
+    t.objectStore(STORE).clear();
+    t.objectStore(NOTES).clear();
+    await done;
   },
 };

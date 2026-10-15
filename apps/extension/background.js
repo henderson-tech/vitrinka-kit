@@ -74,6 +74,13 @@ async function getState() {
 }
 async function setState(rec) {
   await chrome.storage.local.set({ rec });
+  if (!rec) await vtdb.clearNotes();
+}
+
+// One recording's accepted notes, shared by every tab and retained across MV3
+// worker wakes. Reads and writes take withLock alongside the queue and Stop.
+async function notesFor(rec) {
+  return vtdb.notes(rec.sessionId, rec.generation);
 }
 
 // Continue reopens the same server id but starts a new local recording.
@@ -683,7 +690,7 @@ async function attachmentsOf(list) {
 // write happens INSIDE the lock and as one transaction: the images and their
 // note land together or not at all, and Stop's freeze (which takes this lock)
 // only reaches its drain once they are on disk.
-async function pushNote(startedIn, tabId, payload, files, keep) {
+async function pushNote(startedIn, tabId, payload, files, keep, regionSize = payload.rect) {
   const queued = await withLock(async () => {
     const cur = await getState();
     if (!capturing(cur) || !sameRecording(cur, startedIn)) return false;
@@ -709,7 +716,15 @@ async function pushNote(startedIn, tabId, payload, files, keep) {
         sessionId: cur.sessionId, seq: cur.seq, ts, tabId: tab.id, tabHost: tab.host, kind: "note",
         payload: seqs.length ? { ...payload, attachments: seqs } : payload,
       },
-    ]);
+    ], typeof payload.cid === "string" && payload.cid ? {
+      sessionId: cur.sessionId, generation: cur.generation, seq: cur.seq,
+      note: {
+        cid: payload.cid, text: payload.text || "", at: Date.parse(ts), route: payload.route || "", region: !!payload.annotate,
+        ...(payload.annotate && regionSize ? { w: regionSize.w, h: regionSize.h } : {}),
+        ...(typeof payload.replaces === "string" ? { replaces: payload.replaces } : {}),
+        ...(Array.isArray(payload.refs) && payload.refs.length ? { refs: payload.refs.filter((r) => typeof r === "string").slice(0, 10) } : {}),
+      },
+    } : null);
     return true;
   });
   if (queued) scheduleFlush();
@@ -2929,6 +2944,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url });
         }
         return sendResponse({ ok: true });
+      case "vt-notes":
+        return sendResponse(await withLock(async () => {
+          const rec = await getState();
+          const notes = tab && rec && !rec.stopping && sentFor(msg, rec) ? await notesFor(rec) : null;
+          return { ok: true, notes };
+        }));
       case "vt-note":
         if (tab) {
           // Fixed before the images decode (pushNote refuses any other).
@@ -2957,8 +2978,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             ...(Array.isArray(p.refs) ? { refs: p.refs.filter((r) => typeof r === "string").slice(0, 10) } : {}),
           };
           await pushNote(startedIn, sender.tab.id,
-            { text: p.note, rect: p.rect, selector: p.selector, annotate: true, ...link },
-            await attachmentsOf(msg.attachments), !!p.note);
+            { text: p.note, route: msg.route, rect: p.rect, selector: p.selector, annotate: true, ...link },
+            await attachmentsOf(msg.attachments), !!p.note, msg.regionSize || p.rect);
           lastShot = 0; // a deliberate snap always captures
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true }, startedIn);
         }
