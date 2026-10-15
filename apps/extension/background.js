@@ -74,14 +74,13 @@ async function getState() {
 }
 async function setState(rec) {
   await chrome.storage.local.set({ rec });
-  if (!rec) await chrome.storage.session.remove("notesLog");
+  if (!rec) await vtdb.clearNotes();
 }
 
 // One recording's accepted notes, shared by every tab and retained across MV3
 // worker wakes. Reads and writes take withLock alongside the queue and Stop.
 async function notesFor(rec) {
-  const { notesLog } = await chrome.storage.session.get("notesLog");
-  return sameRecording(notesLog, rec) ? notesLog.notes : [];
+  return vtdb.notes(rec.sessionId, rec.generation);
 }
 
 // Continue reopens the same server id but starts a new local recording.
@@ -717,17 +716,15 @@ async function pushNote(startedIn, tabId, payload, files, keep, regionSize = pay
         sessionId: cur.sessionId, seq: cur.seq, ts, tabId: tab.id, tabHost: tab.host, kind: "note",
         payload: seqs.length ? { ...payload, attachments: seqs } : payload,
       },
-    ]);
-    if (typeof payload.cid === "string" && payload.cid) {
-      const notes = await notesFor(cur);
-      notes.push({
+    ], typeof payload.cid === "string" && payload.cid ? {
+      sessionId: cur.sessionId, generation: cur.generation, seq: cur.seq,
+      note: {
         cid: payload.cid, text: payload.text || "", at: Date.parse(ts), route: payload.route || "", region: !!payload.annotate,
         ...(payload.annotate && regionSize ? { w: regionSize.w, h: regionSize.h } : {}),
         ...(typeof payload.replaces === "string" ? { replaces: payload.replaces } : {}),
         ...(Array.isArray(payload.refs) && payload.refs.length ? { refs: payload.refs.filter((r) => typeof r === "string").slice(0, 10) } : {}),
-      });
-      await chrome.storage.session.set({ notesLog: { sessionId: cur.sessionId, generation: cur.generation, notes } });
-    }
+      },
+    } : null);
     return true;
   });
   if (queued) scheduleFlush();

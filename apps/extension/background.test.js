@@ -8,7 +8,7 @@ const source = readFileSync(new URL("./background.js", import.meta.url), "utf8")
   .replace(/^import .*;$/gm, "").replace(/^boot\(\);$/m, "");
 const deferred = () => { let resolve; const promise = new Promise((res) => { resolve = res; }); return { promise, resolve }; };
 const clone = (value) => structuredClone(value);
-function worker({ response = { policy: null }, status = 200, session = {} } = {}) {
+function worker({ response = { policy: null }, status = 200, history = [] } = {}) {
   const data = { base: "https://synthetic.test", workspace: "qa", captureNetwork: false,
     rec: { sessionId: 1, generation: "first", tabs: {}, seq: 0 } };
   const writes = [], captures = [], requests = [];
@@ -22,7 +22,12 @@ function worker({ response = { policy: null }, status = 200, session = {} } = {}
       const at = writes.findIndex((i) => i.sessionId === item.sessionId && i.seq === item.seq);
       writes.splice(at < 0 ? writes.length : at, at < 0 ? 0 : 1, { ...item, needsBlob: item.blob ? 1 : 0 });
     },
-    putAll: async (items) => { for (const item of items) writes.push({ ...item, needsBlob: item.blob ? 1 : 0 }); },
+    putAll: async (items, note) => {
+      for (const item of items) writes.push({ ...item, needsBlob: item.blob ? 1 : 0 });
+      if (note) history.push(clone(note));
+    },
+    notes: async (sessionId, generation) => history.filter((n) => n.sessionId === sessionId && n.generation === generation).map((n) => clone(n.note)),
+    clearNotes: async () => { history.length = 0; },
     stats: async () => ({ count: writes.length }), sessionStats: async () => ({ count: writes.length, maxSeq: 0 }),
     head: async (sessionId, limit) => writes.filter((i) => i.sessionId === sessionId).sort((a, b) => a.seq - b.seq).slice(0, limit).map((i) => ({ ...i })),
     resolveBlob: async (sessionId, seq, blobKey) => {
@@ -56,9 +61,9 @@ function worker({ response = { policy: null }, status = 200, session = {} } = {}
         set: async (values) => { if (beforeSet) await beforeSet(values); Object.assign(data, clone(values)); },
         remove: async (keys) => { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
       }, session: {
-        get: async (key) => ({ [key]: clone(session[key]) }),
-        set: async (values) => Object.assign(session, clone(values)),
-        remove: async (key) => { delete session[key]; },
+        get: async () => { throw new Error("session storage quota exceeded"); },
+        set: async () => { throw new Error("session storage quota exceeded"); },
+        remove: async () => {},
       } },
       tabs: { get: async () => ({ active: true, windowId: 1 }), captureVisibleTab: async () => { captures.push(true); return "data:image/png;base64,AA=="; }, onActivated: event(), onRemoved: event(),
         query: async (q) => tabs.filter((t) => !q.active || t.active),
@@ -176,11 +181,11 @@ const attachedWorker = (options) => {
 };
 
 test("History shares accepted notes across tabs and worker wakes, then clears at session end", async () => {
-  const session = {};
-  const w = attachedWorker({ session });
+  const history = [];
+  const w = attachedWorker({ history });
   w.data.rec.tabs["8"] = { id: "tab2", host: "app.test" };
-  w.call("shoot = async () => {}");
-  await w.message({ type: "vt-note", generation: "first", payload: { text: "First", cid: "c1", route: "/first" } });
+  w.call("shoot = async () => { globalThis.didShoot = true; }");
+  expect(await w.message({ type: "vt-note", generation: "first", payload: { text: "First", cid: "c1", route: "/first" } })).toEqual({ ok: true });
   await w.message({ type: "vt-snap", generation: "first", route: "/second", regionSize: { w: 30, h: 40 }, payload: {
     note: "Edited", cid: "c2", replaces: "c1", refs: ["c1"], rect: { x: 2, y: 4, w: 60, h: 80 },
   } }, 8);
@@ -190,11 +195,15 @@ test("History shares accepted notes across tabs and worker wakes, then clears at
     { cid: "c1", text: "First", route: "/first", at: expect.any(Number), region: false },
     { cid: "c2", text: "Edited", route: "/second", at: expect.any(Number), region: true, w: 30, h: 40, replaces: "c1", refs: ["c1"] },
   ]);
-  const wake = attachedWorker({ session });
+  expect(w.call("globalThis.didShoot")).toBe(true);
+  await w.db.remove(1, w.writes.map((item) => item.seq)); // uploading drains the queue, not History
+  const wake = attachedWorker({ history });
   expect((await wake.message(read)).notes).toEqual(notes);
+  wake.data.rec.generation = "continued";
+  expect((await wake.message({ ...read, generation: "continued" })).notes).toEqual([]);
   await wake.call("setState(null)");
   expect((await wake.message(read)).notes).toBeNull();
-  expect(session).toEqual({});
+  expect(history).toEqual([]);
 });
 
 test("History excludes refused, stale, screenshot-only and policy-dropped notes", async () => {
