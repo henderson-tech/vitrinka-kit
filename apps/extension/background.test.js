@@ -8,7 +8,7 @@ const source = readFileSync(new URL("./background.js", import.meta.url), "utf8")
   .replace(/^import .*;$/gm, "").replace(/^boot\(\);$/m, "");
 const deferred = () => { let resolve; const promise = new Promise((res) => { resolve = res; }); return { promise, resolve }; };
 const clone = (value) => structuredClone(value);
-function worker({ response = { policy: null }, status = 200 } = {}) {
+function worker({ response = { policy: null }, status = 200, session = {} } = {}) {
   const data = { base: "https://synthetic.test", workspace: "qa", captureNetwork: false,
     rec: { sessionId: 1, generation: "first", tabs: {}, seq: 0 } };
   const writes = [], captures = [], requests = [];
@@ -55,6 +55,10 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
         get: async (keys) => keys === "rec" ? { rec: clone(data.rec) } : clone(data),
         set: async (values) => { if (beforeSet) await beforeSet(values); Object.assign(data, clone(values)); },
         remove: async (keys) => { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; },
+      }, session: {
+        get: async (key) => ({ [key]: clone(session[key]) }),
+        set: async (values) => Object.assign(session, clone(values)),
+        remove: async (key) => { delete session[key]; },
       } },
       tabs: { get: async () => ({ active: true, windowId: 1 }), captureVisibleTab: async () => { captures.push(true); return "data:image/png;base64,AA=="; }, onActivated: event(), onRemoved: event(),
         query: async (q) => tabs.filter((t) => !q.active || t.active),
@@ -78,7 +82,7 @@ function worker({ response = { policy: null }, status = 200 } = {}) {
     answer(fn) { script = fn; },
     command(name) { commandListener(name); return new Promise((r) => setTimeout(r, 0)); },
     navigate(d) { return navListener(d); },
-    message(msg) { return new Promise((resolve) => messageListener(msg, { tab: { id: 7, title: "Synthetic", url: "https://app.test/" } }, resolve)); },
+    message(msg, tabId = 7) { return new Promise((resolve) => messageListener(msg, { tab: { id: tabId, title: "Synthetic", url: "https://app.test/" } }, resolve)); },
     interceptSet(fn) { beforeSet = fn; },
     call(expression) { return runInContext(expression, context); } };
 }
@@ -170,6 +174,43 @@ const attachedWorker = (options) => {
   Object.assign(w.data.rec, { policy: null, attachments: true, tabs: { "7": { id: "tab1", host: "app.test" } } });
   return w;
 };
+
+test("History shares accepted notes across tabs and worker wakes, then clears at session end", async () => {
+  const session = {};
+  const w = attachedWorker({ session });
+  w.data.rec.tabs["8"] = { id: "tab2", host: "app.test" };
+  w.call("shoot = async () => {}");
+  await w.message({ type: "vt-note", generation: "first", payload: { text: "First", cid: "c1", route: "/first" } });
+  await w.message({ type: "vt-snap", generation: "first", route: "/second", regionSize: { w: 30, h: 40 }, payload: {
+    note: "Edited", cid: "c2", replaces: "c1", refs: ["c1"], rect: { x: 2, y: 4, w: 60, h: 80 },
+  } }, 8);
+  const read = { type: "vt-notes", generation: "first" };
+  const notes = (await w.message(read, 8)).notes;
+  expect(notes).toEqual([
+    { cid: "c1", text: "First", route: "/first", at: expect.any(Number), region: false },
+    { cid: "c2", text: "Edited", route: "/second", at: expect.any(Number), region: true, w: 30, h: 40, replaces: "c1", refs: ["c1"] },
+  ]);
+  const wake = attachedWorker({ session });
+  expect((await wake.message(read)).notes).toEqual(notes);
+  await wake.call("setState(null)");
+  expect((await wake.message(read)).notes).toBeNull();
+  expect(session).toEqual({});
+});
+
+test("History excludes refused, stale, screenshot-only and policy-dropped notes", async () => {
+  const w = attachedWorker();
+  w.call("shoot = async () => {}");
+  const read = { type: "vt-notes", generation: "first" };
+  await w.message({ type: "vt-note", generation: "old", payload: { text: "Stale", cid: "stale" } });
+  w.data.rec.paused = true;
+  await w.message({ type: "vt-note", generation: "first", payload: { text: "Paused", cid: "paused" } });
+  w.data.rec.paused = false;
+  await w.message({ type: "vt-snap", generation: "first", payload: { note: "", cid: "shot", rect: { w: 3, h: 4 } } });
+  w.data.rec.attachments = false;
+  await w.message({ type: "vt-note", generation: "first", payload: { text: "", cid: "dropped" }, attachments: [image] });
+  expect((await w.message(read)).notes).toEqual([]);
+  expect((await w.message({ ...read, generation: "old" })).notes).toBeNull();
+});
 
 test("canAttach follows the policy attachments flag: true, false and absent", async () => {
   for (const flag of [true, false, undefined]) {

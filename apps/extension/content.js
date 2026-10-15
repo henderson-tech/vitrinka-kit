@@ -692,18 +692,11 @@
   // Saved face takes from its recent once vt-board names it.
   let saved = null;
 
-  // This tab's notes of the live recording, for the notes sheet (HUD polish D5).
-  const notesLog = [];
   const linkOf = (link) => (link ? {
     ...(link.cid ? { cid: link.cid } : {}),
     ...(link.replaces ? { replaces: link.replaces } : {}),
     ...(link.refs && link.refs.length ? { refs: [...link.refs] } : {}),
   } : {});
-  const logNote = (note, link) => {
-    if (!live || !link || !link.cid) return;
-    notesLog.push({ sessionId: live.sessionId, cid: link.cid, at: Date.now(), route: location.pathname, ...note,
-      ...(link.replaces ? { replaces: link.replaces } : {}), ...(link.refs && link.refs.length ? { refs: [...link.refs] } : {}) });
-  };
   const adoptRec = (rec, elapsedMs) => {
     live = rec ? {
       sessionId: String(rec.sessionId),
@@ -870,44 +863,36 @@
     // Without images a note goes at once, its seq where the tester wrote it;
     // with them it goes once they are read, the images riding beside it.
     // `link` names the note (HUD polish D6/D7): its cid, the note it replaces,
-    // the notes it references — logged here for the notes sheet.
+    // the notes it references — the worker lists them once queued.
     note(text, attachments, link) {
       const msg = { type: "vt-note", generation, payload: { text, route: location.pathname, ...linkOf(link) } };
-      // Listed (and so editable) only once sent: an edit must never reach the
-      // worker before the note it replaces, or it would take the lower seq.
-      if (!attachments || !attachments.length) {
-        logNote({ text, region: false }, link);
-        return void send(msg);
-      }
+      if (!attachments || !attachments.length) return void send(msg);
       wireAttachments(attachments).then((files) => {
         if (!files.length && !text) return;
-        logNote({ text, region: false }, link);
         send({ ...msg, attachments: files });
       });
     },
     annotate({ text, rect, selector, attachments, link }) {
       const s = imageScale();
-      const msg = { type: "vt-snap", generation, route: location.pathname, payload: {
+      const msg = { type: "vt-snap", generation, route: location.pathname,
+        regionSize: { w: Math.round(rect.w), h: Math.round(rect.h) }, payload: {
         rect: { x: Math.round(rect.x * s), y: Math.round(rect.y * s), w: Math.round(rect.w * s), h: Math.round(rect.h * s) },
         selector, note: text, ...linkOf(link),
       } };
-      // An empty pick without images is a screenshot-only snap: the worker
-      // writes no note for it, so it is no note to list or reference.
-      const log = (images) => {
-        if (text || images > 0) logNote({ text, region: true, w: Math.round(rect.w), h: Math.round(rect.h) }, link);
-      };
-      if (!attachments || !attachments.length) {
-        log(0);
-        return void send(msg);
-      }
+      if (!attachments || !attachments.length) return void send(msg);
       wireAttachments(attachments).then((files) => {
-        log(files.length);
         send({ ...msg, attachments: files });
       });
     },
-    // The notes sheet (D5): this tab's notes of the live recording.
+    // The worker owns History across tabs, reloads and service-worker wakes.
     async listNotes() {
-      return live ? notesLog.filter((n) => n.sessionId === live.sessionId).map(({ sessionId: _s, ...n }) => n) : null;
+      if (!live) return null;
+      const r = await send({ type: "vt-notes", generation });
+      if (!r || !r.ok) {
+        console.warn("vitrinka: History read failed", fail(r, "the recorder did not answer — try again"));
+        return null;
+      }
+      return r.notes;
     },
     // No captureRegion (HUD polish D15, revised): the HUD lives in an OPEN
     // shadow root in the page, so a crop of captureVisibleTab placed there
