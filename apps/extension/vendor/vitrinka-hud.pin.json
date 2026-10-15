@@ -1,10 +1,10 @@
 {
   "package": "@vitrinka/web",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "files": [
     {
       "file": "build/hud.iife.js",
-      "sha256": "dd63ce62345dd238a04ff7ed47a048936a002cb56f78de6479971384c9be1693"
+      "sha256": "fca82b31d4a42babb3770811a608f8d3cfcafa99cded5fbb24ba824be32aa429"
     },
     {
       "file": "build/one.iife.js",

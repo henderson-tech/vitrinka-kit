@@ -215,8 +215,8 @@ test("attachment event receives its uploaded blobKey before events are posted", 
 test("vt-snap carries attachments on its annotation note", async () => {
   const w = attachedWorker();
   w.call("shoot = async () => {}");
-  await w.message({ type: "vt-snap", payload: { note: "Expected", rect: { x: 1, y: 2, w: 3, h: 4 }, selector: "button", task: true }, attachments: [image] });
-  expect(w.writes[1]).toMatchObject({ kind: "note", payload: { text: "Expected", annotate: true, task: true, attachments: [1] } });
+  await w.message({ type: "vt-snap", payload: { note: "Expected", rect: { x: 1, y: 2, w: 3, h: 4 }, selector: "button", cid: "c2", replaces: "c1" }, attachments: [image] });
+  expect(w.writes[1]).toMatchObject({ kind: "note", payload: { text: "Expected", annotate: true, cid: "c2", replaces: "c1", attachments: [1] } });
 });
 
 test("a note or snap whose images decode across a stop → continue never enters the next generation", async () => {

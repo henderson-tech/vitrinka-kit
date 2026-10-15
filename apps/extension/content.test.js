@@ -191,10 +191,10 @@ test("note serializes attachment blobs as JSON-safe data URLs", async () => {
 
 test("annotate serializes attachments beside the vt-snap payload", async () => {
   const rec = recorder(masked); await rec.start();
-  rec.controller.annotate({ text: "Reference", rect: { x: 1, y: 2, w: 3, h: 4 }, selector: "button", task: true,
+  rec.controller.annotate({ text: "Reference", rect: { x: 1, y: 2, w: 3, h: 4 }, selector: "button", link: { cid: "c2", refs: ["c1"] },
     attachments: [{ name: "expected.webp", blob: new Blob(["pixels"], { type: "image/webp" }), w: 20, h: 10 }] });
   for (let i = 0; i < 30; i++) await Promise.resolve();
-  expect(JSON.parse(JSON.stringify(rec.messages.at(-1)))).toMatchObject({ type: "vt-snap", payload: { note: "Reference", task: true, rect: { x: 1, y: 2, w: 3, h: 4 } },
+  expect(JSON.parse(JSON.stringify(rec.messages.at(-1)))).toMatchObject({ type: "vt-snap", payload: { note: "Reference", cid: "c2", refs: ["c1"], rect: { x: 1, y: 2, w: 3, h: 4 } },
     attachments: [{ name: "expected.webp", dataUrl: "data:image/webp;base64,cGl4ZWxz", w: 20, h: 10 }] });
 });
 

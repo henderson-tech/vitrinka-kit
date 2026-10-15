@@ -202,11 +202,11 @@ manual banner — download, unzip over the folder, ↻.
   Reaching the board is a **separate act** (D3): the popup grows an
   `⧉ Open board` row and a notification fires when the server has finished
   building it. Stopping never hijacks a tab. Stopped from the pill, the HUD
-  asks first (Stop & save?), then says **Saving…** and **Saved · in Recents**
-  while the server builds the board (30–60 s), turning into **Saved · Open
-  board** with the server's link once the worker's board wait (D11) names it;
-  offline, it keeps the session and offers Retry.
-  Dismissed, it rests as a Start button on that tab until the page goes.
+  asks first (Stop & save?), then says **Saving…** and **Building board**
+  while the server builds the board (30–60 s), turning into **Board ready ·
+  Open board** with the server's link once the worker's board wait (D11)
+  names it; offline, it keeps the session and offers Retry.
+  **Done** dismisses it; it rests as a Start button on that tab until the page goes.
 
 ## What gets captured
 
@@ -218,7 +218,7 @@ manual banner — download, unzip over the folder, ↻.
 | network | `chrome.debugger` CDP, XHR/fetch/document + worker/SW targets | req+resp bodies redacted BEFORE the 64 KiB cap, headers capped 8 KiB/side with auth values scrubbed; oversized multipart bodies omitted; WS connections logged (frames NOT captured yet); degrades gracefully when DevTools holds the tab |
 | DOM stream | rrweb (vendored record bundle, `collectFonts` on, `inlineImages` off, the recorder's own `[data-vitrinka-recorder]` surfaces blocked) | input values masked by default; uploaded as chunks; failed uploads retry from a disk-backed queue; watched via the board's session Watch mode (scrub replay); images stay hotlinked — inlining makes rrweb re-fetch the live page's images in CORS mode and breaks presigned ones (pinned by `TestRecorderNeverInlinesImages`). The trade: sessions from 0.7.0 on replay an image only while its URL still resolves, so a presigned photo renders blank once its signature expires (FixIt: 1 h); pre-0.7.0 sessions carry their images inlined |
 | console errors | CDP `Runtime` (page world, incl. uncaught exceptions) | |
-| notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation, and an intake draft too when the tester picks `task` |
+| notes / snaps | HUD | crosshair = element pick OR region drag + note + forced screenshot → board annotation (the composer names the pick's size and route — never its pixels: the HUD's shadow root is open to the page); each note carries a client id, and the HUD's History edits (`replaces`) and references (`refs`) them |
 
 Capture is **redacted by default** via the shared
 [`@vitrinka/redact`](https://github.com/henderson-tech/vitrinka-kit/tree/main/packages/redact)

@@ -2942,19 +2942,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return sendResponse({ ok: true });
       case "vt-snap":
         if (tab) {
-          // `task` rides with the note so the projection can file the
-          // annotation it authors as an intake draft too (the destination the
-          // tester picked in the HUD before sending). A task destination
-          // admits a note-less snap — the server titles it from the region —
-          // because choosing "task" and getting nothing would be a silent
-          // no-op; so does an attached image. Without either, an empty note
-          // stays a screenshot as before. The note and its shot both belong
-          // to the recording the snap was asked in, fixed before the decode.
+          // Every snap lands on the board (HUD polish 2026-10-14: no task
+          // destination). An attached image admits a note-less snap; without
+          // one an empty note stays a screenshot as before. The note's ids
+          // (`cid`, `replaces`, `refs` — D6/D7) ride along. The note and its
+          // shot both belong to the recording the snap was asked in, fixed
+          // before the decode.
           const startedIn = await getState();
           if (!sentFor(msg, startedIn)) return sendResponse(endedBeforeNote);
+          const p = msg.payload;
+          const link = {
+            ...(typeof p.cid === "string" ? { cid: p.cid } : {}),
+            ...(typeof p.replaces === "string" ? { replaces: p.replaces } : {}),
+            ...(Array.isArray(p.refs) ? { refs: p.refs.filter((r) => typeof r === "string").slice(0, 10) } : {}),
+          };
           await pushNote(startedIn, sender.tab.id,
-            { text: msg.payload.note, rect: msg.payload.rect, selector: msg.payload.selector, annotate: true, task: !!msg.payload.task },
-            await attachmentsOf(msg.attachments), !!(msg.payload.note || msg.payload.task));
+            { text: p.note, rect: p.rect, selector: p.selector, annotate: true, ...link },
+            await attachmentsOf(msg.attachments), !!p.note);
           lastShot = 0; // a deliberate snap always captures
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true }, startedIn);
         }
