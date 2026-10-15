@@ -909,14 +909,10 @@
     async listNotes() {
       return live ? notesLog.filter((n) => n.sessionId === live.sessionId).map(({ sessionId: _s, ...n }) => n) : null;
     },
-    // The composer's crop (D15): the worker crops this tab's visible pixels.
-    async captureRegion(rect) {
-      // The crop is cut from the RAW captureVisibleTab bitmap (device pixels),
-      // never the blurred upload's scale that imageScale() answers.
-      const s = globalThis.devicePixelRatio || 1;
-      const r = await send({ type: "vt-crop", rect: { x: rect.x * s, y: rect.y * s, w: rect.w * s, h: rect.h * s } }).catch(() => null);
-      return (r && r.dataUrl) || null;
-    },
+    // No captureRegion (HUD polish D15, revised): the HUD lives in an OPEN
+    // shadow root in the page, so a crop of captureVisibleTab placed there
+    // hands the page pixels it could never read itself (cross-origin frames,
+    // unmasked text). The composer shows the pick's size and route instead.
     setAnnotating(on) { annotating = !!on; changed(); },
     async link() {
       await send({ type: "vt-open-options" });

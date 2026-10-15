@@ -85,7 +85,10 @@ carries each field's shape; the full contract is `docs {topic: "tasks"}`.
   children (the pickup's NEXT owns those).
 - A non-empty `prerequisites` marks the parent epic `waiting`.
 - `status` moves by itself (a run → in progress, an open PR → in review, a
-  merged PR → done). Fill it only to correct: reopen, cancel, back to backlog.
+  merged PR → done — unless a step, gate or other claiming PR is still
+  open: then the merge only lands on its ref). Fill it only to correct:
+  reopen, cancel, back to backlog — or `done` once you finished the work
+  that held a merged task open.
 - **Print `rendered` verbatim** — same lines, order and urls, nothing added.
   A line you want to add by hand is a field you forgot: call again.
 - **The Stop gate** (the vitrinka-pm plugin's Stop hook, `vitrinka
@@ -109,4 +112,5 @@ carries each field's shape; the full contract is `docs {topic: "tasks"}`.
 - Never write, shorten or reorder the hand-back block by hand.
 - Never attach the summary through `upload_task_file` yourself — the door
   versions the `handoff` lineage.
-- Never set `status` to move work forward.
+- Never set `status` to move work forward, except `done` on a merged task
+  whose remaining work you finished.

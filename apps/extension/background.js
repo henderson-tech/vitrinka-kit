@@ -1834,41 +1834,6 @@ chrome.debugger.onDetach.addListener(async (source) => {
 });
 
 // ---------------------------------------------------------------------------
-/**
- * The visible pixels of an ACTIVE tab inside `rect` (image px), as a small
- * webp data URL (at most 320 px wide) — the composer's thumbnail. Null when
- * the tab is not in front or the capture is refused (rate limit, a page the
- * browser will not capture); the HUD then shows the size · route chip.
- */
-async function cropVisible(tabId, rect) {
-  try {
-    const t = await chrome.tabs.get(tabId);
-    if (!t.active || !rect) return null;
-    const shot = await chrome.tabs.captureVisibleTab(t.windowId, { format: "png" });
-    // The capture is of whatever its window shows NOW: a tab switch between
-    // the check above and the capture would hand another page's pixels to
-    // this composer. Re-check, and discard on any change.
-    const [front] = await chrome.tabs.query({ active: true, windowId: t.windowId });
-    if (!front || front.id !== tabId) return null;
-    const bmp = await createImageBitmap(await (await fetch(shot)).blob());
-    const x = Math.max(0, Math.min(bmp.width - 1, Math.round(rect.x)));
-    const y = Math.max(0, Math.min(bmp.height - 1, Math.round(rect.y)));
-    const w = Math.max(1, Math.min(bmp.width - x, Math.round(rect.w)));
-    const h = Math.max(1, Math.min(bmp.height - y, Math.round(rect.h)));
-    const k = Math.min(1, 320 / w);
-    const canvas = new OffscreenCanvas(Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
-    canvas.getContext("2d").drawImage(bmp, x, y, w, h, 0, 0, canvas.width, canvas.height);
-    bmp.close();
-    const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: "image/webp", quality: 0.8 })).arrayBuffer());
-    let bin = "";
-    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    return `data:image/webp;base64,${btoa(bin)}`;
-  } catch (e) {
-    console.warn("vitrinka: the composer's crop could not be captured", String(e));
-    return null;
-  }
-}
-
 // screenshots — captureVisibleTab is active-tab-only + rate-limited
 //
 // D6: capture enqueues and RETURNS. It used to await a full PNG POST before
@@ -2998,12 +2963,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await shoot(sender.tab.id, { route: msg.route, title: sender.tab.title, url: sender.tab.url, snap: true }, startedIn);
         }
         return sendResponse({ ok: true });
-      case "vt-crop":
-        // The composer's thumbnail (HUD polish D15): this tab's visible pixels
-        // cropped to the pick. It is shown ONLY in the tester's own composer —
-        // never queued, never uploaded — so no pixel leaves the device here
-        // and the mask policy (which governs what is sent) has nothing to mask.
-        return sendResponse({ dataUrl: sender.tab ? await cropVisible(sender.tab.id, msg.rect) : null });
       case "vt-console":
         if (tab) await pushEvents([{ tabId: tab.id, tabHost: tab.host, kind: "console", payload: msg.payload }]);
         return sendResponse({ ok: true });
