@@ -5,6 +5,7 @@
  * subpaths so an app bundles exactly what it imports:
  *
  *   @vitrinka/web/recorder   journey recorder (VitrinkaRecorderRoot, VitrinkaRecorderPill)
+ *   @vitrinka/web/report     Report a problem (mountReport, <vitrinka-report>); one file: report-widget.mjs
  *   @vitrinka/web/next       withVitrinkaRecorder (next.config.js build guard, Node-only)
  *   @vitrinka/web/protocol   recorder↔server wire types
  */
