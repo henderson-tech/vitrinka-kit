@@ -516,10 +516,12 @@ export class ReportWidget {
     let frame = 0;
     const dialogs = new MutationObserver((records) => {
       // The order dialogs open in: a modal shown later sits on top, whatever the DOM order.
+      // Only a closed → open transition is an opening; a redundant write to an open dialog changes nothing.
       for (const r of records) {
         if (r.type !== 'attributes' || r.attributeName !== 'open' || !(r.target instanceof HTMLDialogElement)) continue;
-        this.dialogOrder = this.dialogOrder.filter((d) => d !== r.target);
-        if (r.target.open) this.dialogOrder.push(r.target);
+        const target = r.target;
+        if (!target.open) this.dialogOrder = this.dialogOrder.filter((d) => d !== target);
+        else if (r.oldValue === null) this.dialogOrder = [...this.dialogOrder.filter((d) => d !== target), target];
       }
       if (frame) return;
       frame = requestAnimationFrame(() => {
@@ -527,7 +529,13 @@ export class ReportWidget {
         this.followDialog();
       });
     });
-    dialogs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'data-state'] });
+    dialogs.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ['open', 'data-state'],
+    });
     this.offs.push(() => {
       dialogs.disconnect();
       if (frame) cancelAnimationFrame(frame);
