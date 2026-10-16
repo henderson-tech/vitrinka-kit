@@ -41,6 +41,20 @@ export function __setBodyReadDeadlineForTests(ms: number): () => void {
   };
 }
 
+/**
+ * What a request event carries: `'full'` (the recorder: headers and bodies,
+ * redacted) or `'meta'` (the report face: method, URL, status, duration —
+ * no clone, no body read, nothing else ever leaves the request).
+ */
+export type NetworkDetail = 'full' | 'meta';
+
+let detail: NetworkDetail = 'full';
+
+/** Set before `patchNetwork`; the face that installs the lane decides. */
+export function setNetworkDetail(next: NetworkDetail): void {
+  detail = next;
+}
+
 /** Is a session (or the idle flight recorder) capturing right now? Gates all body work. */
 function capturing(): boolean {
   return captureTarget() !== null;
@@ -413,6 +427,10 @@ export function patchNetwork(): void {
     try {
       const res = await origFetch(input, init);
       const ms = Date.now() - started;
+      if (detail === 'meta') {
+        if (stillCapturing(origin)) recordNet({ method, url, status: res.status, ms, via: 'fetch' });
+        return res;
+      }
       // Clone SYNCHRONOUSLY (before the caller can consume the body), then read
       // and record OFF the caller's critical path: awaiting the body read here
       // delayed the app's own `await fetch(...)` by however long the recorder
@@ -519,6 +537,10 @@ export function patchNetwork(): void {
         // be waste), and a request that outlives its session must
         // not be attributed to the next one.
         if (!stillCapturing(origin)) return;
+        if (detail === 'meta') {
+          recordNet({ method: meta.method, url: meta.url, status: this.status, ms: Date.now() - started, via: 'xhr' });
+          return;
+        }
         let rawResHeaders: Record<string, string> | undefined;
         try {
           rawResHeaders = parseRawHeaders(this.getAllResponseHeaders());

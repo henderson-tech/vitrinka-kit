@@ -11,7 +11,23 @@
  */
 export const currentRoute = { tabId: 'root', tabHost: '/', pathname: '/' };
 
-/** Set the tab identity once per document (provider mount). */
+const TAB_KEY = 'vitrinka.tab';
+
+/** One lane per browser tab: a per-tab id kept in sessionStorage (survives reloads). */
+export function browserTabId(): string {
+  try {
+    const ss = globalThis.sessionStorage;
+    const have = ss.getItem(TAB_KEY);
+    if (have) return have;
+    const id = Math.random().toString(36).slice(2, 10);
+    ss.setItem(TAB_KEY, id);
+    return id;
+  } catch {
+    return 'root';
+  }
+}
+
+/** Set the tab identity once per document (provider mount, report face mount). */
 export function setTabIdentity(tabId: string, tabHost: string): void {
   currentRoute.tabId = tabId;
   currentRoute.tabHost = tabHost;
