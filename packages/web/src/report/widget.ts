@@ -277,6 +277,29 @@ export class ReportWidget {
   private readonly pins = new Map<number, Pin>();
   /** Per hide mark: the page nodes it covered when drawn (they are blanked in the capture). */
   private readonly hideIds = new Map<number, Set<number>>();
+  /** Native dialogs in the order they opened (seeded with those already open, in DOM order). */
+  private dialogOrder: HTMLDialogElement[] = [...document.querySelectorAll('dialog[open]')].filter(
+    (d): d is HTMLDialogElement => d instanceof HTMLDialogElement,
+  );
+
+  /**
+   * Where the report must live: the modal shown last (only the top modal is
+   * not inert), else the dialog opened last, else the recorder's rule
+   * (`sheetTarget`: ARIA dialogs included).
+   */
+  private activeDialog(): Element | null {
+    this.dialogOrder = this.dialogOrder.filter((d) => d.isConnected && d.open);
+    const isModal = (d: HTMLDialogElement) => {
+      try {
+        return d.matches(':modal');
+      } catch {
+        return false; // a browser without :modal: opening order decides
+      }
+    };
+    const modal = [...this.dialogOrder].reverse().find(isModal);
+    return modal ?? this.dialogOrder.at(-1) ?? sheetTarget();
+  }
+
   /** The open dialog the report lives in while one is up (a modal makes everything outside it inert). */
   private sheet: { target: Element; host: { mount: HTMLElement; destroy: () => void } } | null = null;
   private readonly e: Els;
@@ -314,7 +337,7 @@ export class ReportWidget {
    * the marks and their notes go along; focus is restored after the move.
    */
   private followDialog(): void {
-    const target = sheetTarget();
+    const target = this.activeDialog();
     if ((this.sheet?.target ?? null) === target) return;
     const root = this.e.root.getRootNode();
     const focused = root instanceof ShadowRoot && root.activeElement instanceof HTMLElement ? root.activeElement : null;
@@ -491,7 +514,13 @@ export class ReportWidget {
     if (this.engine) this.offs.push(this.engine.onChange(() => this.paint()));
     // Dialogs open and close anywhere: follow them, at most once a frame.
     let frame = 0;
-    const dialogs = new MutationObserver(() => {
+    const dialogs = new MutationObserver((records) => {
+      // The order dialogs open in: a modal shown later sits on top, whatever the DOM order.
+      for (const r of records) {
+        if (r.type !== 'attributes' || r.attributeName !== 'open' || !(r.target instanceof HTMLDialogElement)) continue;
+        this.dialogOrder = this.dialogOrder.filter((d) => d !== r.target);
+        if (r.target.open) this.dialogOrder.push(r.target);
+      }
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;

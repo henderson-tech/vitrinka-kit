@@ -61,9 +61,10 @@ function page(query: string): string {
   }
   // A host's own recorder bundle beside the standalone widget (claim-recorder.ts).
   const recorder = query.includes('recorder') ? '<script src="/claim-recorder.js"></script>' : '';
-  // A host modal (`?dialog`): window.openModal() shows it with showModal().
+  // Host modals (`?dialog`), both mounted up front: window.openModal(id = 'modal') shows one with showModal().
   const modal = query.includes('dialog')
-    ? '<dialog id="modal"><p>Edit settlement</p><button>Save</button></dialog><script>window.openModal = () => document.getElementById("modal").showModal()</script>'
+    ? '<dialog id="modal"><p>Edit settlement</p><button>Save</button></dialog><dialog id="second"><p>Confirm</p></dialog>' +
+      '<script>window.openModal = (id = "modal") => document.getElementById(id).showModal()</script>'
     : '';
   const tag = query.includes('nobutton')
     ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'

@@ -320,6 +320,21 @@ test('under an open modal dialog the report stays reachable, and keeps its draft
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
 });
 
+test('the report follows the modal shown last, not the last dialog in the page', async ({ page }) => {
+  await page.goto(`${base}/?dialog`);
+  await armed();
+  // The later sibling opens first; the earlier one opens on top of it.
+  await page.evaluate(() => {
+    const w = window as unknown as { openModal(id?: string): void };
+    w.openModal('second');
+    w.openModal('modal');
+  });
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const draft = page.getByRole('dialog', { name: 'Report a problem' }).getByRole('textbox', { name: 'What went wrong?' });
+  await draft.fill('Typed above two modals');
+  await expect(draft).toBeFocused();
+});
+
 test('a tag that gets its key after it connected mounts then', async ({ page }) => {
   await page.goto(`${base}/?nobutton`);
   await page.evaluate(() => {
