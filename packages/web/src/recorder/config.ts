@@ -71,9 +71,21 @@ export function vitrinkaConfigured(): boolean {
   return config.url !== '';
 }
 
-/** Recorder's own traffic — the network capture layer must skip it. */
+/** Other vitrinka origins this package talks to (a report face's `base`), never the recorder's target. */
+const ownBases = new Set<string>();
+
+/** The capture lanes skip `url`'s traffic too, until the returned release. */
+export function addOwnBase(url: string): () => void {
+  const base = url.replace(/\/+$/, '');
+  ownBases.add(base);
+  return () => ownBases.delete(base);
+}
+
+/** This package's own traffic (the recorder's target, a report face's base) — the network capture layer must skip it. */
 export function isVitrinkaUrl(url: string): boolean {
-  return config.url !== '' && url.startsWith(config.url);
+  if (config.url !== '' && url.startsWith(config.url)) return true;
+  for (const base of ownBases) if (base !== '' && url.startsWith(base)) return true;
+  return false;
 }
 
 // -- the stored device link --------------------------------------------------

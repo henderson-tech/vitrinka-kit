@@ -248,7 +248,8 @@ export class ReportWidget {
   private s: Strings;
   private button: boolean;
   private openSelector: string | null;
-  private identity: Identity | null;
+  /** This widget's own word: undefined defers to the page-wide identity; null is anonymous. */
+  private identity: Identity | null | undefined;
   private keybind: Keybind | null;
 
   private isOpen = false;
@@ -281,7 +282,7 @@ export class ReportWidget {
     this.s = strings(this.locale);
     this.button = opts.button;
     this.openSelector = opts.openSelector ?? null;
-    this.identity = normalizeIdentity(opts.identity);
+    this.identity = opts.identity === undefined ? undefined : normalizeIdentity(opts.identity);
     this.keybind = loadKeybind();
     this.hud = createHudHost();
     this.e = buildDom(this.hud.mount);
@@ -342,7 +343,8 @@ export class ReportWidget {
   }
 
   identify(input: IdentifyInput): void {
-    this.identity = normalizeIdentity(input);
+    // null (or a malformed identity) is this widget going anonymous; undefined hands it back to the page-wide one.
+    this.identity = input === undefined ? undefined : normalizeIdentity(input);
     this.paint();
   }
 
@@ -465,7 +467,7 @@ export class ReportWidget {
   }
 
   private who(): Identity | null {
-    return this.identity ?? sharedIdentity();
+    return this.identity !== undefined ? this.identity : sharedIdentity();
   }
 
   // -- the shortcut recorder ----------------------------------------------
@@ -747,12 +749,14 @@ export class ReportWidget {
     this.sending = true;
     this.error = '';
     this.paint();
+    // Nothing reached the server yet: build again, with the marks as they are now.
+    if (this.job && !this.job.id) this.job = null;
     try {
       if (!this.job) {
         const marked = new Set<number>();
         for (const m of this.markers) for (const id of this.hideIds.get(m.key) ?? []) marked.add(id);
         const capture = this.engine
-          ? await this.engine.build(this.frozen ?? { clip: null }, this.markers, marked).catch((e: unknown) => {
+          ? await this.engine.build(this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) }, this.markers, marked).catch((e: unknown) => {
               console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
               return EMPTY_CAPTURE;
             })
@@ -823,7 +827,8 @@ export class ReportWidget {
     e.prompt.textContent = s.prompt;
     e.desc.placeholder = s.placeholder;
     e.attachedText.textContent = s.attached(this.config?.profile.windowSec ?? 60);
-    e.attached.hidden = this.engine === null;
+    // Only a widget that captures says the minutes are attached.
+    e.attached.hidden = this.engine === null || this.config?.capturing === false;
     e.discloseText.textContent = s.included;
     e.disclose.setAttribute('aria-expanded', String(this.includedOpen));
     e.included.hidden = !this.includedOpen;

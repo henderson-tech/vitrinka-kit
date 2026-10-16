@@ -98,6 +98,11 @@ export interface StoredWindow extends FlightSpan {
   tab: string;
   /** The profile's `scope` it was captured under. */
   scope: string;
+  /**
+   * `lanes`: a span of console and network entries alone (they are stored
+   * whether or not a replay runs); absent: an rrweb window.
+   */
+  kind?: 'lanes';
   count: number;
   bytes: number;
   href: string;
@@ -140,6 +145,8 @@ export interface FlightProfile {
   scope?: string;
   /** This tab's windows an earlier page load left in the store (its sweep), oldest first. */
   prior?: readonly StoredWindow[];
+  /** The console and network entries earlier page loads stored (their lane spans), oldest first. */
+  priorLanes?: readonly FlightLaneEvent[];
 }
 
 /** The recorder face's idle last minute: memory only, 30 s windows. */
@@ -178,8 +185,11 @@ let epoch = 0;
 let profile: FlightProfile = RECORDER_FLIGHT;
 let windows: FlightWindow[] = [];
 let lanes: FlightLaneEvent[] = [];
-/** Lane events a store has not received yet (they ride the next chunk of the newest window). */
+/** Lane events a store has not received yet (the next lane-span chunk). */
 let unstoredLanes: FlightLaneEvent[] = [];
+/** This load's stored lane spans, oldest first; a span covers at most the window. */
+let laneSpans: { id: string; startMs: number; lastMs: number; parts: number }[] = [];
+let laneSeq = 0;
 /** Per window id: how many of its events the store holds, and its next chunk's part. */
 const persisted = new Map<string, { events: number; parts: number }>();
 /** Start of the oldest window left after a cap dropped one; null = nothing lost. */
@@ -199,7 +209,7 @@ export function startFlightBuffer(next: FlightProfile = RECORDER_FLIGHT): void {
   epoch++;
   profile = next;
   store = next.store ?? null;
-  windows = (next.prior ?? []).map((w) => ({
+  windows = (next.prior ?? []).filter((w) => w.kind !== 'lanes').map((w) => ({
     id: w.id,
     load: w.load,
     startMs: w.startMs,
@@ -211,8 +221,10 @@ export function startFlightBuffer(next: FlightProfile = RECORDER_FLIGHT): void {
     route: w.route,
     stored: true,
   }));
-  lanes = [];
+  // Already in the store (their spans): held, never written again.
+  lanes = (next.priorLanes ?? []).slice(-next.maxLaneEvents);
   unstoredLanes = [];
+  laneSpans = [];
   persisted.clear();
   truncatedFrom = null;
   enforce(Date.now());
@@ -228,6 +240,7 @@ export function stopFlightBuffer(): void {
   windows = [];
   lanes = [];
   unstoredLanes = [];
+  laneSpans = [];
   persisted.clear();
   truncatedFrom = null;
 }
@@ -251,6 +264,7 @@ export function clearFlight(): void {
   windows = [];
   lanes = [];
   unstoredLanes = [];
+  laneSpans = [];
   persisted.clear();
   truncatedFrom = null;
   const tab = currentRoute.tabId;
@@ -273,22 +287,61 @@ export function persistFlightNow(): void {
   const now = Date.now();
   enforce(now);
   trimLanes(now);
-  const newest = windows.at(-1);
   for (const w of windows) {
     if (w.stored) continue;
     const p = persisted.get(w.id) ?? { events: 0, parts: 0 };
-    const laneBatch = w === newest ? unstoredLanes : [];
-    if (p.events === w.events.length && !laneBatch.length) continue;
-    if (w === newest) unstoredLanes = [];
+    if (p.events === w.events.length) continue;
     const body = JSON.stringify(w.events.slice(p.events));
     const part = p.parts;
     persisted.set(w.id, { events: w.events.length, parts: part + 1 });
     const head = storedWindow(w);
     queueWrite(async (s) => {
-      await s.putChunk(w.id, part, body, laneBatch);
+      await s.putChunk(w.id, part, body, []);
       await s.putWindow(head);
     });
   }
+  persistLanes(now);
+}
+
+/**
+ * The console and network entries go to lane spans of their own, so an
+ * errors-only profile (no replay, no windows) keeps them across loads too.
+ * A span covers at most the window; it leaves once its newest entry has.
+ */
+function persistLanes(now: number): void {
+  const cutoff = now - profile.windowMs;
+  while (laneSpans.length > 0 && laneSpans[0]!.lastMs <= cutoff) {
+    const [gone] = laneSpans.splice(0, 1);
+    if (gone) queueWrite((s) => s.dropWindow(gone.id));
+  }
+  const batch = unstoredLanes;
+  if (!batch.length) return;
+  unstoredLanes = [];
+  let span = laneSpans.at(-1);
+  if (!span || span.startMs <= cutoff) {
+    span = { id: `${FLIGHT_LOAD}.lanes.${++laneSeq}`, startMs: Date.parse(batch[0]!.ts), lastMs: 0, parts: 0 };
+    laneSpans.push(span);
+  }
+  span.lastMs = Date.parse(batch.at(-1)!.ts);
+  const part = span.parts++;
+  const target = span;
+  const head: StoredWindow = {
+    id: target.id,
+    tab: currentRoute.tabId,
+    scope: profile.scope ?? '',
+    kind: 'lanes',
+    load: FLIGHT_LOAD,
+    startMs: target.startMs,
+    lastMs: target.lastMs,
+    count: 0,
+    bytes: 0,
+    href: '',
+    route: '',
+  };
+  queueWrite(async (s) => {
+    await s.putChunk(target.id, part, '[]', batch);
+    await s.putWindow(head);
+  });
 }
 
 function stopPersisting(): void {

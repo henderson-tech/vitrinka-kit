@@ -39,6 +39,14 @@ D6): the same engine as the recorder, a reporter's face.
   masking profile and the classes it was captured under: a load under
   anything else drops it. A hide names the nodes it covers when drawn, and
   without rrweb's mirror a report with a hide goes without its replay.
+  Console and network entries are stored in spans of their own (an
+  errors-only profile keeps them across loads); a draft reads the stored
+  windows when the card opens.
+- **One runtime per page**: the recorder face, when mounted, runs the
+  page's capture (`claimCapture`); a report face beside it reports without
+  one and never rewrites the recorder's server, key or rules.
+  `identify(null)` on a widget is anonymous even under a page-wide
+  `identify()`; a tag that gets its `key`/`base` after connecting mounts then.
 
 Engine changes the recorder face shares:
 

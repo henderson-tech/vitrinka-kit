@@ -188,8 +188,9 @@ optional marks drawn on the page.
   a body, and never the widget's own calls.
 - **Browser storage.** Masking happens before storage: what IndexedDB holds
   is exactly what would be sent. Every window's new events land there every
-  2 s (and on pagehide) as one chunk, with the console and network entries
-  captured meanwhile. A window leaves storage when it leaves the window,
+  2 s (and on pagehide) as one chunk; the console and network entries go to
+  spans of their own (each covering at most the window), so an errors-only
+  profile keeps them across loads too. A window or span leaves storage when it leaves the window,
   every window of a tab once that tab's report is sent, and anything past
   its age on the next load of any tab. Each window records what it was
   captured for — vitrinka's origin, the project, the masking profile and the
@@ -202,7 +203,15 @@ optional marks drawn on the page.
   the window being recorded is older than `windowSec`, a fresh full snapshot
   replaces it (rrweb itself checks out only when the page changes).
 - **When the card opens**, the capture is frozen (the buffer keeps rolling);
-  with no full snapshot of the current page yet, one is taken first.
+  with no full snapshot of the current page yet, one is taken first, and
+  the windows earlier loads stored are read right then, so a draft that
+  takes its time still sends them.
+- **Beside the recorder.** The console and network patches, the buffer, the
+  rrweb lane and the redaction rules are page-wide, and the recorder face
+  runs them whenever it is mounted: a report face beside it captures
+  nothing (its reports go without a capture), and one already capturing
+  stops when a recorder mounts. The report face never changes the
+  recorder's server, key or rules.
 - **Marks.** "Show us where" freezes the page under a transparent layer
   (no clicks, no scrolling reach it) where the reporter draws circles,
   boxes, arrows and hides, numbered 1, 2, 3… with an optional note each —

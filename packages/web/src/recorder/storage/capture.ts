@@ -4,8 +4,12 @@
  * survive the page loads a multi-page app makes along the way. One database
  * per origin, `vitrinka.capture`:
  *
- *   windows  {id, tab, load, startMs, lastMs, count, bytes, href, route}   key id
- *   chunks   {events: <JSON array of rrweb events>, lanes: [...]}          key [windowId, part]
+ *   windows  {id, tab, scope, kind?, load, startMs, lastMs, count, bytes, href, route}   key id
+ *   chunks   {events: <JSON array of rrweb events>, lanes: [...]}                       key [windowId, part]
+ *
+ * A `windows` row is an rrweb window (its chunks carry events) or, with
+ * `kind: 'lanes'`, a span of console and network entries (its chunks carry
+ * lanes) — stored whether or not the profile records a replay.
  *
  * What lands here is already masked: rrweb masks the DOM at emit, the Meta
  * URL is scrubbed and every lane event redacted before the buffer holds it
@@ -113,12 +117,15 @@ export function openCaptureStore(idb: IDBFactory | undefined = globalThis.indexe
         const byTab = new Map<string, StoredWindow[]>();
         for (const w of all) byTab.set(w.tab, [...(byTab.get(w.tab) ?? []), w]);
         for (const [owner, list] of byTab) {
-          list.sort((a, b) => a.startMs - b.startMs);
-          list.forEach((w, i) => {
-            const aged = windowEnd(w, list[i + 1]) <= now - windowMs;
+          // A replay window lasts until the next replay window of its load; a
+          // lane span until its newest entry.
+          const replay = list.filter((w) => w.kind !== 'lanes').sort((a, b) => a.startMs - b.startMs);
+          const end = (w: StoredWindow) => (w.kind === 'lanes' ? w.lastMs : windowEnd(w, replay[replay.indexOf(w) + 1]));
+          for (const w of list.sort((a, b) => a.startMs - b.startMs)) {
+            const aged = end(w) <= now - windowMs;
             if (aged || (owner === tab && w.scope !== scope)) dropIn(tx, w.id);
             else if (owner === tab) kept.push(w);
-          });
+          }
         }
         await done(tx);
         return kept;

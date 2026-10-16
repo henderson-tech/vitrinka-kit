@@ -58,6 +58,34 @@ export function setAnnotating(active: boolean): void {
  */
 export const leadState: { following: 'page' | 'extension' | null } = { following: null };
 
+/**
+ * Which face drives this document's ONE capture runtime (QA Studio D6): the
+ * console and network patches, the flight buffer, the rrweb lane and the
+ * redaction rules are page-wide, so only one face may run them. The recorder
+ * always wins — a report face that finds it mounted captures nothing, and
+ * one that holds the runtime yields it (`yieldTo`, synchronously) the moment
+ * a recorder mounts.
+ */
+export type CaptureFace = 'recorder' | 'report';
+
+let captureOwner: { face: CaptureFace; yieldTo?: () => void } | null = null;
+
+/** Take the runtime for `face`; false when a report face asks while the recorder holds it. */
+export function claimCapture(face: CaptureFace, yieldTo?: () => void): boolean {
+  if (captureOwner && captureOwner.face !== face) {
+    if (face === 'report') return false;
+    const previous = captureOwner;
+    captureOwner = null;
+    previous.yieldTo?.();
+  }
+  captureOwner = { face, ...(yieldTo ? { yieldTo } : {}) };
+  return true;
+}
+
+export function releaseCapture(face: CaptureFace): void {
+  if (captureOwner?.face === face) captureOwner = null;
+}
+
 // -- change subscription (the HUD re-renders off this) -----------------------
 
 const listeners = new Set<() => void>();

@@ -28,6 +28,7 @@ import {
 import { setTabIdentity } from '../../recorder/state';
 import { type CaptureStore, openCaptureStore } from '../../recorder/storage/capture';
 import { fakeLocation } from '../../recorder/__tests__/stub';
+import { acquireEngine, releaseEngine } from '../engine';
 import { maskingPolicy } from '../profile';
 
 const T0 = Date.parse('2026-10-16T10:00:00.000Z');
@@ -197,6 +198,58 @@ describe('the capture profile in browser storage', () => {
     expect(JSON.stringify(clip.windows)).not.toContain('typed long ago');
     expect(clip.lanes.map((e) => e.payload?.text)).toEqual(['late error']);
     expect(clip.truncated).toBe(false);
+  });
+
+  it('an errors-only profile keeps its console and network entries across a reload', async () => {
+    const idb = new IDBFactory();
+    store = await openCaptureStore(idb);
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(store, { scope: 'errors-only' }));
+    pushFlightEvent('console', { level: 'error', text: 'boom' }, { tabId: TAB, tabHost: 'app.example.test' });
+    persistFlightNow();
+    await flightWrites();
+    stopFlightBuffer();
+    store.close();
+
+    store = await openCaptureStore(idb);
+    const kept = await store.sweep(T0 + 1000, FIVE_MIN, TAB, 'errors-only');
+    const lanes = (await Promise.all(kept.map((w) => store!.read(w.id)))).flatMap((r) => r.lanes);
+    expect(lanes.map((e) => e.payload?.text)).toEqual(['boom']);
+    startFlightBuffer(profile(store, { scope: 'errors-only', priorLanes: lanes }));
+    expect(takeFlightClip()!.lanes.map((e) => e.payload?.text)).toEqual(['boom']);
+  });
+
+  it('a draft keeps the stored minutes it opened with, even once they age out before Send', async () => {
+    const scope = 'https://vitrinka.test|voke|strict|errors,interactions';
+    const seed = await openCaptureStore();
+    // The engine names its tab itself: without sessionStorage (bun) that is `root`.
+    await seed.putWindow({ id: 'earlier.1', tab: 'root', scope, load: 'earlier', startMs: T0, lastMs: T0 + 1000, count: 2, bytes: 100, href: 'h', route: '/' });
+    await seed.putChunk('earlier.1', 0, JSON.stringify([meta(T0), full(T0 + 1)]), []);
+    seed.close();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ project: 'voke', captureProfile: { storage: 'browser', windowSec: 120, classes: ['errors', 'interactions'] }, profile: 'strict' }),
+      )) as unknown as typeof fetch;
+    setSystemTime(new Date(T0 + 60_000));
+    const engine = acquireEngine({ base: 'https://vitrinka.test', key: 'vkb_test', loadRecord: async () => fakeRecord })!;
+    try {
+      await engine.ready;
+      emit?.(meta(T0 + 60_000));
+      emit?.(full(T0 + 60_001));
+      const frozen = engine.freeze();
+      expect(frozen.clip!.windows.map((w) => w.id)).toContain('earlier.1');
+      // The reporter takes their time: the earlier window leaves the buffer and the store.
+      setSystemTime(new Date(T0 + 200_000));
+      emit?.(custom(T0 + 200_000));
+      persistFlightNow();
+      await flightWrites();
+      const built = await engine.build(frozen, []);
+      expect(built.chunks.map((c) => c.body).join('')).toContain(`"timestamp":${T0}`);
+    } finally {
+      releaseEngine(engine);
+      globalThis.fetch = realFetch;
+    }
   });
 
   it('a size-forced checkout keeps the replay whole and marks it truncated', () => {

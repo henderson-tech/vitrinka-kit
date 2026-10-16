@@ -31,6 +31,8 @@ export interface ReportSeen {
 export interface ReportServer {
   url: string;
   seen: ReportSeen[];
+  /** The next `POST /api/v1/reports` answers 503 (a failed create). */
+  failNextCreate: () => void;
   close: () => Promise<void>;
 }
 
@@ -74,6 +76,7 @@ export async function startReportServer(options: { host?: string; port?: number 
   });
   const rrweb = readFileSync(join(tmp, 'rrweb.mjs'), 'utf8');
   const seen: ReportSeen[] = [];
+  let failCreate = false;
 
   const server = createServer(async (req, res) => {
     const path = req.url ?? '/';
@@ -100,7 +103,13 @@ export async function startReportServer(options: { host?: string; port?: number 
         flightRecorder: true,
       });
     }
-    if (path === '/api/v1/reports' && req.method === 'POST') return json({ id: 'rep-1', custody: 'quarantined' }, 201);
+    if (path === '/api/v1/reports' && req.method === 'POST') {
+      if (failCreate) {
+        failCreate = false;
+        return json({ error: 'unavailable' }, 503);
+      }
+      return json({ id: 'rep-1', custody: 'quarantined' }, 201);
+    }
     const chunk = /^\/api\/v1\/reports\/rep-1\/chunk\?seq=(\d+)$/.exec(path);
     if (chunk) return json({ blobKey: `reports/rep-1/chunk-${chunk[1]}`, ok: true }, 201);
     if (path === '/api/v1/reports/rep-1/events') return json({ inserted: 1 });
@@ -116,6 +125,9 @@ export async function startReportServer(options: { host?: string; port?: number 
   return {
     url,
     seen,
+    failNextCreate: () => {
+      failCreate = true;
+    },
     close: async () => {
       await new Promise((r) => server.close(r));
       rmSync(tmp, { recursive: true, force: true });

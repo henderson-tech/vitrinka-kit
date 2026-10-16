@@ -6,8 +6,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { type eventWithTime, EventType } from '@rrweb/types';
 
-import { configureRecorder } from '../../recorder/config';
-import type { BuiltCapture } from '../engine';
+import { configureRecorder, recorderConfig } from '../../recorder/config';
+import { flightActive } from '../../recorder/flight';
+import { claimCapture, releaseCapture } from '../../recorder/state';
+import { acquireEngine, type BuiltCapture, releaseEngine } from '../engine';
 import { applyHides, HIDE_ATTR } from '../markers';
 import { narrowProfile, parseProfile } from '../profile';
 import { type ReportEnvelope, ReportJob } from '../wire';
@@ -50,6 +52,7 @@ beforeEach(() => {
     }
     if (path.endsWith('/events')) return json({ inserted: 2 });
     if (path.endsWith('/submit')) return json({ status: 'filed', reportUrl: REPORT_URL });
+    if (path === '/api/v1/report-config') return json({ project: 'voke', captureProfile: { storage: 'memory', classes: ['errors'] }, profile: 'strict' });
     if (method === 'PATCH') return json({ ok: true });
     return new Response('not found', { status: 404 });
   }) as typeof fetch;
@@ -124,6 +127,32 @@ describe('the report wire, two widgets on one page', () => {
     expect(reply.status).toBe('filed');
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((c) => c.auth === 'Bearer vkb_test' && c.path.startsWith('/api/v1/reports'))).toBe(true);
+  });
+});
+
+describe('one capture runtime per page', () => {
+  const engineOpts = { base: BASE, key: 'vkb_test', loadRecord: async () => null };
+
+  it('a report face beside a mounted recorder leaves the recorder its target and its buffer', async () => {
+    configureRecorder({ url: 'https://recorder.vitrinka.test', key: 'vkr_rec' });
+    claimCapture('recorder');
+    const engine = acquireEngine(engineOpts)!;
+    const config = await engine.ready;
+    expect(recorderConfig()).toMatchObject({ url: 'https://recorder.vitrinka.test', key: 'vkr_rec' });
+    expect(config.capturing).toBe(false);
+    expect(flightActive()).toBe(false);
+    releaseEngine(engine);
+    releaseCapture('recorder');
+  });
+
+  it('a recorder that mounts after a report face takes the runtime over', async () => {
+    const engine = acquireEngine(engineOpts)!;
+    expect((await engine.ready).capturing).toBe(true);
+    expect(flightActive()).toBe(true);
+    claimCapture('recorder');
+    expect(flightActive()).toBe(false);
+    releaseCapture('recorder');
+    releaseEngine(engine);
   });
 });
 

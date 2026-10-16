@@ -228,6 +228,59 @@ test('a hide blanks what was under it when it was drawn, even when the page chan
   expect(chunks).not.toContain('1920 0014 5399'); // …except under the hide
 });
 
+test('a hide added after a failed send is blanked in the retried capture', async ({ page }) => {
+  await page.goto(`${base}/?balanced`);
+  await armed();
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
+  server.failNextCreate();
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Couldn’t send — your text is safe, try again')).toBeVisible();
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  const tools = page.getByRole('toolbar', { name: 'Marking tools' });
+  await tools.getByRole('button', { name: 'Hide' }).click();
+  const iban = (await page.getByText(/^IBAN/).boundingBox())!;
+  await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
+  await tools.getByRole('button', { name: 'Done' }).click();
+  await card.getByRole('button', { name: 'Try again' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const creates = seen.filter((s) => s.method === 'POST' && s.path === '/api/v1/reports');
+  expect(JSON.parse(creates.at(-1)!.body).markers).toMatchObject([{ n: 1, shape: 'hide' }]);
+  const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
+  expect(chunks).toContain('Settlement');
+  expect(chunks).not.toContain('1920 0014 5399');
+});
+
+test('a widget told identify(null) reports anonymously, whatever the page-wide identity', async ({ page }) => {
+  await page.goto(base);
+  await armed();
+  await page.evaluate(async () => {
+    const widget: { identify: (who: { email: string } | null) => void } = await import('/vendor/report-widget-1.mjs' as string);
+    widget.identify({ email: 'jana@example.test' });
+    document.querySelector('vitrinka-report')!.identify(null);
+  });
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Anonymous, please');
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  expect(created()).not.toHaveProperty('identity');
+});
+
+test('a tag that gets its key after it connected mounts then', async ({ page }) => {
+  await page.goto(`${base}/?nobutton`);
+  await page.evaluate(() => {
+    const late = document.createElement('vitrinka-report');
+    late.id = 'late';
+    document.body.append(late);
+  });
+  await page.evaluate(() => document.querySelector('vitrinka-report[button]')!.remove());
+  await expect(page.getByRole('button', { name: /^Report a problem/ })).toHaveCount(0);
+  await page.evaluate(() => document.getElementById('late')!.setAttribute('key', 'vkb_e2e'));
+  await expect(page.getByRole('button', { name: /^Report a problem/ })).toBeVisible();
+});
+
 test('marks can be made from the keyboard alone', async ({ page }) => {
   await page.goto(base);
   await armed();

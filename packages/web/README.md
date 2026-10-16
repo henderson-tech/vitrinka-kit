@@ -387,7 +387,14 @@ report.identify(null);                      // anonymous: held until approved
 ```
 
 `identify` from `@vitrinka/web/report` names the reporter for every widget
-on the page. Identity lives in memory only; pass it on every load.
+on the page; a widget's own `identify()` wins (`null` makes that widget
+anonymous, `undefined` hands it back to the page-wide one). Identity lives
+in memory only; pass it on every load.
+
+**Beside the recorder.** One page runs one capture: when the recorder face
+(`VitrinkaRecorderRoot`) is mounted it owns it, and Report a problem sends
+its reports without a capture of its own — mount one face per page (pick it
+by your app's mode, or with `face`).
 
 **The shortcut.** There is none by default. A reporter sets their own in the
 card's settings (⚙) by pressing it: a modifier other than Shift is required,

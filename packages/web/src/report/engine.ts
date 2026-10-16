@@ -16,16 +16,19 @@
  *    expired windows the start sweeps.
  *
  * One engine per page however many widgets mount (the lanes and the buffer
- * are page-wide); the last widget to leave stops it.
+ * are page-wide); the last widget to leave stops it. The runtime is the
+ * recorder face's whenever one is mounted (state.ts `claimCapture`): then
+ * the engine captures nothing, and it never writes the recorder's
+ * configuration — every call it makes names its own target.
  */
 import type { eventWithTime } from '@rrweb/types';
 
 import { api, type ApiTarget } from '../recorder/api';
 import { patchConsole, unpatchConsole } from '../recorder/capture/console';
 import { patchNetwork, unpatchNetwork } from '../recorder/capture/net';
-import { setRedactionPolicy } from '../recorder/capture/redact';
+import { setCaptureSanitizer, setRedactionPolicy } from '../recorder/capture/redact';
 import { checkoutRRWeb, type RecordFn, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
-import { configureRecorder } from '../recorder/config';
+import { addOwnBase } from '../recorder/config';
 import {
   clearFlight,
   clipHasSnapshot,
@@ -42,7 +45,7 @@ import {
 } from '../recorder/flight';
 import { listen } from '../recorder/hud/listen';
 import { EVENTS_PER_POST, splitRRWebEvents } from '../recorder/queue';
-import { browserTabId, currentRoute, setTabIdentity } from '../recorder/state';
+import { browserTabId, claimCapture, currentRoute, releaseCapture, setTabIdentity } from '../recorder/state';
 import { type CaptureStore, deleteCaptureStore, openCaptureStore } from '../recorder/storage/capture';
 import { applyHides, hiddenNodeIds, type Marker, type NodeIds } from './markers';
 import {
@@ -83,6 +86,8 @@ export interface ReportConfig {
   masking: MaskingProfile;
   /** False when the config read failed: the fallback profile runs. */
   reachable: boolean;
+  /** This widget captures (false while the recorder face runs the page's capture). */
+  capturing: boolean;
 }
 
 export interface ConsoleEntry {
@@ -101,6 +106,8 @@ export interface NetEntry {
 /** The capture as frozen when the card opened (the buffer keeps rolling). */
 export interface Frozen {
   clip: FlightClip | null;
+  /** Earlier loads' windows of the clip, read when it froze (the buffer may expire them before Send). */
+  stored: Promise<Map<string, { events: eventWithTime[]; lanes: FlightLaneEvent[] }>>;
 }
 
 export interface CaptureChunk {
@@ -197,7 +204,14 @@ export class CaptureEngine {
   readonly ready: Promise<ReportConfig>;
   private store: CaptureStore | null = null;
   private stopped = false;
+  /** This engine holds (or held) the page's capture runtime. */
+  private claimed = false;
+  /** …and runs it now: false before the claim, without it, and after it yielded. */
+  private capturing = false;
+  /** The engine's own lifetime (its base registration). */
   private readonly offs: (() => void)[] = [];
+  /** The capture runtime's teardown, run when it yields to a recorder or stops. */
+  private readonly capture: (() => void)[] = [];
 
   constructor(readonly opts: EngineOptions) {
     this.ready = this.start();
@@ -205,43 +219,64 @@ export class CaptureEngine {
 
   private async start(): Promise<ReportConfig> {
     const { opts } = this;
-    configureRecorder({
-      url: opts.base,
-      key: opts.key,
-      appVersion: opts.appVersion,
-      flightRecorder: true,
-      sanitizeUrl: opts.sanitizeUrl,
-    });
-    setTabIdentity(browserTabId(), globalThis.location?.host ?? '');
-    currentRoute.pathname = globalThis.location?.pathname ?? '/';
-    setRedactionPolicy(null);
+    // Every call is targeted (ApiTarget): the recorder's configuration is
+    // never written. Its lanes skip this base's traffic all the same.
+    this.offs.push(addOwnBase(opts.base));
     const fetched = await fetchConfig({ url: opts.base, key: opts.key });
     const profile = narrowProfile(fetched.profile, opts.capture);
     const lanes = lanesOf(profile.classes);
-    const config: ReportConfig = { project: fetched.project, profile, lanes, masking: fetched.masking, reachable: fetched.reachable };
+    const config: ReportConfig = {
+      project: fetched.project,
+      profile,
+      lanes,
+      masking: fetched.masking,
+      reachable: fetched.reachable,
+      capturing: false,
+    };
     if (this.stopped) return config;
+    // The page-wide runtime (lanes, buffer, rrweb, rules) is the recorder's
+    // whenever one is mounted; this widget then reports without a capture.
+    if (!claimCapture('report', () => this.standDown())) {
+      console.warn('vitrinka: the recorder runs this page’s capture — Report a problem sends without one');
+      return config;
+    }
+    this.claimed = true;
+    this.capturing = true;
+    config.capturing = true;
+    setTabIdentity(browserTabId(), globalThis.location?.host ?? '');
+    currentRoute.pathname = globalThis.location?.pathname ?? '/';
     setRedactionPolicy(maskingPolicy(config.masking));
+    setCaptureSanitizer(opts.sanitizeUrl);
+    this.capture.push(() => setCaptureSanitizer(null));
 
     const windowMs = profile.windowSec * 1000;
     // What stored windows were captured FOR: another project, or a laxer
     // masking or wider classes than now, never comes back (sweep drops it).
     const scope = [opts.base, fetched.project, config.masking, profile.classes.join(',')].join('|');
     let prior: StoredWindow[] = [];
+    let priorLanes: FlightLaneEvent[] = [];
     if (profile.storage === 'browser') {
       try {
         this.store = await openCaptureStore();
-        prior = await this.store.sweep(Date.now(), windowMs, currentRoute.tabId, scope);
+        const kept = await this.store.sweep(Date.now(), windowMs, currentRoute.tabId, scope);
+        prior = kept.filter((w) => w.kind !== 'lanes');
+        // The console and network entries of earlier loads, replay or not.
+        const store = this.store;
+        const spans = await Promise.all(kept.filter((w) => w.kind === 'lanes').map((w) => store.read(w.id)));
+        priorLanes = spans.flatMap((s) => s.lanes).sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
       } catch (e) {
         console.warn('vitrinka: browser capture storage unavailable — keeping the capture in memory', e);
         this.store = null;
         prior = [];
+        priorLanes = [];
       }
     } else {
       // Memory means memory: nothing a browser profile once stored stays behind.
       deleteCaptureStore();
     }
-    if (this.stopped) {
+    if (!this.capturing) {
       this.store?.close();
+      this.store = null;
       return config;
     }
     startFlightBuffer({
@@ -254,21 +289,22 @@ export class CaptureEngine {
       store: this.store,
       scope,
       prior,
+      priorLanes,
     });
-    this.offs.push(stopFlightBuffer);
-    if (this.store) {
+    this.capture.push(stopFlightBuffer);
+    if (this.store && typeof window !== 'undefined') {
       const persist = () => persistFlightNow();
-      this.offs.push(listen(window, 'pagehide', persist), listen(document, 'visibilitychange', persist));
+      this.capture.push(listen(window, 'pagehide', persist), listen(document, 'visibilitychange', persist));
     }
     // Each acquisition names its own settings, so nothing of the report face
     // outlives its release into the next face that patches these lanes.
     if (lanes.errors || lanes.console) {
       patchConsole({ levels: lanes.console ? ['warn', 'info', 'log'] : [] });
-      this.offs.push(unpatchConsole);
+      this.capture.push(unpatchConsole);
     }
     if (lanes.errors || lanes.network) {
       patchNetwork({ detail: 'meta' });
-      this.offs.push(unpatchNetwork);
+      this.capture.push(unpatchNetwork);
     }
     if (lanes.replay) {
       const record = await opts.loadRecord(opts.base).catch((e: unknown) => {
@@ -276,16 +312,28 @@ export class CaptureEngine {
         console.warn('vitrinka: the page recorder did not load — reports go without a replay', e);
         return null;
       });
-      if (record && !this.stopped) {
+      if (record && this.capturing) {
         startRecordWith(record, 'flight', { unmaskSelector: UNMASK_SELECTOR });
-        this.offs.push(stopRRWeb);
+        this.capture.push(stopRRWeb);
       }
     }
     return config;
   }
 
+  /** The recorder mounted: hand it the runtime — this widget goes on reporting without a capture. */
+  private standDown(): void {
+    if (!this.capturing) return;
+    this.capturing = false;
+    for (const off of this.capture.splice(0).reverse()) off();
+    const store = this.store;
+    this.store = null;
+    if (store) void flightWrites().then(() => store.close());
+  }
+
   /** Freeze the capture now (the card opened); the buffer rolls on. */
   freeze(): Frozen {
+    // Not this widget's runtime (the recorder runs it): nothing to take.
+    if (!this.capturing) return { clip: null, stored: Promise.resolve(new Map()) };
     currentRoute.pathname = globalThis.location?.pathname ?? currentRoute.pathname;
     let clip = takeFlightClip();
     // No screen of this page yet (the recorder only just started, a window
@@ -294,7 +342,14 @@ export class CaptureEngine {
       checkoutRRWeb();
       clip = takeFlightClip();
     }
-    return { clip };
+    // Earlier loads' windows are read NOW: the buffer keeps rolling while the
+    // reporter writes and may expire them before Send.
+    const store = this.store;
+    const ids = clip?.windows.filter((w) => w.stored).map((w) => w.id) ?? [];
+    const stored: Frozen['stored'] =
+      store && ids.length ? Promise.all(ids.map(async (id) => [id, await store.read(id)] as const)).then((rows) => new Map(rows)) : Promise.resolve(new Map());
+    stored.catch(() => undefined); // build reports a failed read
+    return { clip, stored };
   }
 
   /**
@@ -303,6 +358,7 @@ export class CaptureEngine {
    * the running recorder has no mirror to say (then a hide withholds the replay).
    */
   hiddenIdsAt(rect: Marker['rect']): Set<number> | null {
+    if (!this.capturing) return null;
     const mirror = mirrorOf(runningRecord());
     return mirror ? hiddenNodeIds([rect], mirror) : null;
   }
@@ -322,27 +378,23 @@ export class CaptureEngine {
     const hiddenIds = new Set(markedIds);
     if (hides.length && mirror) for (const id of hiddenNodeIds(hides, mirror)) hiddenIds.add(id);
     const events: eventWithTime[] = [];
-    const lanes: FlightLaneEvent[] = [];
     let truncated = frozen.clip?.truncated ?? false;
-    if (frozen.clip) {
-      if (frozen.clip.windows.some((w) => w.stored)) await flightWrites();
-      for (const w of frozen.clip.windows) {
-        if (!w.stored) {
-          events.push(...w.events);
-          continue;
-        }
-        try {
-          if (!this.store) throw new Error('the store is gone');
-          const read = await this.store.read(w.id);
-          events.push(...read.events);
-          lanes.push(...read.lanes);
-        } catch (e) {
-          console.warn('vitrinka: a stored part of the capture could not be read — the replay starts later', e);
-          truncated = true;
-        }
+    const pinned = await frozen.stored.catch((e: unknown) => {
+      console.warn('vitrinka: the stored part of the capture could not be read — the replay starts later', e);
+      return null;
+    });
+    for (const w of frozen.clip?.windows ?? []) {
+      if (!w.stored) {
+        events.push(...w.events);
+        continue;
       }
-      lanes.push(...frozen.clip.lanes);
+      const read = pinned?.get(w.id);
+      // Gone before the card opened, or unreadable: say the replay is short.
+      if (!read?.events.length) truncated = true;
+      else events.push(...read.events);
     }
+    // The console and network entries, earlier loads' included (priorLanes).
+    const lanes: FlightLaneEvent[] = frozen.clip?.lanes ?? [];
     const { parts, dropped } = withheld
       ? { parts: [], dropped: [] }
       : splitRRWebEvents(applyHides(events, hides, hiddenIds), CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);
@@ -371,15 +423,14 @@ export class CaptureEngine {
 
   /** A report went out: forget what it carried, in memory and in the store. */
   clear(): void {
-    clearFlight();
+    if (this.capturing) clearFlight();
   }
 
   stop(): void {
     this.stopped = true;
+    this.standDown();
+    if (this.claimed) releaseCapture('report');
     for (const off of this.offs.splice(0).reverse()) off();
-    const store = this.store;
-    this.store = null;
-    if (store) void flightWrites().then(() => store.close());
   }
 }
 

@@ -121,7 +121,12 @@ export function defineReportElement(faces: Faces): void {
     }
 
     attributeChangedCallback(name: string, old: string | null, value: string | null): void {
-      if (!this.widget || old === value) return;
+      if (old === value) return;
+      if (!this.widget) {
+        // Connected but waiting for its key or base (a host that configures later): mount now.
+        if (this.isConnected && (name === 'key' || name === 'base')) this.mountWidget();
+        return;
+      }
       if (name === 'locale') this.widget.setLocale(value);
       else if (name === 'button') this.widget.setButton(value !== 'false');
       else if (name === 'open-selector') this.widget.setOpenSelector(value);
@@ -150,7 +155,9 @@ export function defineReportElement(faces: Faces): void {
       this.setAttribute('locale', String(locale));
     }
 
+    /** Idempotent: an upgrade runs attributeChangedCallback before connectedCallback, and both land here. */
     private mountWidget(): void {
+      if (this.widget) return;
       const key = (this.getAttribute('key') ?? '').trim();
       const base = trimBase(this.getAttribute('base') ?? faces.defaultBase());
       if (!key || !base) {
