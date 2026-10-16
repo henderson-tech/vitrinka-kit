@@ -175,7 +175,7 @@ const cs: Strings = {
   toolbar: 'Nástroje pro označení',
   undo: 'Zpět',
   done: 'Hotovo',
-  coach: 'Klikněte, podržte a pohybujte kolem problému.',
+  coach: 'Klikněte, podržte a veďte kolem problému.',
   coachMore: 'Označit můžete i více míst.',
   marking: 'Označování',
   keyboardHint: 'Klávesnice: Enter začne, šipky posouvají, Shift+šipky mění velikost, Enter umístí.',

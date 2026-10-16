@@ -183,7 +183,7 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
   const draft = czech.getByRole('textbox', { name: 'Co se pokazilo?' });
   await draft.fill('Srpen je ve vyúčtování dvakrát');
   await czech.getByRole('button', { name: 'Ukažte nám kde' }).click();
-  await expect(page.getByText('Klikněte, podržte a pohybujte kolem problému.')).toBeVisible();
+  await expect(page.getByText('Klikněte, podržte a veďte kolem problému.')).toBeVisible();
   await draw(page, [80, 150], [420, 230]);
   await page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' }).fill('tady');
   await page.getByRole('toolbar').getByRole('button', { name: 'Hotovo' }).click();

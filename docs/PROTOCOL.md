@@ -171,7 +171,7 @@ optional marks drawn on the page.
 
   | Field | Meaning |
   |---|---|
-  | `storage` | `memory` (default), or `browser`: the windows are also written to IndexedDB (`vitrinka.capture`) so the minutes before a report survive the page loads in between |
+  | `storage` | `browser` (the server's default): the windows are also written to IndexedDB (`vitrinka.capture`) so the minutes before a report survive the page loads in between; or `memory`. Memory is only the widget's fallback when the server sends no profile (or no valid `storage`) |
   | `windowSec` | how far back (default 300): a checkout window is kept while it still covers part of it |
   | `maxBytes` | the replay's cap (default 12 MiB); over it the oldest window goes, and when only the window being recorded is left a fresh full snapshot is taken — the replay is then marked `truncated` |
   | `classes` | `interactions` — the masked rrweb replay (clicks, scrolls, typing as masked input, each page's view); `errors` — uncaught errors, unhandled rejections, `console.error`, failed requests; `console` — every console level; `network` — every request; `full` — all four |
