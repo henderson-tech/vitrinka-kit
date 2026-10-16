@@ -28,3 +28,4 @@ AGENTS.md
 # Playwright output (packages/web/e2e)
 test-results/
 playwright-report/
+/.vybava/config.ts
