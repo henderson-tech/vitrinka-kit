@@ -20,6 +20,7 @@ import {
   type FlightProfile,
   flightWrites,
   persistFlightNow,
+  pushFlightEvent,
   startFlightBuffer,
   stopFlightBuffer,
   takeFlightClip,
@@ -72,7 +73,7 @@ function profile(store: CaptureStore | null, over: Partial<FlightProfile> = {}):
 }
 
 async function storedWindows(store: CaptureStore, now: number): Promise<string[]> {
-  return (await store.sweep(now, FIVE_MIN, TAB)).map((w) => w.id);
+  return (await store.sweep(now, FIVE_MIN, TAB, '')).map((w) => w.id);
 }
 
 let store: CaptureStore | null = null;
@@ -160,6 +161,42 @@ describe('the capture profile in browser storage', () => {
     expect(after).not.toContain(sent[0]);
     expect(checkouts).toBe(1);
     expect(takeFlightClip()!.windows.map((w) => w.id)).toEqual(after);
+  });
+
+  it('restores only windows captured for the same project under the same privacy profile', async () => {
+    const strict = 'https://vitrinka.test|voke|strict|errors,interactions';
+    store = await openCaptureStore(new IDBFactory());
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(store, { scope: strict }));
+    startRecordWith(fakeRecord, 'flight');
+    emit?.(meta(T0));
+    emit?.(full(T0 + 1));
+    persistFlightNow();
+    await flightWrites();
+    expect(await store.sweep(T0 + 10, FIVE_MIN, TAB, strict)).toHaveLength(1);
+    // Another project in this tab, or the same one now unmasked: nothing comes back, and it is gone.
+    expect(await store.sweep(T0 + 10, FIVE_MIN, TAB, 'https://vitrinka.test|voke|full|errors,interactions')).toEqual([]);
+    expect(await store.sweep(T0 + 10, FIVE_MIN, TAB, strict)).toEqual([]);
+  });
+
+  it('an idle page never keeps more than the window: a stale screen gives way to a fresh one', () => {
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(null));
+    startRecordWith(fakeRecord, 'flight');
+    emit?.(meta(T0));
+    emit?.(full(T0 + 1));
+    emit?.(custom(T0 + 2, 'typed long ago'));
+    // Nothing moves on the page (rrweb checks out only on its own events); an error comes in.
+    setSystemTime(new Date(T0 + 5 * 60_000));
+    pushFlightEvent('console', { level: 'error', text: 'late error' }, { tabId: TAB, tabHost: 'app.example.test' });
+    setSystemTime(new Date(T0 + 6 * 60_000));
+    const clip = takeFlightClip()!;
+    expect(checkouts).toBe(1);
+    expect(clip.windows).toHaveLength(1);
+    expect(clip.windows[0]!.startMs).toBe(T0 + 6 * 60_000);
+    expect(JSON.stringify(clip.windows)).not.toContain('typed long ago');
+    expect(clip.lanes.map((e) => e.payload?.text)).toEqual(['late error']);
+    expect(clip.truncated).toBe(false);
   });
 
   it('a size-forced checkout keeps the replay whole and marks it truncated', () => {

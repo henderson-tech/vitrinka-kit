@@ -23,12 +23,14 @@ import { browserLocale, type Locale, parseLocale, strings, type Strings } from '
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
 import { type Keybind, keybindLabel, loadKeybind, matchesKeybind, readKeybindPress, saveKeybind, watchKeybind } from './keybind';
 import {
+  type ArrowHead,
   arrowEnds,
   arrowHead,
   isMark,
   type Marker,
   type MarkerShape,
   type Point,
+  type Rect,
   rectBetween,
   renumber,
   toWire,
@@ -60,6 +62,15 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const TITLE_CAP = 100;
 const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
 const TOOLS: readonly MarkerShape[] = ['circle', 'box', 'arrow', 'hide'];
+/** A keyboard mark starts as this, centred; arrows move it 10 px, Shift+arrows resize it. */
+const KB_DRAFT = { w: 160, h: 80 } as const;
+const MIN_KB_SIZE = 16;
+const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
+  ArrowLeft: [-10, 0],
+  ArrowRight: [10, 0],
+  ArrowUp: [0, -10],
+  ArrowDown: [0, 10],
+};
 
 const ICON = {
   close: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
@@ -194,14 +205,16 @@ function buildDom(mount: HTMLElement) {
   const pins = h('div', { class: 'pins' });
   const coachText = h('p');
   const coachMore = h('p');
+  const coachKeys = h('p', { class: 'keys', id: 'vr-keys' });
   const coach = h('div', { class: 'coach', role: 'status' });
-  coach.append(icon(coachArt(reducedMotion())), coachText, coachMore);
+  coach.append(icon(coachArt(reducedMotion())), coachText, coachMore, coachKeys);
   const toolButtons = new Map<MarkerShape, HTMLButtonElement>();
   for (const t of TOOLS) toolButtons.set(t, h('button', { type: 'button', 'aria-pressed': 'false', 'data-tool': t }));
   const undo = h('button', { type: 'button' });
   const done = h('button', { type: 'button', class: 'done' });
   const toolbar = h('div', { class: 'toolbar', role: 'toolbar' }, ...toolButtons.values(), h('span', { class: 'sep', 'aria-hidden': 'true' }), undo, done);
-  const mark = h('div', { class: 'mark' }, pins, coach, toolbar);
+  // Focusable: from the keyboard, Enter places a mark the arrows then move (markKey).
+  const mark = h('div', { class: 'mark', tabindex: '0', role: 'application', 'aria-describedby': 'vr-keys' }, pins, coach, toolbar);
   mark.prepend(ink);
 
   const root = h('div', { class: 'vr' }, fab, card, mark);
@@ -214,7 +227,7 @@ function buildDom(mount: HTMLElement) {
     notify, notifyBox, notifyText, error, where, whereText, send,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
     sent, sentTitle, sentBody, see, seeText, sentClose,
-    mark, ink, shapes, draft, pins, coach, coachText, coachMore, toolButtons, toolbar, undo, done,
+    mark, ink, shapes, draft, pins, coach, coachText, coachMore, coachKeys, toolButtons, toolbar, undo, done,
   };
 }
 
@@ -259,6 +272,8 @@ export class ReportWidget {
   private drawing: { start: Point; shape: MarkerShape; pointer: number } | null = null;
   private readonly offs: (() => void)[] = [];
   private readonly pins = new Map<number, Pin>();
+  /** Per hide mark: the page nodes it covered when drawn (they are blanked in the capture). */
+  private readonly hideIds = new Map<number, Set<number>>();
   private readonly e: Els;
 
   constructor(private readonly opts: WidgetOptions) {
@@ -373,11 +388,15 @@ export class ReportWidget {
       else this.close();
     });
     for (const [tool, btn] of e.toolButtons) {
-      on(btn, 'click', () => {
+      on(btn, 'click', (ev) => {
         this.tool = tool;
+        this.renderKbDraft();
         this.paint();
+        // From the keyboard (no pointer: detail 0), go straight back to drawing with it.
+        if (ev.detail === 0) e.mark.focus();
       });
     }
+    on(e.mark, 'keydown', (ev) => this.markKey(ev));
     on(e.undo, 'click', () => {
       this.markers = renumberDrawn(this.markers.slice(0, -1));
       this.renderMarks();
@@ -400,7 +419,9 @@ export class ReportWidget {
           if (this.recordingBind) return;
           if (this.marking && ev.key === 'Escape') {
             ev.preventDefault();
-            this.endMarking(true);
+            // Esc drops a keyboard mark being placed; the next one leaves marking.
+            if (this.kbDraft) this.cancelDraft();
+            else this.endMarking(true);
             return;
           }
           if (this.keybind && matchesKeybind(ev, this.keybind)) {
@@ -498,7 +519,7 @@ export class ReportWidget {
     const vw = globalThis.innerWidth || 800;
     const vh = globalThis.innerHeight || 600;
     this.placeCoach({ x: vw / 2 - 150, y: vh - 260 }, false);
-    this.e.toolButtons.get(this.tool)?.focus();
+    this.e.mark.focus();
   }
 
   private endMarking(backToCard: boolean): void {
@@ -542,18 +563,17 @@ export class ReportWidget {
     const end = { x: ev.clientX, y: ev.clientY };
     this.cancelDraft();
     if (!isMark(d.shape, d.start, end)) return;
+    this.addMarker(d.shape, rectBetween(d.start, end), d.shape === 'arrow' ? arrowHead(d.start, end) : undefined);
+  }
+
+  /** A new numbered mark; a hide also names the page nodes under it now, while the page sits frozen. */
+  private addMarker(shape: MarkerShape, rect: Rect, head?: ArrowHead): void {
     const key = this.nextKey++;
-    this.markers = renumberDrawn([
-      ...this.markers,
-      {
-        key,
-        n: this.markers.length + 1,
-        shape: d.shape,
-        rect: rectBetween(d.start, end),
-        note: '',
-        ...(d.shape === 'arrow' ? { head: arrowHead(d.start, end) } : {}),
-      },
-    ]);
+    if (shape === 'hide') {
+      const ids = this.engine?.hiddenIdsAt(rect);
+      if (ids) this.hideIds.set(key, ids);
+    }
+    this.markers = renumberDrawn([...this.markers, { key, n: this.markers.length + 1, shape, rect, note: '', ...(head ? { head } : {}) }]);
     this.noteOpen = key;
     this.renderMarks();
     this.paint();
@@ -562,8 +582,46 @@ export class ReportWidget {
 
   private cancelDraft(): void {
     this.drawing = null;
+    this.kbDraft = null;
     this.e.draft.replaceChildren();
     this.e.coach.classList.remove('pressing');
+  }
+
+  // -- marking from the keyboard (Enter starts, arrows move, Shift+arrows resize, Enter places) --
+
+  private kbDraft: Rect | null = null;
+
+  private markKey(ev: KeyboardEvent): void {
+    if (ev.target !== this.e.mark) return;
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      if (!this.kbDraft) {
+        this.kbDraft = { x: Math.round(vw / 2 - KB_DRAFT.w / 2), y: Math.round(vh / 2 - KB_DRAFT.h / 2), ...KB_DRAFT };
+        this.renderKbDraft();
+        return;
+      }
+      const rect = this.kbDraft;
+      this.cancelDraft();
+      this.addMarker(this.tool, rect, this.tool === 'arrow' ? 'se' : undefined);
+      return;
+    }
+    const step = KB_STEPS[ev.key];
+    if (!step || !this.kbDraft) return;
+    ev.preventDefault();
+    const d = this.kbDraft;
+    const [dx, dy] = step;
+    this.kbDraft = ev.shiftKey
+      ? { ...d, w: Math.min(vw - d.x, Math.max(MIN_KB_SIZE, d.w + dx)), h: Math.min(vh - d.y, Math.max(MIN_KB_SIZE, d.h + dy)) }
+      : { ...d, x: Math.min(vw - d.w, Math.max(0, d.x + dx)), y: Math.min(vh - d.h, Math.max(0, d.y + dy)) };
+    this.renderKbDraft();
+  }
+
+  private renderKbDraft(): void {
+    const r = this.kbDraft;
+    if (!r) return;
+    this.e.draft.replaceChildren(...this.shapeNodes({ shape: this.tool, rect: r, head: 'se' }));
   }
 
   /** The coach rides beside the pointer, inside the viewport. */
@@ -623,7 +681,10 @@ export class ReportWidget {
         this.renderPins();
       });
       note.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') note.blur();
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        // Back to the page, ready for the next mark from the keyboard.
+        this.e.mark.focus();
       });
       rm.addEventListener('click', () => {
         this.markers = renumberDrawn(this.markers.filter((x) => x.key !== m.key));
@@ -688,13 +749,15 @@ export class ReportWidget {
     this.paint();
     try {
       if (!this.job) {
+        const marked = new Set<number>();
+        for (const m of this.markers) for (const id of this.hideIds.get(m.key) ?? []) marked.add(id);
         const capture = this.engine
-          ? await this.engine.build(this.frozen ?? { clip: null }, this.markers).catch((e: unknown) => {
+          ? await this.engine.build(this.frozen ?? { clip: null }, this.markers, marked).catch((e: unknown) => {
               console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
               return EMPTY_CAPTURE;
             })
           : EMPTY_CAPTURE;
-        this.job = new ReportJob(capture, globalThis.location?.host ?? '');
+        this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key });
       }
       this.result = await this.job.run(this.envelope(description, this.job.capture));
       this.sentNotify = this.notify && this.who() !== null;
@@ -703,6 +766,7 @@ export class ReportWidget {
       this.frozen = null;
       this.e.desc.value = '';
       this.markers = [];
+      this.hideIds.clear();
       this.notify = false;
       this.e.notifyBox.checked = false;
       this.includedOpen = false;
@@ -810,6 +874,8 @@ export class ReportWidget {
     e.coach.hidden = !this.marking || this.markers.length > 0;
     e.coachText.textContent = s.coach;
     e.coachMore.textContent = s.coachMore;
+    e.coachKeys.textContent = s.keyboardHint;
+    e.mark.setAttribute('aria-label', s.marking);
     if (this.marking) {
       for (const label of e.shapes.querySelectorAll('.veil-label')) {
         if (label.textContent) label.textContent = s.hidden;

@@ -1,7 +1,7 @@
 /**
  * Console lane — `console.error` + `window.onerror` + `unhandledrejection`,
- * plus `console.warn` / `info` / `log` when the face asks for them
- * (`setConsoleLevels`: the report face's `console` capture class).
+ * plus `console.warn` / `info` / `log` when the face that patches it asks
+ * (`patchConsole({levels})`: the report face's `console` capture class).
  * The recorder's own logs are prefixed "vitrinka:" and skipped, or a failed
  * flush would feed itself forever. Shape matches the extension's CDP tap:
  * `{level, text}`.
@@ -31,13 +31,6 @@ function describe(args: unknown[]): string {
 
 /** The console methods beyond `error` a lane may tap. */
 export type ExtraConsoleLevel = 'warn' | 'info' | 'log';
-
-let extraLevels: readonly ExtraConsoleLevel[] = [];
-
-/** Also tap these levels (set before `patchConsole`; `[]`, the default, taps errors only). */
-export function setConsoleLevels(levels: readonly ExtraConsoleLevel[]): void {
-  extraLevels = levels;
-}
 
 function record(text: string, level: 'error' | ExtraConsoleLevel = 'error'): void {
   if (!text || text.startsWith('vitrinka:')) return;
@@ -79,7 +72,8 @@ export function ownConsolePatch(): void {
   patchConsole();
 }
 
-export function patchConsole(): void {
+/** Tap `console.error` and the page's errors — plus `levels` (default none) while this patch lives. */
+export function patchConsole(opts: { levels?: readonly ExtraConsoleLevel[] } = {}): void {
   const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
   g[PATCH_MARK] = OWNER;
@@ -94,7 +88,7 @@ export function patchConsole(): void {
     }
   };
   console.error = patched;
-  const extras = extraLevels.map((level) => {
+  const extras = (opts.levels ?? []).map((level) => {
     const original = console[level];
     const bound = original.bind(console);
     const wrapper = (...args: unknown[]) => {

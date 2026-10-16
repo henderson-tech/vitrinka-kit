@@ -10,8 +10,9 @@ Run the workspace gates with `devbox run test` and the browser suite with
 `devbox run e2e` (install Chromium on the box once with
 `devbox run --no-up -- 'bun x playwright install chromium'`).
 `devbox up` leaves the web-recorder fixture running (app `hud`; `kit` is the
-extension's privacy fixture); `devbox url` prints its
-address. Open it in two tabs and start one recording to exercise both lanes.
+extension's privacy fixture; `report` is Report a problem as vitrinka serves
+it — `/`, `/?mount`, `/?nobutton`); `devbox url` prints their
+addresses. Open the recorder in two tabs and start one recording to exercise both lanes.
 The fixture uses a local API stub; `/__events` exposes its received requests.
 
 Prerequisites: [Bun](https://bun.sh) ≥ 1.1 and Node ≥ 18.

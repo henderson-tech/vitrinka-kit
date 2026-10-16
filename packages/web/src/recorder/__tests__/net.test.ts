@@ -53,6 +53,22 @@ describe('net lane', () => {
   });
 });
 
+describe('net lane detail', () => {
+  it('a lane the report face released captures full detail for the recorder that patches it next', async () => {
+    const net = await import('../capture/net');
+    net.unpatchNetwork();
+    // The report face: metadata only, then released.
+    net.patchNetwork({ detail: 'meta' });
+    net.unpatchNetwork();
+    // The recorder's own acquisition.
+    patchNetwork();
+    setState(liveSession());
+    await fetch('https://api.example.test/orders', { headers: { 'x-trace': 'abc' } });
+    await capturesSettled();
+    expect(recorded()[0]).toHaveProperty('reqHeaders');
+  });
+});
+
 describe('net lane uninstall', () => {
   it('restores fetch and the XHR prototype on unpatch, and re-patches cleanly', async () => {
     const { unpatchNetwork } = await import('../capture/net');

@@ -85,7 +85,7 @@ function envelope(description: string): ReportEnvelope {
 describe('the report wire', () => {
   it('resumes the failed leg on retry — one report, never a duplicate', async () => {
     failChunk2 = 1;
-    const job = new ReportJob(capture, 'app.example.test');
+    const job = new ReportJob(capture, 'app.example.test', { url: BASE, key: 'vkb_test' });
     await expect(job.run(envelope('August is listed twice'))).rejects.toThrow('503');
     const reply = await job.run(envelope('August is listed twice in my settlement'));
 
@@ -113,6 +113,17 @@ describe('the report wire', () => {
       { seq: 1, ts: capture.chunks[0]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 2, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-1' },
       { seq: 2, ts: capture.chunks[1]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 1, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-2' },
     ]);
+  });
+});
+
+describe('the report wire, two widgets on one page', () => {
+  it('sends to its own base with its own key, whatever another widget configured', async () => {
+    configureRecorder({ url: 'https://another-vitrinka.test', key: 'vkb_other' });
+    const job = new ReportJob(capture, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    const reply = await job.run(envelope('Wrong project?'));
+    expect(reply.status).toBe('filed');
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((c) => c.auth === 'Bearer vkb_test' && c.path.startsWith('/api/v1/reports'))).toBe(true);
   });
 });
 

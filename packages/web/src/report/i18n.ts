@@ -46,6 +46,10 @@ export interface Strings {
   done: string;
   coach: string;
   coachMore: string;
+  /** The marking layer's name, for assistive technology. */
+  marking: string;
+  /** How to mark from the keyboard (the layer's description; shown in the coach card). */
+  keyboardHint: string;
   hidden: string;
   notePlaceholder: string;
   mark: (n: number) => string;
@@ -111,6 +115,8 @@ const en: Strings = {
   done: 'Done',
   coach: 'Click, hold and move around the problem.',
   coachMore: 'You can mark more than one place.',
+  marking: 'Marking',
+  keyboardHint: 'Keyboard: Enter to start, arrows to move, Shift+arrows to resize, Enter to place.',
   hidden: 'Hidden',
   notePlaceholder: 'Add a note (optional)',
   mark: (n) => `Mark ${n}`,
@@ -171,6 +177,8 @@ const cs: Strings = {
   done: 'Hotovo',
   coach: 'Klikněte, podržte a pohybujte kolem problému.',
   coachMore: 'Označit můžete i více míst.',
+  marking: 'Označování',
+  keyboardHint: 'Klávesnice: Enter začne, šipky posouvají, Shift+šipky mění velikost, Enter umístí.',
   hidden: 'Skryto',
   notePlaceholder: 'Přidejte poznámku (nepovinné)',
   mark: (n) => `Značka ${n}`,

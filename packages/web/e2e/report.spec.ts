@@ -1,114 +1,24 @@
 /**
- * Report a problem end to end (QA Studio S1, S2, S4): `build/report-widget.mjs`
- * (built here) served as vitrinka serves it — `/vendor/report-widget-1.mjs`,
- * with its rrweb recorder at `/vendor/rrweb-record-1.min.js` — on a page with
- * a stub of the report wire that records every call.
+ * Report a problem end to end (QA Studio S1, S2, S4): the report fixture
+ * (fixture/report-server.ts) serves `build/report-widget.mjs` as vitrinka
+ * serves it, with its rrweb recorder and a stub of the report wire that
+ * records every call.
  */
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { expect, type Page, test } from '@playwright/test';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const pkg = join(here, '..');
-const REPORT_URL = 'https://portal.vitrinka.test/voke/reports/rep-1?k=7';
+import { REPORT_URL, type ReportServer, type ReportSeen, startReportServer } from './fixture/report-server';
 
-interface Seen {
-  method: string;
-  path: string;
-  auth: string;
-  body: string;
-}
-
-let server: Server;
+let server: ReportServer;
 let base = '';
-let tmp = '';
-const seen: Seen[] = [];
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    let s = '';
-    req.on('data', (c: Buffer) => {
-      s += c.toString();
-    });
-    req.on('end', () => resolve(s));
-  });
-}
-
-const TABLE =
-  '<h1>Settlement · September 2026</h1><table><thead><tr><th>Month</th><th>Energy shared</th><th>Your credit</th></tr></thead><tbody>' +
-  ['September 2026', 'August 2026', 'August 2026', 'July 2026', 'June 2026']
-    .map((m, i) => `<tr><td>${m}</td><td>${400 + i} kWh</td><td>${800 + i}.20 Kč</td></tr>`)
-    .join('') +
-  '</tbody></table><p>IBAN CZ65 0800 0000 1920 0014 5399</p>';
-
-function page(query: string): string {
-  const head = '<!doctype html><html><head><meta charset="utf-8"><title>Voke</title><style>body{font:16px system-ui;margin:40px}td,th{padding:10px 24px;text-align:left}</style></head><body>';
-  if (query.includes('mount')) {
-    // The npm-style call: mountReport with the locale option.
-    return `${head}${TABLE}<script type="module">import { mountReport } from '/vendor/report-widget-1.mjs'; window.report = mountReport({ key: 'vkb_e2e', locale: 'cs' });</script></body></html>`;
-  }
-  const tag = query.includes('nobutton')
-    ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'
-    : '<vitrinka-report key="vkb_e2e" locale="en"></vitrinka-report>';
-  return `${head}${TABLE}${tag}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
-}
+let seen: ReportSeen[] = [];
 
 test.beforeAll(async () => {
-  execFileSync('bun', ['run', 'build:report'], { stdio: 'inherit', cwd: pkg });
-  const widget = readFileSync(join(pkg, 'build/report-widget.mjs'), 'utf8');
-  tmp = mkdtempSync(join(tmpdir(), 'vt-report-e2e-'));
-  execFileSync('bun', ['build', join(here, 'fixture/rrweb-record.ts'), '--format=esm', '--target=browser', '--outfile', join(tmp, 'rrweb.mjs')], {
-    stdio: 'inherit',
-    cwd: pkg,
-  });
-  const rrweb = readFileSync(join(tmp, 'rrweb.mjs'), 'utf8');
-
-  server = createServer(async (req, res) => {
-    const path = req.url ?? '/';
-    const body = await readBody(req);
-    seen.push({ method: req.method ?? 'GET', path, auth: String(req.headers.authorization ?? ''), body });
-    const js = (src: string) => {
-      res.setHeader('content-type', 'text/javascript');
-      res.end(src);
-    };
-    const json = (v: unknown, status = 200) => {
-      res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(v));
-    };
-    if (path === '/vendor/report-widget-1.mjs') return js(widget);
-    if (path === '/vendor/rrweb-record-1.min.js') return js(rrweb);
-    if (path === '/api/v1/report-config') {
-      return json({
-        project: 'voke',
-        captureProfile: { storage: 'memory', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'] },
-        profile: 'strict',
-        portalUrl: 'https://portal.vitrinka.test/voke',
-        flightRecorder: true,
-      });
-    }
-    if (path === '/api/v1/reports' && req.method === 'POST') return json({ id: 'rep-1', custody: 'quarantined' }, 201);
-    const chunk = /^\/api\/v1\/reports\/rep-1\/chunk\?seq=(\d+)$/.exec(path);
-    if (chunk) return json({ blobKey: `reports/rep-1/chunk-${chunk[1]}`, ok: true }, 201);
-    if (path === '/api/v1/reports/rep-1/events') return json({ inserted: 1 });
-    if (path === '/api/v1/reports/rep-1/submit') return json({ status: 'quarantined', reportUrl: REPORT_URL });
-    if (path.startsWith('/api/')) return json({ error: 'not here' }, 404);
-    res.setHeader('content-type', 'text/html');
-    res.end(page(path));
-  });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  const addr = server.address();
-  base = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
+  server = await startReportServer();
+  base = server.url;
+  seen = server.seen;
 });
 
-test.afterAll(async () => {
-  await new Promise((r) => server.close(r));
-  rmSync(tmp, { recursive: true, force: true });
-});
+test.afterAll(() => server.close());
 
 test.beforeEach(() => {
   seen.length = 0;
@@ -293,4 +203,68 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
   await czech.getByRole('button', { name: 'Ukažte nám kde' }).click();
   await expect(page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
   await expect(page.getByRole('toolbar').getByRole('button', { name: 'Zpět' })).toBeEnabled();
+});
+
+test('a hide blanks what was under it when it was drawn, even when the page changes before Send', async ({ page }) => {
+  await page.goto(`${base}/?balanced`);
+  await armed();
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Hide' }).click();
+  const iban = (await page.getByText(/^IBAN/).boundingBox())!;
+  await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Done' }).click();
+  // The app re-renders that line before the reporter sends.
+  await page.evaluate(() => {
+    const p = [...document.querySelectorAll('p')].find((el) => el.textContent?.startsWith('IBAN'))!;
+    p.replaceChildren(document.createTextNode('IBAN CZ65 0800 0000 1920 0014 5399'));
+  });
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
+  expect(chunks).toContain('Settlement'); // balanced: page text is kept…
+  expect(chunks).not.toContain('1920 0014 5399'); // …except under the hide
+});
+
+test('marks can be made from the keyboard alone', async ({ page }) => {
+  await page.goto(base);
+  await armed();
+  await page.getByRole('button', { name: /^Report a problem/ }).focus();
+  await page.keyboard.press('Enter');
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await page.keyboard.type('Totals are off');
+  await card.getByRole('button', { name: 'Show us where' }).focus();
+  await page.keyboard.press('Enter');
+
+  const canvas = page.getByRole('application', { name: 'Marking' });
+  await expect(canvas).toBeFocused();
+  await expect(page.getByText(/Enter to start, arrows to move, Shift\+arrows to resize/)).toBeVisible();
+  await page.keyboard.press('Enter');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Enter');
+  const note = page.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' });
+  await expect(note).toBeFocused();
+  await page.keyboard.type('the total');
+  await page.keyboard.press('Enter');
+  await expect(canvas).toBeFocused();
+
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Hide' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(canvas).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Mark 2', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await expect(card.getByText('2 places marked')).toBeVisible();
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const markers = created().markers as { n: number; shape: string; note?: string }[];
+  expect(markers.map((m) => [m.n, m.shape, m.note])).toEqual([
+    [1, 'circle', 'the total'],
+    [2, 'hide', undefined],
+  ]);
 });

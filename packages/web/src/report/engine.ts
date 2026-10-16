@@ -20,9 +20,9 @@
  */
 import type { eventWithTime } from '@rrweb/types';
 
-import { api } from '../recorder/api';
-import { patchConsole, setConsoleLevels, unpatchConsole } from '../recorder/capture/console';
-import { patchNetwork, setNetworkDetail, unpatchNetwork } from '../recorder/capture/net';
+import { api, type ApiTarget } from '../recorder/api';
+import { patchConsole, unpatchConsole } from '../recorder/capture/console';
+import { patchNetwork, unpatchNetwork } from '../recorder/capture/net';
 import { setRedactionPolicy } from '../recorder/capture/redact';
 import { checkoutRRWeb, type RecordFn, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
 import { configureRecorder } from '../recorder/config';
@@ -169,9 +169,9 @@ function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keepLane']>
   };
 }
 
-async function fetchConfig(): Promise<{ project: string; profile: CaptureProfile; masking: MaskingProfile; reachable: boolean }> {
+async function fetchConfig(target: ApiTarget): Promise<{ project: string; profile: CaptureProfile; masking: MaskingProfile; reachable: boolean }> {
   try {
-    const res = await api<Record<string, unknown>>('GET', '/api/v1/report-config');
+    const res = await api<Record<string, unknown>>('GET', '/api/v1/report-config', undefined, { target });
     const flight = typeof res.flightRecorder === 'boolean' ? res.flightRecorder : undefined;
     return {
       project: str(res.project),
@@ -215,7 +215,7 @@ export class CaptureEngine {
     setTabIdentity(browserTabId(), globalThis.location?.host ?? '');
     currentRoute.pathname = globalThis.location?.pathname ?? '/';
     setRedactionPolicy(null);
-    const fetched = await fetchConfig();
+    const fetched = await fetchConfig({ url: opts.base, key: opts.key });
     const profile = narrowProfile(fetched.profile, opts.capture);
     const lanes = lanesOf(profile.classes);
     const config: ReportConfig = { project: fetched.project, profile, lanes, masking: fetched.masking, reachable: fetched.reachable };
@@ -223,11 +223,14 @@ export class CaptureEngine {
     setRedactionPolicy(maskingPolicy(config.masking));
 
     const windowMs = profile.windowSec * 1000;
+    // What stored windows were captured FOR: another project, or a laxer
+    // masking or wider classes than now, never comes back (sweep drops it).
+    const scope = [opts.base, fetched.project, config.masking, profile.classes.join(',')].join('|');
     let prior: StoredWindow[] = [];
     if (profile.storage === 'browser') {
       try {
         this.store = await openCaptureStore();
-        prior = await this.store.sweep(Date.now(), windowMs, currentRoute.tabId);
+        prior = await this.store.sweep(Date.now(), windowMs, currentRoute.tabId, scope);
       } catch (e) {
         console.warn('vitrinka: browser capture storage unavailable — keeping the capture in memory', e);
         this.store = null;
@@ -249,6 +252,7 @@ export class CaptureEngine {
       maxLaneEvents: FLIGHT_MAX_LANE_EVENTS,
       keepLane: laneKeeper(lanes),
       store: this.store,
+      scope,
       prior,
     });
     this.offs.push(stopFlightBuffer);
@@ -256,14 +260,14 @@ export class CaptureEngine {
       const persist = () => persistFlightNow();
       this.offs.push(listen(window, 'pagehide', persist), listen(document, 'visibilitychange', persist));
     }
+    // Each acquisition names its own settings, so nothing of the report face
+    // outlives its release into the next face that patches these lanes.
     if (lanes.errors || lanes.console) {
-      setConsoleLevels(lanes.console ? ['warn', 'info', 'log'] : []);
-      patchConsole();
+      patchConsole({ levels: lanes.console ? ['warn', 'info', 'log'] : [] });
       this.offs.push(unpatchConsole);
     }
     if (lanes.errors || lanes.network) {
-      setNetworkDetail('meta');
-      patchNetwork();
+      patchNetwork({ detail: 'meta' });
       this.offs.push(unpatchNetwork);
     }
     if (lanes.replay) {
@@ -293,10 +297,30 @@ export class CaptureEngine {
     return { clip };
   }
 
-  /** What one report sends: the frozen windows (stored ones read back), the hides applied, split under the chunk cap. */
-  async build(frozen: Frozen, markers: readonly Marker[]): Promise<BuiltCapture> {
+  /**
+   * The rrweb ids of the page nodes under a hide right now — taken when the
+   * hide is drawn (the page sits frozen under the marking layer); null when
+   * the running recorder has no mirror to say (then a hide withholds the replay).
+   */
+  hiddenIdsAt(rect: Marker['rect']): Set<number> | null {
+    const mirror = mirrorOf(runningRecord());
+    return mirror ? hiddenNodeIds([rect], mirror) : null;
+  }
+
+  /**
+   * What one report sends: the frozen windows (stored ones read back), the
+   * hides applied, split under the chunk cap. `markedIds` are the nodes each
+   * hide covered when it was drawn; the nodes under it at send join them. A
+   * hide whose nodes cannot be named (no mirror) withholds the replay — fail
+   * closed, never a box over text that still rides along.
+   */
+  async build(frozen: Frozen, markers: readonly Marker[], markedIds: ReadonlySet<number> = new Set()): Promise<BuiltCapture> {
     const hides = markers.filter((m) => m.shape === 'hide').map((m) => m.rect);
-    const hiddenIds = hides.length ? hiddenNodeIds(hides, mirrorOf(runningRecord())) : new Set<number>();
+    const mirror = mirrorOf(runningRecord());
+    const withheld = hides.length > 0 && !mirror;
+    if (withheld) console.warn('vitrinka: this page recorder cannot name what a hide covers — the report goes without its replay');
+    const hiddenIds = new Set(markedIds);
+    if (hides.length && mirror) for (const id of hiddenNodeIds(hides, mirror)) hiddenIds.add(id);
     const events: eventWithTime[] = [];
     const lanes: FlightLaneEvent[] = [];
     let truncated = frozen.clip?.truncated ?? false;
@@ -319,7 +343,9 @@ export class CaptureEngine {
       }
       lanes.push(...frozen.clip.lanes);
     }
-    const { parts, dropped } = splitRRWebEvents(applyHides(events, hides, hiddenIds), CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);
+    const { parts, dropped } = withheld
+      ? { parts: [], dropped: [] }
+      : splitRRWebEvents(applyHides(events, hides, hiddenIds), CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);
     const chunks: CaptureChunk[] = [];
     let at = 0;
     for (const p of parts) {

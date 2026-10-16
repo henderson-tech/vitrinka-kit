@@ -15,7 +15,7 @@
  * still files, without its replay. `reportUrl` is the server's — shown as
  * returned, never composed.
  */
-import { api, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
+import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
 import type { Locale } from './i18n';
 import type { Identity } from './identity';
@@ -58,23 +58,26 @@ export class ReportJob {
   private rowsPosted = 0;
   private skipCapture = false;
 
+  /** `target`: the widget's own base and key — never whatever another widget configured. */
   constructor(
     readonly capture: BuiltCapture,
     private readonly tabHost: string,
+    private readonly target: ApiTarget,
   ) {}
 
   /** Run the legs from wherever the last run stopped; rejects with the failing leg's error. */
   async run(env: ReportEnvelope): Promise<SubmitReply> {
+    const to = { target: this.target };
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env);
+      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to);
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
       this.sent = editsKey;
     } else if (this.sent !== editsKey) {
-      await api('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
+      await api('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits, to);
       this.sent = editsKey;
     }
     if (!this.skipCapture) {
@@ -86,7 +89,7 @@ export class ReportJob {
         this.skipCapture = true;
       }
     }
-    const reply = await api<{ status?: unknown; reportUrl?: unknown }>('POST', `/api/v1/reports/${encodeURIComponent(this.id)}/submit`, {});
+    const reply = await api<{ status?: unknown; reportUrl?: unknown }>('POST', `/api/v1/reports/${encodeURIComponent(this.id)}/submit`, {}, to);
     return {
       status: reply.status === 'filed' ? 'filed' : 'quarantined',
       ...(typeof reply.reportUrl === 'string' && reply.reportUrl ? { reportUrl: reply.reportUrl } : {}),
@@ -98,7 +101,7 @@ export class ReportJob {
     const { chunks, truncated } = this.capture;
     for (const c of chunks) {
       if (this.blobKeys.has(c.seq)) continue;
-      const up = await uploadTo(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body);
+      const up = await uploadTo(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body, this.target);
       if (!up.blobKey) throw new Error(`vitrinka: chunk ${c.seq} came back without a blob key`);
       this.blobKeys.set(c.seq, up.blobKey);
     }
@@ -112,7 +115,7 @@ export class ReportJob {
     }));
     while (this.rowsPosted < rows.length) {
       const batch = rows.slice(this.rowsPosted, this.rowsPosted + EVENTS_PER_POST);
-      await api('POST', `/api/v1/reports/${id}/events`, { events: batch });
+      await api('POST', `/api/v1/reports/${id}/events`, { events: batch }, { target: this.target });
       this.rowsPosted += batch.length;
     }
   }

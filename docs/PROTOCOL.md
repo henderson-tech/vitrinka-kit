@@ -191,23 +191,37 @@ optional marks drawn on the page.
   2 s (and on pagehide) as one chunk, with the console and network entries
   captured meanwhile. A window leaves storage when it leaves the window,
   every window of a tab once that tab's report is sent, and anything past
-  its age on the next load of any tab. A report sends only its own tab's
-  windows. A profile of `memory` deletes the database. What the reporter
-  types — the description, notes — is memory only, always.
+  its age on the next load of any tab. Each window records what it was
+  captured for — vitrinka's origin, the project, the masking profile and the
+  classes — and a load under anything else (another project in the same
+  tab, a stricter masking, fewer classes) drops this tab's windows instead
+  of restoring them. A report sends only its own tab's windows. A profile of
+  `memory` deletes the database. What the reporter types — the description,
+  notes — is memory only, always.
+- **An idle page** keeps no more than the window: once the newest event of
+  the window being recorded is older than `windowSec`, a fresh full snapshot
+  replaces it (rrweb itself checks out only when the page changes).
 - **When the card opens**, the capture is frozen (the buffer keeps rolling);
   with no full snapshot of the current page yet, one is taken first.
 - **Marks.** "Show us where" freezes the page under a transparent layer
   (no clicks, no scrolling reach it) where the reporter draws circles,
-  boxes, arrows and hides, numbered 1, 2, 3… with an optional note each.
+  boxes, arrows and hides, numbered 1, 2, 3… with an optional note each —
+  with the pointer, or from the keyboard (Enter places a mark, arrows move
+  it, Shift+arrows resize it, Enter again sets it).
   There is no element selector: a mark is a viewport rectangle in CSS
   pixels, and the report's `env.viewport` says `{w, h, dpr}`. An arrow also
   says which corner its head points into (`head`: `nw` · `ne` · `sw` ·
   `se`). A **hide** blanks its region in the capture before it leaves the
   browser: an opaque box joins every full snapshot of the replay (so every
   frame and every still shows it blank), and the text and form values of
-  the page's nodes centred under it are emptied in the snapshots, in later
-  mutations and in input events.
-- **What a report sends**, only on Send, under the `vkb_` key:
+  the page's nodes centred under it — named when the hide is drawn, while
+  the page sits frozen, and again at Send — are emptied in the snapshots,
+  in later mutations and in input events. Where the page recorder cannot
+  name those nodes (a build without rrweb's mirror), a report with a hide
+  goes without its replay.
+- **What a report sends**, only on Send, under the widget's own `vkb_` key
+  to its own `base` (two widgets on one page never send through each
+  other):
   1. `POST /api/v1/reports` — `{title (the description's first line, ≤ 100
      characters), description, env: {url, ua, viewport: {w, h, dpr},
      appVersion, locale (the browser's)}, console: [{level, ts, text}],

@@ -30,9 +30,11 @@ interface ChunkRecord {
 export interface CaptureStore extends FlightStore {
   /**
    * The next load's cleanup: drop every window (any tab) whose `windowEnd`
-   * is older than `windowMs`, and return this tab's survivors oldest first.
+   * is older than `windowMs`, and this tab's windows captured under another
+   * `scope` (another project, a laxer masking, wider classes) — fail closed;
+   * return this tab's survivors oldest first.
    */
-  sweep(now: number, windowMs: number, tab: string): Promise<StoredWindow[]>;
+  sweep(now: number, windowMs: number, tab: string, scope: string): Promise<StoredWindow[]>;
   /** A stored window's events and lane events, in capture order. */
   read(windowId: string): Promise<{ events: eventWithTime[]; lanes: FlightLaneEvent[] }>;
   close(): void;
@@ -59,6 +61,7 @@ function chunkRange(windowId: string): IDBKeyRange {
 function isStoredWindow(v: unknown): v is StoredWindow {
   if (typeof v !== 'object' || v === null) return false;
   const w = v as Record<string, unknown>;
+  // A record without a scope cannot say what it was captured for: it never comes back (sweep).
   return typeof w.id === 'string' && typeof w.tab === 'string' && typeof w.startMs === 'number' && typeof w.lastMs === 'number';
 }
 
@@ -103,7 +106,7 @@ export function openCaptureStore(idb: IDBFactory | undefined = globalThis.indexe
         for (const w of all) if (isStoredWindow(w) && w.tab === tab) dropIn(tx, w.id);
         await done(tx);
       },
-      async sweep(now, windowMs, tab) {
+      async sweep(now, windowMs, tab, scope) {
         const tx = db.transaction([WINDOWS, CHUNKS], 'readwrite');
         const all = (await result(tx.objectStore(WINDOWS).getAll())).filter(isStoredWindow);
         const kept: StoredWindow[] = [];
@@ -112,7 +115,8 @@ export function openCaptureStore(idb: IDBFactory | undefined = globalThis.indexe
         for (const [owner, list] of byTab) {
           list.sort((a, b) => a.startMs - b.startMs);
           list.forEach((w, i) => {
-            if (windowEnd(w, list[i + 1]) <= now - windowMs) dropIn(tx, w.id);
+            const aged = windowEnd(w, list[i + 1]) <= now - windowMs;
+            if (aged || (owner === tab && w.scope !== scope)) dropIn(tx, w.id);
             else if (owner === tab) kept.push(w);
           });
         }

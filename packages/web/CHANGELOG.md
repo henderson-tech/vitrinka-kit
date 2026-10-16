@@ -33,6 +33,12 @@ D6): the same engine as the recorder, a reporter's face.
   or the marks.
 - **The reporter's own shortcut**, recorded in the card's settings by
   pressing it (a modifier required, Esc cancels); no default.
+- **Marks from the keyboard**: the marking layer takes focus; Enter places
+  a mark, arrows move it, Shift+arrows resize it, Enter sets it.
+- **Stored capture is scoped** to vitrinka's origin, the project, the
+  masking profile and the classes it was captured under: a load under
+  anything else drops it. A hide names the nodes it covers when drawn, and
+  without rrweb's mirror a report with a hide goes without its replay.
 
 Engine changes the recorder face shares:
 
@@ -41,11 +47,16 @@ Engine changes the recorder face shares:
   while it still covers part of the window — and a window being recorded
   that alone outgrows the cap restarts from a forced full snapshot instead
   of waiting for the next checkout; a clip says `truncated` when a cap cut
-  it. The pill's last minute is otherwise unchanged (30 s windows, 4 MiB).
+  it. An idle page's window is replaced by a fresh snapshot once its newest
+  event is older than the window. The pill's last minute is otherwise
+  unchanged (30 s windows, 4 MiB).
+- `patchNetwork({detail})` and `patchConsole({levels})` take their settings
+  per acquisition, so nothing a report face chose outlives its release.
 - The rrweb lane takes its recorder as an argument
   (`capture/rrweb-lane.ts`); `capture/rrweb.ts` binds the static import.
 - The network lane has a metadata-only mode, the console lane can tap
-  `warn` / `info` / `log`, and the HUD host's inline style moved to its own
+  `warn` / `info` / `log`, the API client takes an explicit `target`
+  (`{url, key}`) per call, and the HUD host's inline style moved to its own
   module so mounting the host no longer pulls in the React sheets.
 
 ## 0.6.0

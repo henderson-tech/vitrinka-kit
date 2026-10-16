@@ -200,6 +200,9 @@ kbd {
 .coach svg { display: block; width: 100%; height: 64px; border-radius: 9px; background: #222126; }
 .coach p { margin: 11px 0 0; font-size: 15px; line-height: 1.4; }
 .coach p + p { margin-top: 2px; color: rgba(242, 241, 239, .66); font-size: 13px; }
+.coach p.keys { margin-top: 8px; font-size: 12px; color: rgba(242, 241, 239, .5); }
+.mark:focus { outline: none; }
+.mark:focus-visible { outline: 3px solid rgba(230, 69, 95, .65); outline-offset: -3px; }
 .coach .bar { fill: #5b5a61; }
 .coach .loop { fill: none; stroke: #e6455f; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 200; stroke-dashoffset: 200; animation: vr-draw 2.8s ease-in-out infinite; }
 .coach .hold { fill: none; stroke: #fff; stroke-width: 1.5; opacity: 0; animation: vr-hold 2.8s ease-in-out infinite; }

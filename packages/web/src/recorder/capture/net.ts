@@ -48,12 +48,8 @@ export function __setBodyReadDeadlineForTests(ms: number): () => void {
  */
 export type NetworkDetail = 'full' | 'meta';
 
+/** The live patch's detail: set by each `patchNetwork` that installs it, so it never outlives its owner. */
 let detail: NetworkDetail = 'full';
-
-/** Set before `patchNetwork`; the face that installs the lane decides. */
-export function setNetworkDetail(next: NetworkDetail): void {
-  detail = next;
-}
 
 /** Is a session (or the idle flight recorder) capturing right now? Gates all body work. */
 function capturing(): boolean {
@@ -401,10 +397,12 @@ export function ownNetworkPatch(): void {
   patchNetwork();
 }
 
-export function patchNetwork(): void {
+/** Install the fetch/XHR wrappers; `detail` (default `full`, the recorder) applies while this patch lives. */
+export function patchNetwork(opts: { detail?: NetworkDetail } = {}): void {
   const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
   g[PATCH_MARK] = OWNER;
+  detail = opts.detail ?? 'full';
   const restores: (() => void)[] = [];
   g[UNPATCH_MARK] = () => {
     for (const r of restores.splice(0)) r();

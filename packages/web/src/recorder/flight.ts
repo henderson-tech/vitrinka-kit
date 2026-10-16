@@ -96,6 +96,8 @@ export interface StoredWindow extends FlightSpan {
   id: string;
   /** The tab (`currentRoute.tabId`) that recorded it; a report sends only its own tab's. */
   tab: string;
+  /** The profile's `scope` it was captured under. */
+  scope: string;
   count: number;
   bytes: number;
   href: string;
@@ -131,6 +133,11 @@ export interface FlightProfile {
   keepLane?: (kind: string, payload: Record<string, unknown> | undefined) => Record<string, unknown> | undefined | null;
   /** Keep the windows here too (browser storage); null/absent = memory only. */
   store?: FlightStore | null;
+  /**
+   * What the windows are captured for (project, masking, classes): written on
+   * every stored window, so a sweep under another scope never restores them.
+   */
+  scope?: string;
   /** This tab's windows an earlier page load left in the store (its sweep), oldest first. */
   prior?: readonly StoredWindow[];
 }
@@ -293,6 +300,7 @@ function storedWindow(w: FlightWindow): StoredWindow {
   return {
     id: w.id,
     tab: currentRoute.tabId,
+    scope: profile.scope ?? '',
     load: w.load,
     startMs: w.startMs,
     lastMs: w.lastMs,
@@ -335,6 +343,20 @@ function enforce(now: number): void {
     dropWindow(0);
   }
   if (forcing) return; // the forced checkout's own events, re-entering
+  // rrweb checks its checkout interval only when the page emits: an idle page
+  // would keep one ever-older window. Once even its newest event is older
+  // than the window, a fresh screen replaces it — nothing of the window is lost.
+  const live = windows.at(-1);
+  if (live && live.load === FLIGHT_LOAD && checkout && live.lastMs <= now - profile.windowMs) {
+    forcing = true;
+    try {
+      checkout();
+    } finally {
+      forcing = false;
+    }
+    const at = windows.indexOf(live);
+    if (at >= 0 && at < windows.length - 1) for (let i = at; i >= 0; i--) dropWindow(i);
+  }
   let forced = false;
   while (windows.length > 0 && overCap()) {
     const live = windows.length === 1 && windows[0]!.load === FLIGHT_LOAD;
@@ -365,9 +387,13 @@ export function flightTarget(): string | null {
   return active ? `flight:${epoch}` : null;
 }
 
-/** Lane events older than the oldest kept snapshot go — older than the window when there is none. */
+/**
+ * Lane events go once they are older than both the oldest kept snapshot and
+ * the window (a replay cut short by a cap or a fresh screen keeps the
+ * window's errors and requests).
+ */
 function trimLanes(now: number): void {
-  const from = windows[0]?.startMs ?? now - profile.windowMs;
+  const from = Math.min(windows[0]?.startMs ?? Number.POSITIVE_INFINITY, now - profile.windowMs);
   const keep = lanes.findIndex((e) => Date.parse(e.ts) >= from);
   if (keep === -1) lanes = [];
   else if (keep > 0) lanes = lanes.slice(keep);

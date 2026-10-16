@@ -298,7 +298,8 @@ The report face of the same engine, for the people using your app: a large
 **What went wrong?** with Send, and **Show us where** to circle, box, point
 at or hide parts of the page — numbered marks with an optional note each,
 taught by a coach card ("click, hold and move") until the first mark
-exists. The minutes before are attached under your project's **capture
+exists; from the keyboard, Enter places a mark, arrows move it,
+Shift+arrows resize it and Enter sets it. The minutes before are attached under your project's **capture
 profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
 § Report a problem). You need the project's report key (`vkb_…`).
 
