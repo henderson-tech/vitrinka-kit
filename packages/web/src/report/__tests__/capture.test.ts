@@ -219,6 +219,20 @@ describe('the capture profile in browser storage', () => {
     expect(takeFlightClip()!.lanes.map((e) => e.payload?.text)).toEqual(['boom']);
   });
 
+  it('console and network entries restored from an earlier load leave the store once they leave the window', async () => {
+    store = await openCaptureStore(new IDBFactory());
+    const span = { id: 'earlier.lanes.1', tab: TAB, scope: 's', kind: 'lanes' as const, load: 'earlier', startMs: T0, lastMs: T0, count: 0, bytes: 0, href: '', route: '' };
+    await store.putWindow(span);
+    await store.putChunk(span.id, 0, '[]', [{ ts: new Date(T0).toISOString(), tabId: TAB, tabHost: 'app.example.test', kind: 'console', payload: { level: 'error', text: 'old' } }]);
+    setSystemTime(new Date(T0 + 1000));
+    startFlightBuffer(profile(store, { scope: 's', prior: [span] }));
+    // The page stays open, quietly, past the window.
+    setSystemTime(new Date(T0 + FIVE_MIN + 1000));
+    persistFlightNow();
+    await flightWrites();
+    expect((await store.read(span.id)).lanes).toEqual([]);
+  });
+
   it('a draft keeps the stored minutes it opened with, even once they age out before Send', async () => {
     const scope = 'https://vitrinka.test|voke|strict|errors,interactions';
     const seed = await openCaptureStore();

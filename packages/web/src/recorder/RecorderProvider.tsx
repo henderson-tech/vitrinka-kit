@@ -38,7 +38,7 @@ export function RecorderProvider({
 
   useEffect(() => {
     // The recorder owns the page's capture runtime; a report face holding it yields here.
-    claimCapture('recorder');
+    const captureClaim = claimCapture('recorder');
     setTabIdentity(browserTabId(), location.host);
     // ONE recorder: mark the document, hear who records, then lead or follow.
     // A remote command opens this recorder's own doors.
@@ -153,7 +153,7 @@ export function RecorderProvider({
       unpatchNetwork();
       unpatchConsole();
       leaveLead();
-      releaseCapture('recorder');
+      releaseCapture(captureClaim);
     };
     // The lanes install once per mount; config changes are handled above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -268,6 +268,43 @@ test('a widget told identify(null) reports anonymously, whatever the page-wide i
   expect(created()).not.toHaveProperty('identity');
 });
 
+test('mountReport({identity: null}) reports anonymously under a page-wide identity', async ({ page }) => {
+  await page.goto(`${base}/?nobutton`);
+  await page.evaluate(async () => {
+    document.querySelector('vitrinka-report')!.remove();
+    const widget: { identify: (who: { email: string }) => void; mountReport: (o: { key: string; identity: null }) => unknown } = await import(
+      '/vendor/report-widget-1.mjs' as string
+    );
+    widget.identify({ email: 'jana@example.test' });
+    widget.mountReport({ key: 'vkb_e2e', identity: null });
+  });
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Anonymous from the options');
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  expect(created()).not.toHaveProperty('identity');
+});
+
+test('the standalone widget yields to a host recorder from another bundle', async ({ page }) => {
+  await page.goto(`${base}/?recorder`);
+  await armed();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const fab = page.getByRole('button', { name: /^Report a problem/ });
+  await fab.click();
+  await expect(card.getByText('The last 5 minutes are attached')).toBeVisible();
+  await card.getByRole('button', { name: 'Close' }).click();
+
+  // The host's recorder (its own copy of the runtime registry) mounts.
+  await page.evaluate(() => (window as unknown as { vtRecorder: { mount(): void } }).vtRecorder.mount());
+  await fab.click();
+  await expect(card.getByText('The last 5 minutes are attached')).toBeHidden();
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Sent beside the recorder');
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  expect(seen.some((s) => s.path.includes('/chunk?seq='))).toBe(false);
+});
+
 test('a tag that gets its key after it connected mounts then', async ({ page }) => {
   await page.goto(`${base}/?nobutton`);
   await page.evaluate(() => {

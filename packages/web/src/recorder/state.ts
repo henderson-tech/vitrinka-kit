@@ -62,28 +62,45 @@ export const leadState: { following: 'page' | 'extension' | null } = { following
  * Which face drives this document's ONE capture runtime (QA Studio D6): the
  * console and network patches, the flight buffer, the rrweb lane and the
  * redaction rules are page-wide, so only one face may run them. The recorder
- * always wins — a report face that finds it mounted captures nothing, and
+ * always wins — a report face that finds any owner captures nothing, and
  * one that holds the runtime yields it (`yieldTo`, synchronously) the moment
- * a recorder mounts.
+ * a recorder mounts. The registry lives on `globalThis` (like the console
+ * and network patch marks): the standalone report-widget.mjs and a host's
+ * npm recorder carry separate copies of this module, and must agree.
  */
 export type CaptureFace = 'recorder' | 'report';
 
-let captureOwner: { face: CaptureFace; yieldTo?: () => void } | null = null;
+const OWNER_KEY = '__vitrinkaCaptureOwner';
 
-/** Take the runtime for `face`; false when a report face asks while the recorder holds it. */
-export function claimCapture(face: CaptureFace, yieldTo?: () => void): boolean {
-  if (captureOwner && captureOwner.face !== face) {
-    if (face === 'report') return false;
-    const previous = captureOwner;
-    captureOwner = null;
-    previous.yieldTo?.();
-  }
-  captureOwner = { face, ...(yieldTo ? { yieldTo } : {}) };
-  return true;
+interface CaptureOwner {
+  face: CaptureFace;
+  /** The claim's own token: only its holder releases it. */
+  token: string;
+  yieldTo?: () => void;
 }
 
-export function releaseCapture(face: CaptureFace): void {
-  if (captureOwner?.face === face) captureOwner = null;
+type OwnerGlobals = typeof globalThis & { [OWNER_KEY]?: CaptureOwner | null };
+
+/** Take the runtime for `face`; its release token, or null when a report face finds it taken. */
+export function claimCapture(face: CaptureFace, yieldTo?: () => void): string | null {
+  const g = globalThis as OwnerGlobals;
+  const current = g[OWNER_KEY];
+  if (current) {
+    if (face === 'report') return null;
+    if (current.face === 'report') {
+      g[OWNER_KEY] = null;
+      current.yieldTo?.();
+    }
+  }
+  const token = `${face}:${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 10)}`;
+  g[OWNER_KEY] = { face, token, ...(yieldTo ? { yieldTo } : {}) };
+  return token;
+}
+
+/** Give the runtime back — only the claim that `token` names. */
+export function releaseCapture(token: string | null | undefined): void {
+  const g = globalThis as OwnerGlobals;
+  if (token && g[OWNER_KEY]?.token === token) g[OWNER_KEY] = null;
 }
 
 // -- change subscription (the HUD re-renders off this) -----------------------

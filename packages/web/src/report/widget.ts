@@ -456,6 +456,8 @@ export class ReportWidget {
       this.paint();
     }));
     this.offs.push(onSharedIdentity(() => this.paint()));
+    // The recorder took the page's capture over: stop saying minutes are attached.
+    if (this.engine) this.offs.push(this.engine.onChange(() => this.paint()));
   }
 
   private show(view: View): void {

@@ -210,7 +210,8 @@ optional marks drawn on the page.
   rrweb lane and the redaction rules are page-wide, and the recorder face
   runs them whenever it is mounted: a report face beside it captures
   nothing (its reports go without a capture), and one already capturing
-  stops when a recorder mounts. The report face never changes the
+  stops when a recorder mounts — across bundles too (the standalone widget
+  beside a host's npm recorder). The report face never changes the
   recorder's server, key or rules.
 - **Marks.** "Show us where" freezes the page under a transparent layer
   (no clicks, no scrolling reach it) where the reporter draws circles,

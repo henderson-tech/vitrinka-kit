@@ -59,10 +59,12 @@ function page(query: string): string {
     // The npm-style call: mountReport with the locale option.
     return `${head}${TABLE}<script type="module">import { mountReport } from '/vendor/report-widget-1.mjs'; window.report = mountReport({ key: 'vkb_e2e', locale: 'cs' });</script></body></html>`;
   }
+  // A host's own recorder bundle beside the standalone widget (claim-recorder.ts).
+  const recorder = query.includes('recorder') ? '<script src="/claim-recorder.js"></script>' : '';
   const tag = query.includes('nobutton')
     ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'
     : '<vitrinka-report key="vkb_e2e" locale="en"></vitrinka-report>';
-  return `${head}${TABLE}${tag}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
+  return `${head}${TABLE}${tag}${recorder}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
 }
 
 /** Build the widget and the rrweb stand-in, then serve both and the stub on `host:port` (0 = any). */
@@ -75,6 +77,11 @@ export async function startReportServer(options: { host?: string; port?: number 
     cwd: pkg,
   });
   const rrweb = readFileSync(join(tmp, 'rrweb.mjs'), 'utf8');
+  execFileSync('bun', ['build', join(here, 'claim-recorder.ts'), '--format=iife', '--target=browser', '--outfile', join(tmp, 'claim-recorder.js')], {
+    stdio: 'inherit',
+    cwd: pkg,
+  });
+  const claimRecorder = readFileSync(join(tmp, 'claim-recorder.js'), 'utf8');
   const seen: ReportSeen[] = [];
   let failCreate = false;
 
@@ -93,6 +100,7 @@ export async function startReportServer(options: { host?: string; port?: number 
     seen.push({ method: req.method ?? 'GET', path, auth: String(req.headers.authorization ?? ''), body });
     if (path === '/vendor/report-widget-1.mjs') return js(widget);
     if (path === '/vendor/rrweb-record-1.min.js') return js(rrweb);
+    if (path === '/claim-recorder.js') return js(claimRecorder);
     if (path === '/api/v1/report-config') {
       return json({
         project: 'voke',

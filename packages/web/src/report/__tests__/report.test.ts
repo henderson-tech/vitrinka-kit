@@ -135,23 +135,28 @@ describe('one capture runtime per page', () => {
 
   it('a report face beside a mounted recorder leaves the recorder its target and its buffer', async () => {
     configureRecorder({ url: 'https://recorder.vitrinka.test', key: 'vkr_rec' });
-    claimCapture('recorder');
+    const recorder = claimCapture('recorder');
     const engine = acquireEngine(engineOpts)!;
     const config = await engine.ready;
     expect(recorderConfig()).toMatchObject({ url: 'https://recorder.vitrinka.test', key: 'vkr_rec' });
     expect(config.capturing).toBe(false);
     expect(flightActive()).toBe(false);
     releaseEngine(engine);
-    releaseCapture('recorder');
+    releaseCapture(recorder);
   });
 
-  it('a recorder that mounts after a report face takes the runtime over', async () => {
+  it('a recorder that mounts after a report face takes the runtime over, and the widget hears it', async () => {
     const engine = acquireEngine(engineOpts)!;
-    expect((await engine.ready).capturing).toBe(true);
+    const config = await engine.ready;
+    expect(config.capturing).toBe(true);
     expect(flightActive()).toBe(true);
-    claimCapture('recorder');
+    let heard = 0;
+    engine.onChange(() => heard++);
+    const recorder = claimCapture('recorder');
     expect(flightActive()).toBe(false);
-    releaseCapture('recorder');
+    expect(config.capturing).toBe(false);
+    expect(heard).toBe(1);
+    releaseCapture(recorder);
     releaseEngine(engine);
   });
 });

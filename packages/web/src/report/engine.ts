@@ -204,8 +204,11 @@ export class CaptureEngine {
   readonly ready: Promise<ReportConfig>;
   private store: CaptureStore | null = null;
   private stopped = false;
-  /** This engine holds (or held) the page's capture runtime. */
-  private claimed = false;
+  /** The release token of this engine's claim on the page's capture runtime. */
+  private claim: string | null = null;
+  /** The config `ready` resolved with — kept true to what the engine does now. */
+  private config: ReportConfig | null = null;
+  private readonly listeners = new Set<() => void>();
   /** …and runs it now: false before the claim, without it, and after it yielded. */
   private capturing = false;
   /** The engine's own lifetime (its base registration). */
@@ -236,11 +239,12 @@ export class CaptureEngine {
     if (this.stopped) return config;
     // The page-wide runtime (lanes, buffer, rrweb, rules) is the recorder's
     // whenever one is mounted; this widget then reports without a capture.
-    if (!claimCapture('report', () => this.standDown())) {
+    this.config = config;
+    this.claim = claimCapture('report', () => this.standDown());
+    if (!this.claim) {
       console.warn('vitrinka: the recorder runs this page’s capture — Report a problem sends without one');
       return config;
     }
-    this.claimed = true;
     this.capturing = true;
     config.capturing = true;
     setTabIdentity(browserTabId(), globalThis.location?.host ?? '');
@@ -259,7 +263,8 @@ export class CaptureEngine {
       try {
         this.store = await openCaptureStore();
         const kept = await this.store.sweep(Date.now(), windowMs, currentRoute.tabId, scope);
-        prior = kept.filter((w) => w.kind !== 'lanes');
+        // Replay windows and lane spans both: the buffer expires each in its turn.
+        prior = kept;
         // The console and network entries of earlier loads, replay or not.
         const store = this.store;
         const spans = await Promise.all(kept.filter((w) => w.kind === 'lanes').map((w) => store.read(w.id)));
@@ -320,14 +325,22 @@ export class CaptureEngine {
     return config;
   }
 
+  /** Hear the engine's state change (it stopped capturing): the widget repaints. */
+  onChange(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
   /** The recorder mounted: hand it the runtime — this widget goes on reporting without a capture. */
   private standDown(): void {
     if (!this.capturing) return;
     this.capturing = false;
+    if (this.config) this.config.capturing = false;
     for (const off of this.capture.splice(0).reverse()) off();
     const store = this.store;
     this.store = null;
     if (store) void flightWrites().then(() => store.close());
+    for (const fn of this.listeners) fn();
   }
 
   /** Freeze the capture now (the card opened); the buffer rolls on. */
@@ -428,8 +441,10 @@ export class CaptureEngine {
 
   stop(): void {
     this.stopped = true;
+    this.listeners.clear();
     this.standDown();
-    if (this.claimed) releaseCapture('report');
+    releaseCapture(this.claim);
+    this.claim = null;
     for (const off of this.offs.splice(0).reverse()) off();
   }
 }

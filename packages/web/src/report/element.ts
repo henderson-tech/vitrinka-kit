@@ -193,7 +193,8 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
   if (opts.button === false) el.setAttribute('button', 'false');
   if (opts.openSelector) el.setAttribute('open-selector', opts.openSelector);
   el.options = { appVersion: opts.appVersion, capture: opts.capture, sanitizeUrl: opts.sanitizeUrl };
-  if (opts.identity) el.identify(opts.identity);
+  // null is a choice (anonymous, whatever the page-wide identity); only undefined defers.
+  if (opts.identity !== undefined) el.identify(opts.identity);
   (opts.parent ?? document.body).append(el);
   return {
     face: 'report',

@@ -190,6 +190,8 @@ let unstoredLanes: FlightLaneEvent[] = [];
 /** This load's stored lane spans, oldest first; a span covers at most the window. */
 let laneSpans: { id: string; startMs: number; lastMs: number; parts: number }[] = [];
 let laneSeq = 0;
+/** Lane spans earlier loads stored (restored as `priorLanes`): they expire on this load's clock too. */
+let priorSpans: { id: string; lastMs: number }[] = [];
 /** Per window id: how many of its events the store holds, and its next chunk's part. */
 const persisted = new Map<string, { events: number; parts: number }>();
 /** Start of the oldest window left after a cap dropped one; null = nothing lost. */
@@ -225,6 +227,7 @@ export function startFlightBuffer(next: FlightProfile = RECORDER_FLIGHT): void {
   lanes = (next.priorLanes ?? []).slice(-next.maxLaneEvents);
   unstoredLanes = [];
   laneSpans = [];
+  priorSpans = (next.prior ?? []).filter((w) => w.kind === 'lanes').map((w) => ({ id: w.id, lastMs: w.lastMs }));
   persisted.clear();
   truncatedFrom = null;
   enforce(Date.now());
@@ -241,6 +244,7 @@ export function stopFlightBuffer(): void {
   lanes = [];
   unstoredLanes = [];
   laneSpans = [];
+  priorSpans = [];
   persisted.clear();
   truncatedFrom = null;
 }
@@ -265,6 +269,7 @@ export function clearFlight(): void {
   lanes = [];
   unstoredLanes = [];
   laneSpans = [];
+  priorSpans = [];
   persisted.clear();
   truncatedFrom = null;
   const tab = currentRoute.tabId;
@@ -314,6 +319,8 @@ function persistLanes(now: number): void {
     const [gone] = laneSpans.splice(0, 1);
     if (gone) queueWrite((s) => s.dropWindow(gone.id));
   }
+  for (const gone of priorSpans.filter((s) => s.lastMs <= cutoff)) queueWrite((s) => s.dropWindow(gone.id));
+  priorSpans = priorSpans.filter((s) => s.lastMs > cutoff);
   const batch = unstoredLanes;
   if (!batch.length) return;
   unstoredLanes = [];
