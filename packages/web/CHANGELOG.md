@@ -1,5 +1,13 @@
 # @vitrinka/web
 
+## 0.7.1
+
+- **Report a problem hands focus back.** Closing the card returns focus to
+  whatever had it when the card opened — the host's own control (`button:
+  false` with `open-selector` or `open()`), the field the reporter's shortcut
+  fired in — and falls back to the button. With the button hidden, focus
+  was lost to `<body>`.
+
 ## 0.7.0
 
 **Report a problem** — the report face of the one capture client (QA Studio

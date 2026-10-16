@@ -359,7 +359,10 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 
 The handle (and the element) has `open()`, `close()`, `identify()`,
 `setLocale()`; the handle also `unmount()`s. For the tag from npm, call
-`defineReportElement()` once.
+`defineReportElement()` once. Closing the card hands focus back to whatever
+had it when the card opened (your control, the field the shortcut fired in),
+else to the button: call `open()` once your control holds focus again — after
+a menu that opened it has handed focus back to its trigger.
 
 **Who reports.** Vouch for your signed-in user with a token your SERVER
 signs — never in the browser — over `{sub, email, name?, iat, exp, aud:
