@@ -39,6 +39,25 @@ the token, they only send it as the bearer — the web recorder with
 `credentials: omit` so no cookie ever rides along. A 401 forgets a linked
 token.
 
+**Report a problem** (the report face of `@vitrinka/web`, also served by
+vitrinka as `/vendor/report-widget-1.mjs`) speaks only the report leaves,
+with the project's publishable report key (`vkb_…`) as the bearer, also with
+`credentials: omit`:
+
+```
+GET   /api/v1/report-config             → {project, captureProfile, portalUrl, profile, flightRecorder}
+POST  /api/v1/reports                   the report (below) → {id, custody: "direct" | "quarantined"}
+PATCH /api/v1/reports/:id               {title, description, markers, notify} — text changed before a retry
+POST  /api/v1/reports/:id/chunk?seq=N   one rrweb chunk (a JSON array, ≤ 4 MiB, N from 1) → {blobKey}
+POST  /api/v1/reports/:id/events        {events: [{seq, ts, tabHost, kind: "rrweb", payload: {count, source: "replay", truncated}, blobKey}]}
+POST  /api/v1/reports/:id/submit        {} → {status: "filed" | "quarantined", reportUrl?} — the last leg
+```
+
+Its single-file build loads one more thing, and only when the project's
+profile records the page: rrweb's recorder, from the same vitrinka
+(`<base>/vendor/rrweb-record-1.min.js`). The npm build imports `rrweb`
+(the peer dependency) lazily instead.
+
 ## When recording happens
 
 Only during a session you explicitly start:
@@ -78,6 +97,12 @@ Only during a session you explicitly start:
   link), it keeps the page's last minute **in memory only** — nothing is
   written to storage and nothing is sent until you press Send on a report;
   a reload discards it. The host turns it off with `flightRecorder: false`.
+- **Report a problem** (the report face, `mountReport` / `<vitrinka-report>`):
+  while the widget is mounted it keeps the last minutes of the page under
+  the **project's capture profile** (below) — in memory, or in this
+  browser's IndexedDB when the profile says `storage: browser` — and sends
+  nothing until the person presses Send on a report. Nothing is captured
+  before the profile is read; a host can only narrow it.
 
 ## What is captured (per session)
 
@@ -100,11 +125,14 @@ in, so the server renders its stills at it.
 recording running:
 
 - **What the idle pill keeps** (the flight recorder): the rrweb DOM stream as
-  two checkout windows of 30 s (a clip covers the last 30–60 s and always
-  opens on a full snapshot), and the click, navigation, console and network
-  events since the older window opened — capped at 4 MiB of serialized
-  rrweb, 20 000 rrweb events and 500 lane events (over a cap the older
-  window goes). It is captured under exactly the redaction a recording uses
+  checkout windows of 30 s, each kept while it still covers part of the
+  last 30 s (a clip covers the last 30–60 s and always opens on a full
+  snapshot), and the click, navigation, console and network events since
+  the oldest window opened — capped at 4 MiB of serialized rrweb, 20 000
+  rrweb events and 500 lane events. Over a cap the oldest window goes; when
+  only the window being recorded is left over it, a fresh full snapshot is
+  taken and the old window goes (incremental events are never spliced out).
+  It is captured under exactly the redaction a recording uses
   (masked inputs, the workspace policy — fetched once when the buffer
   starts — scrubbed URLs, click text that never reads a value), held in
   memory, never persisted, and discarded on reload, unlink or when a
@@ -127,6 +155,87 @@ recording running:
   6. `PATCH /api/v1/sessions/:id {status: "done"}`.
 - **During a recording**, Report adds that task annotation to the running
   session instead; no second session, no clip.
+
+### Report a problem (web report face)
+
+The same capture engine as the recorder (the rrweb lane, the console and
+network lanes, the flight buffer, the redaction engine), with a reporter's
+face: a "Report a problem" button, a card that asks what went wrong, and
+optional marks drawn on the page.
+
+- **The capture profile** comes from `GET /api/v1/report-config`
+  (`captureProfile`); the host's `capture` option can only narrow it
+  (storage only down to memory, a shorter window, a lower cap, fewer
+  classes). A server without one, or an unreachable one, means memory, the
+  last 60 s, 4 MiB, errors + the replay, strictly masked.
+
+  | Field | Meaning |
+  |---|---|
+  | `storage` | `memory` (default), or `browser`: the windows are also written to IndexedDB (`vitrinka.capture`) so the minutes before a report survive the page loads in between |
+  | `windowSec` | how far back (default 300): a checkout window is kept while it still covers part of it |
+  | `maxBytes` | the replay's cap (default 12 MiB); over it the oldest window goes, and when only the window being recorded is left a fresh full snapshot is taken — the replay is then marked `truncated` |
+  | `classes` | `interactions` — the masked rrweb replay (clicks, scrolls, typing as masked input, each page's view); `errors` — uncaught errors, unhandled rejections, `console.error`, failed requests; `console` — every console level; `network` — every request; `full` — all four |
+
+- **Masking** follows the project's `profile`: `strict` (default) masks every
+  input value and every text node — a subtree the host marks
+  `data-vitrinka-unmask` keeps its text, never its input values;
+  `balanced` masks input values; `full` masks nothing. Page URLs (the
+  replay's, the report's `env.url`) pass the redaction engine's query and
+  fragment scrub and the host's `sanitizeUrl`; `env.url` never carries a
+  query. Console text is redacted like a recording's and capped at 2 000
+  characters. Requests are metadata only — method, path (pathname only,
+  token-shaped runs replaced by `•••`), status, duration — never a header or
+  a body, and never the widget's own calls.
+- **Browser storage.** Masking happens before storage: what IndexedDB holds
+  is exactly what would be sent. Every window's new events land there every
+  2 s (and on pagehide) as one chunk, with the console and network entries
+  captured meanwhile. A window leaves storage when it leaves the window,
+  every window of a tab once that tab's report is sent, and anything past
+  its age on the next load of any tab. A report sends only its own tab's
+  windows. A profile of `memory` deletes the database. What the reporter
+  types — the description, notes — is memory only, always.
+- **When the card opens**, the capture is frozen (the buffer keeps rolling);
+  with no full snapshot of the current page yet, one is taken first.
+- **Marks.** "Show us where" freezes the page under a transparent layer
+  (no clicks, no scrolling reach it) where the reporter draws circles,
+  boxes, arrows and hides, numbered 1, 2, 3… with an optional note each.
+  There is no element selector: a mark is a viewport rectangle in CSS
+  pixels, and the report's `env.viewport` says `{w, h, dpr}`. An arrow also
+  says which corner its head points into (`head`: `nw` · `ne` · `sw` ·
+  `se`). A **hide** blanks its region in the capture before it leaves the
+  browser: an opaque box joins every full snapshot of the replay (so every
+  frame and every still shows it blank), and the text and form values of
+  the page's nodes centred under it are emptied in the snapshots, in later
+  mutations and in input events.
+- **What a report sends**, only on Send, under the `vkb_` key:
+  1. `POST /api/v1/reports` — `{title (the description's first line, ≤ 100
+     characters), description, env: {url, ua, viewport: {w, h, dpr},
+     appVersion, locale (the browser's)}, console: [{level, ts, text}],
+     network: [{method, path, status, ms}], identity?, markers: [{n, shape,
+     rect: {x, y, w, h}, note?, head?}], locale (the widget's: cs | en),
+     notify?}` — at most 500 console and 500 network entries;
+  2. the frozen replay, hides applied, as chunks under 4 MiB
+     (`/chunk?seq=1…n`), then their `rrweb` rows (`/events`, `payload:
+     {count, source: "replay", truncated}`);
+  3. `POST /api/v1/reports/:id/submit {}`.
+
+  A failed leg keeps the job: Retry resumes it — one report, never a
+  duplicate — and text edited meanwhile rides a `PATCH`. A capture leg the
+  server refuses for good is skipped, and the report files without its
+  replay. `reportUrl`, when the server returns one, is shown as returned
+  ("See your report"); the widget never composes a link.
+- **Identity** is the host's word, held in memory for the page's life:
+  `identify({token})` passes a compact HS256 JWS the host's SERVER signed
+  with the project's host secret over `{sub, email, name?, iat, exp, aud:
+  "<workspace>/<project>"}` (`exp` ≤ 24 h after `iat`) — a valid one files
+  the report directly; `identify({email, name?})` binds it to a pending
+  reporter (quarantined until approved); nothing at all is anonymous and
+  quarantined. The widget never reads the token's claims. `notify` ("Email
+  me when it's fixed") is offered only to an identified reporter.
+- **On the device**: the reporter's shortcut, when they record one, in
+  `localStorage` (`vitrinka.recorder.report.keybind`: the key's code and its
+  modifiers); the tab id in `sessionStorage` (`vitrinka.tab`); and, under
+  `storage: browser`, the capture database above. Nothing else.
 
 ### Attached images (web HUD)
 

@@ -1,5 +1,53 @@
 # @vitrinka/web
 
+## 0.7.0
+
+**Report a problem** — the report face of the one capture client (QA Studio
+D6): the same engine as the recorder, a reporter's face.
+
+- **`@vitrinka/web/report`** — `mountReport(opts)` and the
+  `<vitrinka-report>` element (`key`, `base`, `open-selector`, `locale`,
+  `button`): a large floating "Report a problem" button (`button: false`
+  hides it), a card that asks "What went wrong?" with Send, and **Show us
+  where** to mark the frozen page — circle, box, arrow, hide — numbered
+  1, 2, 3… with an optional note each. No element selector. Until the first
+  mark a coach card rides beside the pointer: a tiny loop of the gesture and
+  "Click, hold and move around the problem". `open()`, `close()`,
+  `identify({token} | {email, name?})`, `setLocale('cs' | 'en')`,
+  `unmount()`; `face: 'recorder'` mounts the recorder pill instead (npm).
+- **One file for vitrinka** — `@vitrinka/web/report-widget.mjs`
+  (`build/report-widget.mjs`), served as `/vendor/report-widget-1.mjs`:
+  React-free, its only runtime import the deployment's
+  `/vendor/rrweb-record-1.min.js`, loaded lazily.
+- **The capture profile** (D7) from `GET /api/v1/report-config`, which the
+  host can only narrow: memory or browser storage (IndexedDB, masked before
+  storage, expiring with the window, cleared after send and on the next load
+  past its age), the window (default 5 min), the size cap, and the classes
+  (errors · interactions · full · console · network). Drafts stay in memory.
+- **The report wire**: `POST /api/v1/reports` → chunks → rrweb rows →
+  `submit`, under the `vkb_` key; leg-resumable (Retry resumes, never
+  duplicates); marks as viewport rects with `env.viewport {w, h, dpr}`; a
+  hide blanks its region in the replay before it leaves the browser.
+- **cs / en built in**: the browser's language by default; the `locale`
+  option, attribute and `setLocale()` repaint live without losing the draft
+  or the marks.
+- **The reporter's own shortcut**, recorded in the card's settings by
+  pressing it (a modifier required, Esc cancels); no default.
+
+Engine changes the recorder face shares:
+
+- The flight buffer takes a profile (window, checkout interval, caps, an
+  optional store). Windows now age against the clock — a window is kept
+  while it still covers part of the window — and a window being recorded
+  that alone outgrows the cap restarts from a forced full snapshot instead
+  of waiting for the next checkout; a clip says `truncated` when a cap cut
+  it. The pill's last minute is otherwise unchanged (30 s windows, 4 MiB).
+- The rrweb lane takes its recorder as an argument
+  (`capture/rrweb-lane.ts`); `capture/rrweb.ts` binds the static import.
+- The network lane has a metadata-only mode, the console lane can tap
+  `warn` / `info` / `log`, and the HUD host's inline style moved to its own
+  module so mounting the host no longer pulls in the React sheets.
+
 ## 0.6.0
 
 The pill now says what it is doing at every step, and keeps what you write.
