@@ -1,8 +1,10 @@
 /**
- * Console lane — `console.error` + `window.onerror` + `unhandledrejection`.
+ * Console lane — `console.error` + `window.onerror` + `unhandledrejection`,
+ * plus `console.warn` / `info` / `log` when the face that patches it asks
+ * (`patchConsole({levels})`: the report face's `console` capture class).
  * The recorder's own logs are prefixed "vitrinka:" and skipped, or a failed
  * flush would feed itself forever. Shape matches the extension's CDP tap:
- * `{level: 'error', text}`.
+ * `{level, text}`.
  */
 import { pushEvent } from '../queue';
 import { currentRoute } from '../state';
@@ -27,13 +29,16 @@ function describe(args: unknown[]): string {
     .slice(0, TEXT_CAP);
 }
 
-function record(text: string): void {
+/** The console methods beyond `error` a lane may tap. */
+export type ExtraConsoleLevel = 'warn' | 'info' | 'log';
+
+function record(text: string, level: 'error' | ExtraConsoleLevel = 'error'): void {
   if (!text || text.startsWith('vitrinka:')) return;
   // Logged objects routinely carry tokens/headers — same redaction pass as
   // network bodies.
   pushEvent(
     'console',
-    { level: 'error', text: redactText(text) },
+    { level, text: redactText(text) },
     { tabId: currentRoute.tabId, tabHost: currentRoute.tabHost },
   );
 }
@@ -67,7 +72,8 @@ export function ownConsolePatch(): void {
   patchConsole();
 }
 
-export function patchConsole(): void {
+/** Tap `console.error` and the page's errors — plus `levels` (default none) while this patch lives. */
+export function patchConsole(opts: { levels?: readonly ExtraConsoleLevel[] } = {}): void {
   const g = globalThis as PatchGlobals;
   if (g[PATCH_MARK]) return;
   g[PATCH_MARK] = OWNER;
@@ -82,6 +88,22 @@ export function patchConsole(): void {
     }
   };
   console.error = patched;
+  const extras = (opts.levels ?? []).map((level) => {
+    const original = console[level];
+    const bound = original.bind(console);
+    const wrapper = (...args: unknown[]) => {
+      bound(...args);
+      try {
+        record(describe(args), level);
+      } catch {
+        // capture must never break logging
+      }
+    };
+    console[level] = wrapper;
+    return () => {
+      if (console[level] === wrapper) console[level] = original;
+    };
+  });
   const onError = (e: ErrorEvent) => {
     try {
       record(describe([e.error ?? e.message]));
@@ -103,6 +125,7 @@ export function patchConsole(): void {
   }
   g[UNPATCH_MARK] = () => {
     if (console.error === patched) console.error = origError;
+    for (const restore of extras) restore();
     if (hasWindow) {
       removeEventListener('error', onError);
       removeEventListener('unhandledrejection', onRejection);

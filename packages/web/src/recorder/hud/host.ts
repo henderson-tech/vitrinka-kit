@@ -12,7 +12,7 @@
  * — no preventDefault, so buttons and the textarea still focus.
  */
 import { RRWEB_BLOCK_ATTR } from '../block';
-import { HOST_STYLE, SHEET_HOST_STYLE } from './styles';
+import { HOST_STYLE, SHEET_HOST_STYLE } from './host-style';
 
 const SHIELDED = [
   'pointerdown', 'pointerup', 'pointermove', 'pointerover', 'pointerout', 'pointercancel',

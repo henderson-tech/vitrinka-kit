@@ -71,6 +71,13 @@ export function redactAndCap(
 /** The sanitizer whose failure was last reported: once, not on every URL. */
 let reportedSanitizer: unknown = null;
 
+/** A report face's `sanitizeUrl` while it holds the capture runtime (it never writes the recorder's config). */
+let faceSanitizer: ((url: string) => string) | null = null;
+
+export function setCaptureSanitizer(fn: ((url: string) => string) | null | undefined): void {
+  faceSanitizer = fn ?? null;
+}
+
 /**
  * The host's `sanitizeUrl` over one captured URL or route. FAIL CLOSED: a
  * sanitizer that throws or returns a non-string leaves the URL's origin, or
@@ -79,7 +86,7 @@ let reportedSanitizer: unknown = null;
  * about its own URLs, not a workspace redaction rule.
  */
 function sanitizeUrl(url: string): string {
-  const sanitize = recorderConfig().sanitizeUrl;
+  const sanitize = faceSanitizer ?? recorderConfig().sanitizeUrl;
   if (!sanitize) return url;
   let failure: string;
   try {

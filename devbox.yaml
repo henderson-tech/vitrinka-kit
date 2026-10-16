@@ -30,6 +30,14 @@ apps:
     sync: .
     sync_ignores: *ignores
     deps: *deps
+  # Report a problem as vitrinka serves it (packages/web/e2e/fixture/
+  # report-server.ts): `/`, `/?mount` (cs, mountReport), `/?nobutton`.
+  report:
+    cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun packages/web/e2e/fixture/report-serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:report}"
+    ports: [report]
+    sync: .
+    sync_ignores: *ignores
+    deps: *deps
 
 scripts:
   test:

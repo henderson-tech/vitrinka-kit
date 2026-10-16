@@ -92,6 +92,8 @@ describe('flight recorder', () => {
   });
 
   it('drops the older window over the byte or event cap, and keeps the newest 500 lane events', () => {
+    // Windows age against the clock: keep it on the events' timeline.
+    setSystemTime(new Date(T0));
     startFlightBuffer();
     pushFlightRRWeb(meta(T0));
     pushFlightRRWeb(full(T0 + 1));

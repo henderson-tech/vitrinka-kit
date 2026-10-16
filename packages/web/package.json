@@ -1,7 +1,7 @@
 {
   "name": "@vitrinka/web",
-  "version": "0.6.0",
-  "description": "vitrinka toolkit for React DOM apps — the journey recorder: capture manual-testing sessions (rrweb DOM stream, clicks, navigation, network, console, notes) straight into vitrinka boards.",
+  "version": "0.7.0",
+  "description": "vitrinka toolkit for React DOM apps — the journey recorder (capture manual-testing sessions: rrweb DOM stream, clicks, navigation, network, console, notes) and Report a problem (a reporter's button, marks and the last minutes, cs/en), straight into vitrinka.",
   "license": "Elastic-2.0",
   "repository": {
     "type": "git",
@@ -33,8 +33,13 @@
       "types": "./build/hud.d.ts",
       "default": "./build/hud.js"
     },
+    "./report": {
+      "types": "./build/report/index.d.ts",
+      "default": "./build/report/index.js"
+    },
     "./hud.iife.js": "./build/hud.iife.js",
     "./one.iife.js": "./build/one.iife.js",
+    "./report-widget.mjs": "./build/report-widget.mjs",
     "./package.json": "./package.json"
   },
   "files": [
@@ -44,13 +49,14 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one",
+    "build": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one && bun run build:report",
     "build:hud": "bun build src/recorder/hud/iife.ts --format=iife --minify --target=browser --define process.env.NODE_ENV='\"production\"' --outfile build/hud.iife.js",
     "build:one": "bun build src/recorder/one-iife.ts --format=iife --minify --target=browser --outfile build/one.iife.js",
+    "build:report": "bun build src/report/bundle.ts --format=esm --minify --target=browser --define process.env.NODE_ENV='\"production\"' --outfile build/report-widget.mjs",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "test:e2e": "playwright test -c playwright.config.ts --workers 1",
-    "prepublishOnly": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one"
+    "prepublishOnly": "tsc -p tsconfig.build.json && bun run build:hud && bun run build:one && bun run build:report"
   },
   "dependencies": {
     "@vitrinka/link": "^0.1.3",
@@ -67,6 +73,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "^19.2.0",
+    "fake-indexeddb": "^6.2.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "rrweb": "^2.0.0",

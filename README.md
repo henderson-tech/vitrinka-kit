@@ -19,7 +19,7 @@ your device and what data it collects.
 | Path | What it is |
 |---|---|
 | [`packages/expo`](packages/expo) | `@vitrinka/expo` — the Expo / React Native toolkit. Today: the journey recorder (`@vitrinka/expo/recorder`). |
-| [`packages/web`](packages/web) | `@vitrinka/web` — the React DOM toolkit (Next, Vite, …). Today: the journey recorder (`@vitrinka/web/recorder`) — rrweb DOM stream, clicks, navigation, network, console, notes — and the `withVitrinkaRecorder` build guard for Next. |
+| [`packages/web`](packages/web) | `@vitrinka/web` — the web capture client (Next, Vite, …), one engine with two faces: the journey recorder (`@vitrinka/web/recorder`) — rrweb DOM stream, clicks, navigation, network, console, notes — with the `withVitrinkaRecorder` build guard for Next; and Report a problem (`@vitrinka/web/report`, also one file vitrinka serves as `/vendor/report-widget-1.mjs`) — a reporter's button, marks on the page and the last minutes under the project's capture profile, cs/en. |
 | [`packages/link`](packages/link) | `@vitrinka/link` — the device link (code + approval → ingest-only `vkr_` token) both recorders authenticate with. Zero deps. |
 | [`apps/extension`](apps/extension) | The **Vitrinka Journey Recorder** Chrome extension — records manual-testing journeys from your browser. Generated from the product repo like `plugins/`; changes land there. |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | What the recorders capture and where it is sent. |

@@ -69,12 +69,28 @@ export async function fetchPolicy(): Promise<RecorderPolicy> {
   }
 }
 
+/** A vitrinka and the bearer to reach it with. */
+export interface ApiTarget {
+  url: string;
+  key: string;
+}
+
 export interface ApiOptions {
   /**
    * Survive page unload (the pagehide flush). Browsers cap keepalive bodies at
    * 64 KiB — callers pass it only for a small tail batch.
    */
   keepalive?: boolean;
+  /**
+   * Call this vitrinka with this bearer instead of the recorder's configured
+   * one — the report face binds every call to its own widget's base and key.
+   * Its 401 never touches the recorder's device link.
+   */
+  target?: ApiTarget;
+}
+
+function resolveTarget(target: ApiTarget | undefined): ApiTarget {
+  return target ?? { url: recorderConfig().url, key: bearerToken() };
 }
 
 export async function api<T = Record<string, unknown>>(
@@ -83,8 +99,7 @@ export async function api<T = Record<string, unknown>>(
   body?: unknown,
   opts: ApiOptions = {},
 ): Promise<T> {
-  const { url } = recorderConfig();
-  const key = bearerToken();
+  const { url, key } = resolveTarget(opts.target);
   const res = await fetch(url + path, {
     method,
     mode: 'cors',
@@ -98,7 +113,7 @@ export async function api<T = Record<string, unknown>>(
   });
   const text = await res.text();
   if (!res.ok) {
-    reportStatus(res.status);
+    if (!opts.target) reportStatus(res.status);
     throw new VitrinkaApiError(`${method} ${path} → ${res.status}: ${text}`, res.status);
   }
   return (text ? JSON.parse(text) : {}) as T;
@@ -123,16 +138,25 @@ export function uploadImage(sessionId: string, seq: number, blob: Blob): Promise
   return upload(sessionId, 'shot', seq, blob.type, blob);
 }
 
-async function upload(
+function upload(
   sessionId: string,
   leaf: 'chunk' | 'shot',
   seq: number,
   contentType: string,
   body: string | Blob,
 ): Promise<{ blobKey?: string }> {
-  const { url } = recorderConfig();
-  const key = bearerToken();
-  const res = await fetch(`${url}/api/v1/sessions/${sessionId}/${leaf}?seq=${seq}`, {
+  return uploadTo(`/api/v1/sessions/${sessionId}/${leaf}?seq=${seq}`, contentType, body);
+}
+
+/**
+ * POST raw bytes (an rrweb chunk, an image) to a blob leaf under the
+ * configured bearer: the session doors above and the report face's
+ * `/api/v1/reports/{id}/chunk?seq=N` (with its own `target`). Returns the
+ * server's `blobKey`.
+ */
+export async function uploadTo(path: string, contentType: string, body: string | Blob, target?: ApiTarget): Promise<{ blobKey?: string }> {
+  const { url, key } = resolveTarget(target);
+  const res = await fetch(url + path, {
     method: 'POST',
     mode: 'cors',
     credentials: 'omit',
@@ -141,8 +165,8 @@ async function upload(
   });
   const text = await res.text();
   if (!res.ok) {
-    reportStatus(res.status);
-    throw new VitrinkaApiError(`POST ${leaf} seq ${seq} → ${res.status}: ${text}`, res.status);
+    if (!target) reportStatus(res.status);
+    throw new VitrinkaApiError(`POST ${path} → ${res.status}: ${text}`, res.status);
   }
   try {
     return JSON.parse(text) as { blobKey?: string };

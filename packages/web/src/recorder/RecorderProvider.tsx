@@ -20,23 +20,7 @@ import { startLead } from './lead';
 import { armReconcile, flush, getState, persistNow, reconcile, scheduleFlush } from './queue';
 import { dropFlight, syncFlight } from './report';
 import { addNote, followOtherTabs, onBeforeStop, recoverRedactionPolicy, resyncStoredSession, stopSession, togglePause } from './session';
-import { annotateState, leadState, setTabIdentity, subscribe } from './state';
-
-const TAB_KEY = 'vitrinka.tab';
-
-/** One lane per browser tab: a per-tab id kept in sessionStorage (survives reloads). */
-function tabId(): string {
-  try {
-    const ss = globalThis.sessionStorage;
-    const have = ss.getItem(TAB_KEY);
-    if (have) return have;
-    const id = Math.random().toString(36).slice(2, 10);
-    ss.setItem(TAB_KEY, id);
-    return id;
-  } catch {
-    return 'root';
-  }
-}
+import { annotateState, browserTabId, claimCapture, leadState, releaseCapture, setTabIdentity, subscribe } from './state';
 
 
 export function RecorderProvider({
@@ -53,7 +37,9 @@ export function RecorderProvider({
   }, [config]);
 
   useEffect(() => {
-    setTabIdentity(tabId(), location.host);
+    // The recorder owns the page's capture runtime; a report face holding it yields here.
+    const captureClaim = claimCapture('recorder');
+    setTabIdentity(browserTabId(), location.host);
     // ONE recorder: mark the document, hear who records, then lead or follow.
     // A remote command opens this recorder's own doors.
     const leaveLead = startLead({
@@ -167,6 +153,7 @@ export function RecorderProvider({
       unpatchNetwork();
       unpatchConsole();
       leaveLead();
+      releaseCapture(captureClaim);
     };
     // The lanes install once per mount; config changes are handled above.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -14,6 +14,12 @@ screenshots), **clicks** (selector, text, rect), **navigation**, **network**
 [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md). Idle, the pill can also send
 the last minute as a bug report ([Report a bug](#report-a-bug)).
 
+The same engine has a second face for the people who use your app:
+**[Report a problem](#report-a-problem-vitrinkawebreport)** — a large
+button, "What went wrong?", optional marks drawn on the page, and the last
+minutes attached under your project's capture profile. No React needed; it
+also ships as one file vitrinka serves.
+
 ## Install
 
 ```bash
@@ -248,11 +254,12 @@ is the same code for the extension.
 
 **The last minute.** While the pill is mounted and idle on a device that can
 record (a recorder key or a linked device), it keeps the page's last minute
-**in memory**: the rrweb DOM stream as two 30-second checkout windows (a clip
+**in memory**: the rrweb DOM stream as 30-second checkout windows (a clip
 covers the last 30–60 s and always opens on a full snapshot), plus the
-click, navigation, console and network events since the older window
+click, navigation, console and network events since the oldest window
 opened. Caps: 4 MiB of serialized rrweb, 20 000 rrweb events, 500 lane
-events; over a cap the older window goes. It runs the recording's own
+events; over a cap the oldest window goes, and a window being recorded
+that alone outgrows it restarts from a fresh snapshot. It runs the recording's own
 redaction (masked inputs, your workspace policy — fetched once when the
 buffer starts — scrubbed URLs, click text that never reads a value). Nothing
 of it is written to storage or sent until you press Send; a reload, an
@@ -283,6 +290,119 @@ the running session instead.
 
 Then nothing is captured until a recording starts, and Report a bug is
 offered only during one.
+
+## Report a problem (`@vitrinka/web/report`)
+
+The report face of the same engine, for the people using your app: a large
+**Report a problem** / **Nahlásit problém** button, a card that asks
+**What went wrong?** with Send, and **Show us where** to circle, box, point
+at or hide parts of the page — numbered marks with an optional note each,
+taught by a coach card ("click, hold and move") until the first mark
+exists; from the keyboard, Enter places a mark, arrows move it,
+Shift+arrows resize it and Enter sets it. The minutes before are attached under your project's **capture
+profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
+§ Report a problem). You need the project's report key (`vkb_…`).
+
+**Script tag** — vitrinka serves the single-file build; `base` defaults to
+the origin it came from:
+
+```html
+<script type="module" src="https://vitrinka.example/vendor/report-widget-1.mjs"></script>
+<vitrinka-report key="vkb_…" locale="cs"></vitrinka-report>
+```
+
+**npm** (rrweb, a peer dependency, loads lazily — only when the profile
+records the page):
+
+```ts
+import { mountReport } from '@vitrinka/web/report';
+
+const report = mountReport({
+  key: 'vkb_…',
+  base: 'https://vitrinka.example',
+  locale: 'cs',                 // default: the browser's language
+  capture: { windowSec: 120 },  // optional: narrow the project's profile, never widen it
+});
+report.open();                  // or the button, or the reporter's own shortcut
+```
+
+**React** — mount once, follow the app's language live (a switch never
+loses the draft or the marks):
+
+```tsx
+import { useEffect, useRef } from 'react';
+import { mountReport, type ReportHandle } from '@vitrinka/web/report';
+
+function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
+  const report = useRef<ReportHandle | null>(null);
+  useEffect(() => {
+    report.current = mountReport({ key: process.env.NEXT_PUBLIC_VITRINKA_REPORT_KEY!, base: 'https://vitrinka.example' });
+    return () => report.current?.unmount();
+  }, []);
+  useEffect(() => report.current?.setLocale(locale), [locale]);
+  useEffect(() => report.current?.identify(token ? { token } : null), [token]);
+  return null;
+}
+```
+
+| Option / attribute | |
+|---|---|
+| `key` | the project's `vkb_` report key (required) |
+| `base` | vitrinka's origin (the script tag defaults to where it was served from) |
+| `locale` | `cs` · `en`; live as an attribute, and through `setLocale()` |
+| `button` | `false` hides the floating button: open the card from your own control |
+| `open-selector` / `openSelector` | a CSS selector of your control(s) that open the card |
+| `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link) |
+| `capture` | narrow the capture profile: `{storage: 'memory', windowSec, maxBytes, classes}` |
+| `identity` | as `identify()` below |
+| `appVersion`, `sanitizeUrl` | as on the recorder |
+
+The handle (and the element) has `open()`, `close()`, `identify()`,
+`setLocale()`; the handle also `unmount()`s. For the tag from npm, call
+`defineReportElement()` once.
+
+**Who reports.** Vouch for your signed-in user with a token your SERVER
+signs — never in the browser — over `{sub, email, name?, iat, exp, aud:
+"<workspace>/<project>"}`, HS256 with the project's host secret (shown once
+in the project's settings), `exp` at most 24 h after `iat`:
+
+```ts
+// server-side, e.g. a route your app calls after sign-in
+import { createHmac } from 'node:crypto';
+
+const b64 = (v: string | Buffer) => Buffer.from(v).toString('base64url');
+export function reporterToken(user: { id: string; email: string; name?: string }): string {
+  const now = Math.floor(Date.now() / 1000);
+  const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = b64(JSON.stringify({ sub: user.id, email: user.email, name: user.name, iat: now, exp: now + 3600, aud: 'acme/voke' }));
+  const sig = b64(createHmac('sha256', process.env.VITRINKA_REPORT_HOST_SECRET!).update(`${head}.${body}`).digest());
+  return `${head}.${body}.${sig}`;
+}
+```
+
+```ts
+report.identify({ token });                 // filed directly, as that reporter
+report.identify({ email, name });           // a pending reporter: held until approved
+report.identify(null);                      // anonymous: held until approved
+```
+
+`identify` from `@vitrinka/web/report` names the reporter for every widget
+on the page; a widget's own `identify()` wins (`null` makes that widget
+anonymous, `undefined` hands it back to the page-wide one). Identity lives
+in memory only; pass it on every load.
+
+**Beside the recorder.** One page runs one capture: when the recorder face
+(`VitrinkaRecorderRoot`) is mounted it owns it, and Report a problem sends
+its reports without a capture of its own — mount one face per page (pick it
+by your app's mode, or with `face`).
+
+**The shortcut.** There is none by default. A reporter sets their own in the
+card's settings (⚙) by pressing it: a modifier other than Shift is required,
+Esc cancels. It is kept in `localStorage` (`vitrinka.recorder.report.keybind`).
+
+**What the reporter sees after Send**: "Thanks — we've got it", and **See
+your report** when the server returns the report's page. A failed send
+keeps every word; **Try again** resumes the same report.
 
 ## Attach images
 
