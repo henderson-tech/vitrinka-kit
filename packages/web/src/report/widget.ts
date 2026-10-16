@@ -16,7 +16,7 @@
  *   Drafts live in memory only.
  */
 import { redactUrl } from '../recorder/capture/redact';
-import { createHudHost, createSheetHost, type HudHost, sheetTarget } from '../recorder/hud/host';
+import { createHudHost, createSheetHost, type HudHost, insideHud, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, strings, type Strings } from './i18n';
@@ -132,6 +132,14 @@ function titleOf(description: string): string {
 
 function reducedMotion(): boolean {
   return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+/** The focused element (HTML or SVG: an SVG link or a tabindexed shape is a control too), through open shadow roots; null when nothing but <body> has it. */
+function deepActiveElement(): HTMLElement | SVGElement | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  if (active === document.body) return null;
+  return active instanceof HTMLElement || active instanceof SVGElement ? active : null;
 }
 
 /** The widget's DOM, built once into the HUD host's shadow mount. */
@@ -255,6 +263,8 @@ export class ReportWidget {
   private keybind: Keybind | null;
 
   private isOpen = false;
+  /** Where focus was when the card opened, outside the report: close() hands it back. */
+  private opener: HTMLElement | SVGElement | null = null;
   private view: View = 'describe';
   private marking = false;
   private markers: Drawn[] = [];
@@ -359,6 +369,7 @@ export class ReportWidget {
   open(): void {
     if (this.isOpen) return;
     this.isOpen = true;
+    this.opener = insideHud(document.activeElement) ? null : deepActiveElement();
     if (this.view !== 'describe') this.view = 'describe';
     this.result = null;
     // The minutes before THIS open; a half-sent report keeps the capture it started with.
@@ -374,6 +385,13 @@ export class ReportWidget {
     this.isOpen = false;
     this.view = 'describe';
     this.paint();
+    // Focus goes back where it came from — the host's control, the field the
+    // shortcut fired in — else to the button; never lost to <body> when the
+    // host hid the button and opened the card from its own control.
+    const opener = this.opener;
+    this.opener = null;
+    opener?.focus();
+    if (opener && deepActiveElement() === opener) return;
     if (this.button) this.e.fab.focus();
   }
 

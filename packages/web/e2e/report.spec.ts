@@ -79,12 +79,19 @@ test('the large button opens the card, and a shortcut the reporter records opens
   await expect(page.getByRole('dialog', { name: 'Report a problem' })).toBeVisible();
 });
 
-test('the host hides the button and opens the card from its own control', async ({ page }) => {
+test('the host hides the button, opens the card from its own control and gets the focus back', async ({ page }) => {
   await page.goto(`${base}/?nobutton`);
-  await expect(page.getByRole('button', { name: 'Help' })).toBeVisible();
+  const help = page.getByRole('button', { name: 'Help' });
+  await expect(help).toBeVisible();
   await expect(page.getByRole('button', { name: /^Report a problem/ })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Help' }).click();
-  await expect(page.getByRole('dialog', { name: 'Report a problem' })).toBeVisible();
+  await help.click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toBeFocused();
+  // No button to fall back on: closing hands focus to the control that opened the card, never to <body>.
+  await page.keyboard.press('Escape');
+  await expect(card).toBeHidden();
+  await expect(help).toBeFocused();
 });
 
 test('describe and send without marking', async ({ page }) => {
