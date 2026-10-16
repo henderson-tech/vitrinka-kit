@@ -61,10 +61,14 @@ function page(query: string): string {
   }
   // A host's own recorder bundle beside the standalone widget (claim-recorder.ts).
   const recorder = query.includes('recorder') ? '<script src="/claim-recorder.js"></script>' : '';
+  // A host modal (`?dialog`): window.openModal() shows it with showModal().
+  const modal = query.includes('dialog')
+    ? '<dialog id="modal"><p>Edit settlement</p><button>Save</button></dialog><script>window.openModal = () => document.getElementById("modal").showModal()</script>'
+    : '';
   const tag = query.includes('nobutton')
     ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'
     : '<vitrinka-report key="vkb_e2e" locale="en"></vitrinka-report>';
-  return `${head}${TABLE}${tag}${recorder}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
+  return `${head}${TABLE}${modal}${tag}${recorder}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
 }
 
 /** Build the widget and the rrweb stand-in, then serve both and the stub on `host:port` (0 = any). */

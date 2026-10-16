@@ -18,6 +18,7 @@ import { configureRecorder } from '../../recorder/config';
 import {
   clearFlight,
   type FlightProfile,
+  type FlightStore,
   flightWrites,
   persistFlightNow,
   pushFlightEvent,
@@ -69,7 +70,7 @@ const fakeRecord = Object.assign(
   },
 ) as unknown as RecordFn;
 
-function profile(store: CaptureStore | null, over: Partial<FlightProfile> = {}): FlightProfile {
+function profile(store: FlightStore | null, over: Partial<FlightProfile> = {}): FlightProfile {
   return { windowMs: FIVE_MIN, checkoutMs: 60_000, maxBytes: 12 * 1024 * 1024, maxEvents: 60_000, maxLaneEvents: 500, store, ...over };
 }
 
@@ -217,6 +218,30 @@ describe('the capture profile in browser storage', () => {
     expect(lanes.map((e) => e.payload?.text)).toEqual(['boom']);
     startFlightBuffer(profile(store, { scope: 'errors-only', priorLanes: lanes }));
     expect(takeFlightClip()!.lanes.map((e) => e.payload?.text)).toEqual(['boom']);
+  });
+
+  it('writes a lane span’s head and its chunk in one store operation (never an orphaned chunk)', async () => {
+    const ops: string[] = [];
+    const fake = {
+      putWindow: async (w: { id: string }) => void ops.push(`putWindow ${w.id}`),
+      putChunk: async (id: string) => void ops.push(`putChunk ${id}`),
+      putWindowChunk: async (w: { id: string }) => void ops.push(`putWindowChunk ${w.id}`),
+      dropWindow: async () => undefined,
+      clear: async () => undefined,
+    };
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(fake, { scope: 's' }));
+    pushFlightEvent('console', { level: 'error', text: 'boom' }, { tabId: TAB, tabHost: 'app.example.test' });
+    persistFlightNow();
+    await flightWrites();
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatch(/^putWindowChunk .*\.lanes\.\d+$/);
+    // …and the real store lands both or neither.
+    store = await openCaptureStore(new IDBFactory());
+    const head = { id: 'span.1', tab: TAB, scope: 's', kind: 'lanes' as const, load: 'l', startMs: T0, lastMs: T0, count: 0, bytes: 0, href: '', route: '' };
+    await store.putWindowChunk(head, 0, '[]', [{ ts: new Date(T0).toISOString(), tabId: TAB, tabHost: 'h', kind: 'console', payload: { text: 'kept' } }]);
+    expect((await store.sweep(T0, FIVE_MIN, TAB, 's')).map((w) => w.id)).toEqual(['span.1']);
+    expect((await store.read('span.1')).lanes.map((e) => e.payload?.text)).toEqual(['kept']);
   });
 
   it('console and network entries restored from an earlier load leave the store once they leave the window', async () => {

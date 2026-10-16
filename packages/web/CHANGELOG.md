@@ -47,6 +47,10 @@ D6): the same engine as the recorder, a reporter's face.
   one and never rewrites the recorder's server, key or rules.
   `identify(null)` on a widget is anonymous even under a page-wide
   `identify()`; a tag that gets its `key`/`base` after connecting mounts then.
+  Widgets share a capture only when they ask the same of it (key, base,
+  `capture`, `sanitizeUrl`); the report moves into an open (modal) dialog
+  and back, draft and marks intact; a window whose snapshot is over the
+  wire cap is left out whole.
 
 Engine changes the recorder face shares:
 

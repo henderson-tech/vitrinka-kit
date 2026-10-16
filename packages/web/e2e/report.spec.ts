@@ -305,6 +305,21 @@ test('the standalone widget yields to a host recorder from another bundle', asyn
   expect(seen.some((s) => s.path.includes('/chunk?seq='))).toBe(false);
 });
 
+test('under an open modal dialog the report stays reachable, and keeps its draft when the dialog closes', async ({ page }) => {
+  await page.goto(`${base}/?dialog`);
+  await armed();
+  await page.evaluate(() => (window as unknown as { openModal(): void }).openModal());
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const draft = card.getByRole('textbox', { name: 'What went wrong?' });
+  await draft.fill('The modal saves the wrong month');
+  await expect(draft).toBeFocused();
+  await page.evaluate(() => (document.getElementById('modal') as HTMLDialogElement).close());
+  await expect(draft).toHaveValue('The modal saves the wrong month');
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+});
+
 test('a tag that gets its key after it connected mounts then', async ({ page }) => {
   await page.goto(`${base}/?nobutton`);
   await page.evaluate(() => {

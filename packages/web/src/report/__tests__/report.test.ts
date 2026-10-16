@@ -161,6 +161,41 @@ describe('one capture runtime per page', () => {
   });
 });
 
+describe('a shared engine', () => {
+  const engineOpts = { base: BASE, key: 'vkb_test', loadRecord: async () => null };
+
+  it('captures nothing for a widget whose narrowing or sanitizer differs from the one that started it', async () => {
+    const first = acquireEngine(engineOpts)!;
+    expect(acquireEngine({ ...engineOpts, capture: { storage: 'memory', classes: ['errors'] } })).toBeNull();
+    expect(acquireEngine({ ...engineOpts, sanitizeUrl: (u: string) => u })).toBeNull();
+    const same = acquireEngine({ ...engineOpts });
+    expect(same).toBe(first);
+    releaseEngine(same);
+    releaseEngine(first);
+  });
+
+  it('drops a whole window whose snapshot is over the wire cap, never just the snapshot', async () => {
+    const engine = acquireEngine(engineOpts)!;
+    await engine.ready;
+    const ev = (type: number, t: number, payload = ''): eventWithTime => ({ type, timestamp: t, data: { payload } }) as unknown as eventWithTime;
+    const win = (id: string, events: eventWithTime[]) => ({ id, load: 'l', startMs: events[0]!.timestamp, lastMs: events.at(-1)!.timestamp, events, count: events.length, bytes: 0, href: '', route: '/' });
+    const huge = 'x'.repeat(5 * 1024 * 1024);
+    const built = await engine.build(
+      {
+        clip: { windows: [win('a', [ev(4, 1), ev(2, 2, huge), ev(3, 3, 'after-huge')]), win('b', [ev(4, 10), ev(2, 11), ev(3, 12, 'kept')])], lanes: [], truncated: false },
+        stored: Promise.resolve(new Map()),
+      },
+      [],
+    );
+    const body = built.chunks.map((c) => c.body).join('');
+    expect(body).not.toContain('after-huge');
+    expect(body).toContain('kept');
+    expect(built.chunks.reduce((n, c) => n + c.count, 0)).toBe(3);
+    expect(built.truncated).toBe(true);
+    releaseEngine(engine);
+  });
+});
+
 describe('the capture profile', () => {
   it('a host can only narrow the project profile', () => {
     const project = parseProfile({ storage: 'browser', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'] });

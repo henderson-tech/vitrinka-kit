@@ -99,6 +99,18 @@ export function openCaptureStore(idb: IDBFactory | undefined = globalThis.indexe
         tx.objectStore(CHUNKS).put(record, [windowId, part]);
         await done(tx);
       },
+      async putWindowChunk(head, part, events, lanes) {
+        const tx = db.transaction([WINDOWS, CHUNKS], 'readwrite');
+        const record: ChunkRecord = { events, lanes: [...lanes] };
+        try {
+          tx.objectStore(CHUNKS).put(record, [head.id, part]);
+          tx.objectStore(WINDOWS).put(head);
+        } catch (e) {
+          tx.abort();
+          throw e;
+        }
+        await done(tx);
+      },
       async dropWindow(windowId) {
         const tx = db.transaction([WINDOWS, CHUNKS], 'readwrite');
         dropIn(tx, windowId);

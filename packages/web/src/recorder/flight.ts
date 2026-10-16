@@ -119,6 +119,8 @@ export interface FlightStore {
   putWindow(w: StoredWindow): Promise<void>;
   /** One chunk of a window: its masked rrweb events (a JSON array) and the lane events captured meanwhile. */
   putChunk(windowId: string, part: number, events: string, lanes: readonly FlightLaneEvent[]): Promise<void>;
+  /** A chunk and its window's (updated) head in ONE transaction: never a chunk no head can find. */
+  putWindowChunk(head: StoredWindow, part: number, events: string, lanes: readonly FlightLaneEvent[]): Promise<void>;
   /** Forget a window and its chunks. */
   dropWindow(windowId: string): Promise<void>;
   /** Forget every window of a tab (a report was sent). */
@@ -300,10 +302,7 @@ export function persistFlightNow(): void {
     const part = p.parts;
     persisted.set(w.id, { events: w.events.length, parts: part + 1 });
     const head = storedWindow(w);
-    queueWrite(async (s) => {
-      await s.putChunk(w.id, part, body, []);
-      await s.putWindow(head);
-    });
+    queueWrite((s) => s.putWindowChunk(head, part, body, []));
   }
   persistLanes(now);
 }
@@ -345,10 +344,7 @@ function persistLanes(now: number): void {
     href: '',
     route: '',
   };
-  queueWrite(async (s) => {
-    await s.putChunk(target.id, part, '[]', batch);
-    await s.putWindow(head);
-  });
+  queueWrite((s) => s.putWindowChunk(head, part, '[]', batch));
 }
 
 function stopPersisting(): void {

@@ -44,7 +44,7 @@ import {
   takeFlightClip,
 } from '../recorder/flight';
 import { listen } from '../recorder/hud/listen';
-import { EVENTS_PER_POST, splitRRWebEvents } from '../recorder/queue';
+import { EVENTS_PER_POST, splitRRWebEvents, utf8Bytes } from '../recorder/queue';
 import { browserTabId, claimCapture, currentRoute, releaseCapture, setTabIdentity } from '../recorder/state';
 import { type CaptureStore, deleteCaptureStore, openCaptureStore } from '../recorder/storage/capture';
 import { applyHides, hiddenNodeIds, type Marker, type NodeIds } from './markers';
@@ -151,6 +151,34 @@ export function reportPath(url: unknown): string {
     path = raw.split(/[?#]/)[0] ?? '';
   }
   return path.replace(TOKENY, '•••').slice(0, 300);
+}
+
+/** rrweb's `EventType.Meta`, the head of every window (`@rrweb/types` is type-only here). */
+const RRWEB_META = 4;
+
+/**
+ * Whole windows only: rrweb's stream is stateful, so a window holding an
+ * event over the wire cap (a huge full snapshot) goes entirely — its
+ * incrementals are worthless without it — and the replay says truncated.
+ */
+export function wholeWindows(events: readonly eventWithTime[], hardBytes: number): { events: eventWithTime[]; dropped: boolean } {
+  const out: eventWithTime[] = [];
+  let dropped = false;
+  let window: eventWithTime[] = [];
+  let tooBig = false;
+  const close = () => {
+    if (tooBig) dropped = true;
+    else out.push(...window);
+    window = [];
+    tooBig = false;
+  };
+  for (const ev of events) {
+    if (ev.type === RRWEB_META && window.length) close();
+    if (!tooBig && utf8Bytes(JSON.stringify(ev)) + 1 > hardBytes) tooBig = true;
+    window.push(ev);
+  }
+  close();
+  return { events: out, dropped };
 }
 
 /** What the flight buffer keeps of each lane event under the profile's classes: the wire's shapes only. */
@@ -408,14 +436,14 @@ export class CaptureEngine {
     }
     // The console and network entries, earlier loads' included (priorLanes).
     const lanes: FlightLaneEvent[] = frozen.clip?.lanes ?? [];
-    const { parts, dropped } = withheld
-      ? { parts: [], dropped: [] }
-      : splitRRWebEvents(applyHides(events, hides, hiddenIds), CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);
+    const whole = withheld ? { events: [], dropped: false } : wholeWindows(applyHides(events, hides, hiddenIds), CHUNK_HARD_BYTES);
+    if (whole.dropped) truncated = true;
+    const { parts, dropped } = splitRRWebEvents(whole.events, CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);
     const chunks: CaptureChunk[] = [];
     let at = 0;
     for (const p of parts) {
       at += p.count;
-      const last = events[at - 1]?.timestamp ?? Date.now();
+      const last = whole.events[at - 1]?.timestamp ?? Date.now();
       chunks.push({ seq: chunks.length + 1, ts: new Date(last).toISOString(), count: p.count, body: p.body });
     }
     const consoleEntries: ConsoleEntry[] = lanes
@@ -454,8 +482,16 @@ let shared: { engine: CaptureEngine; refs: number } | null = null;
 /** The page's one engine (started by the first widget); null when another base/key already owns it. */
 export function acquireEngine(opts: EngineOptions): CaptureEngine | null {
   if (shared) {
-    if (shared.engine.opts.base !== opts.base || shared.engine.opts.key !== opts.key) {
-      console.warn('vitrinka: one capture engine per page — this widget reports without a capture (another key or base owns it)');
+    const owner = shared.engine.opts;
+    // Sharing means one capture: only for a widget asking exactly what the
+    // first one did — never another target, narrowing or URL sanitizer.
+    const same =
+      owner.base === opts.base &&
+      owner.key === opts.key &&
+      owner.sanitizeUrl === opts.sanitizeUrl &&
+      JSON.stringify(owner.capture ?? {}) === JSON.stringify(opts.capture ?? {});
+    if (!same) {
+      console.warn('vitrinka: one capture engine per page — this widget reports without a capture (another widget’s key, base, capture or sanitizeUrl owns it)');
       return null;
     }
     shared.refs++;

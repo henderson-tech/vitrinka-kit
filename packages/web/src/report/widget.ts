@@ -16,7 +16,7 @@
  *   Drafts live in memory only.
  */
 import { redactUrl } from '../recorder/capture/redact';
-import { createHudHost, type HudHost } from '../recorder/hud/host';
+import { createHudHost, createSheetHost, type HudHost, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, strings, type Strings } from './i18n';
@@ -220,7 +220,9 @@ function buildDom(mount: HTMLElement) {
   const root = h('div', { class: 'vr' }, fab, card, mark);
   const style = h('style');
   style.textContent = REPORT_CSS;
-  mount.append(style, root);
+  // The sheet rides inside the root: the whole tree moves into an open dialog and back (followDialog).
+  root.prepend(style);
+  mount.append(root);
   return {
     root, fab, fabLabel, fabKbd, card, title, gear, closeBtn,
     describe, prompt, desc, attached, attachedText, disclose, discloseText, included, marked, markedChips, markedText,
@@ -275,6 +277,8 @@ export class ReportWidget {
   private readonly pins = new Map<number, Pin>();
   /** Per hide mark: the page nodes it covered when drawn (they are blanked in the capture). */
   private readonly hideIds = new Map<number, Set<number>>();
+  /** The open dialog the report lives in while one is up (a modal makes everything outside it inert). */
+  private sheet: { target: Element; host: { mount: HTMLElement; destroy: () => void } } | null = null;
   private readonly e: Els;
 
   constructor(private readonly opts: WidgetOptions) {
@@ -300,6 +304,31 @@ export class ReportWidget {
     });
     this.bind();
     this.paint();
+    this.followDialog();
+  }
+
+  /**
+   * Live inside the topmost open dialog while there is one (the recorder's
+   * sheet path, hud/host.ts): a modal makes everything outside it inert and
+   * its focus trap pulls focus back. The one DOM tree moves, so the draft,
+   * the marks and their notes go along; focus is restored after the move.
+   */
+  private followDialog(): void {
+    const target = sheetTarget();
+    if ((this.sheet?.target ?? null) === target) return;
+    const root = this.e.root.getRootNode();
+    const focused = root instanceof ShadowRoot && root.activeElement instanceof HTMLElement ? root.activeElement : null;
+    const previous = this.sheet;
+    if (target) {
+      const host = createSheetHost(target);
+      host.mount.append(this.e.root);
+      this.sheet = { target, host };
+    } else {
+      this.hud.mount.append(this.e.root);
+      this.sheet = null;
+    }
+    previous?.host.destroy();
+    focused?.focus();
   }
 
   // -- public -------------------------------------------------------------
@@ -352,6 +381,8 @@ export class ReportWidget {
     this.stopRecordingBind();
     for (const off of this.offs.splice(0).reverse()) off();
     releaseEngine(this.engine);
+    this.sheet?.host.destroy();
+    this.sheet = null;
     this.hud.destroy();
   }
 
@@ -458,6 +489,20 @@ export class ReportWidget {
     this.offs.push(onSharedIdentity(() => this.paint()));
     // The recorder took the page's capture over: stop saying minutes are attached.
     if (this.engine) this.offs.push(this.engine.onChange(() => this.paint()));
+    // Dialogs open and close anywhere: follow them, at most once a frame.
+    let frame = 0;
+    const dialogs = new MutationObserver(() => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        this.followDialog();
+      });
+    });
+    dialogs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'data-state'] });
+    this.offs.push(() => {
+      dialogs.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    });
   }
 
   private show(view: View): void {

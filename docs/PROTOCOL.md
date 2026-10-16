@@ -240,7 +240,9 @@ optional marks drawn on the page.
      notify?}` — at most 500 console and 500 network entries;
   2. the frozen replay, hides applied, as chunks under 4 MiB
      (`/chunk?seq=1…n`), then their `rrweb` rows (`/events`, `payload:
-     {count, source: "replay", truncated}`);
+     {count, source: "replay", truncated}`) — a window holding a single
+     event over 4 MiB (a huge full snapshot) is left out whole, never its
+     snapshot alone, and the replay says `truncated`;
   3. `POST /api/v1/reports/:id/submit {}`.
 
   A failed leg keeps the job: Retry resumes it — one report, never a
