@@ -134,11 +134,12 @@ function reducedMotion(): boolean {
   return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
-/** The focused element, through open shadow roots; null when nothing but <body> has it. */
-function deepActiveElement(): HTMLElement | null {
+/** The focused element (HTML or SVG: an SVG link or a tabindexed shape is a control too), through open shadow roots; null when nothing but <body> has it. */
+function deepActiveElement(): HTMLElement | SVGElement | null {
   let active = document.activeElement;
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-  return active instanceof HTMLElement && active !== document.body ? active : null;
+  if (active === document.body) return null;
+  return active instanceof HTMLElement || active instanceof SVGElement ? active : null;
 }
 
 /** The widget's DOM, built once into the HUD host's shadow mount. */
@@ -263,7 +264,7 @@ export class ReportWidget {
 
   private isOpen = false;
   /** Where focus was when the card opened, outside the report: close() hands it back. */
-  private opener: HTMLElement | null = null;
+  private opener: HTMLElement | SVGElement | null = null;
   private view: View = 'describe';
   private marking = false;
   private markers: Drawn[] = [];
