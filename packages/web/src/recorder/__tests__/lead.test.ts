@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { holdFace, leadStatus, pingLeader, RecorderBusyError, sendToLeader, setLeadStopping, setRemoteStop, startLead } from '../lead';
 import { ask, LEAD_ATTR, PAGE_ATTR, readClaim, sendCommand, serveHello, takeClaim } from '../one';
+import { createPageController } from '../page-controller';
 import { getState, pushEvent, REC_KEY, setState } from '../queue';
 import { resyncStoredSession, startSession } from '../session';
 import { leadState, notify } from '../state';
@@ -151,6 +152,24 @@ describe('following', () => {
     await settle();
     expect(() => sendToLeader('note', 'later')).toThrow('the recording ended before the note arrived');
     expect(leadStatus()).toMatchObject({ leader: null, following: null });
+  });
+
+  it('the extension starting here says hello before its claim lands: the HUD hears the claim too, so the remote face gives way to the extension\'s pill', async () => {
+    const { env } = fakeDocument();
+    const ext = extensionHere(env);
+    startLead(handlers, env);
+    // The HUD (useSyncExternalStore) re-reads the snapshot only when notified.
+    const hud = createPageController();
+    let seen = hud.getSnapshot();
+    const off = hud.subscribe(() => {
+      seen = hud.getSnapshot();
+    });
+    ext.hello();
+    expect(seen).toMatchObject({ following: 'extension', followingElsewhere: true });
+    ext.start();
+    await settle();
+    off();
+    expect(seen).toMatchObject({ following: 'extension', followingElsewhere: false });
   });
 
   it('the extension recording another tab takes no command from here', () => {

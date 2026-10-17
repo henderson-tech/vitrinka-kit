@@ -1,5 +1,14 @@
 # @vitrinka/web
 
+## 0.7.2
+
+- **One pill when the extension starts in this tab.** The extension's hello
+  can reach the page before its claim does. The page then showed its quiet
+  "Recording in another tab" pill beside the extension's own, and kept it
+  after the claim landed, because the HUD heard only a change of leader. A
+  change of the claim's holder now reaches the HUD too, so the page's pill
+  hides as soon as the claim is read. Since 0.6.0.
+
 ## 0.7.1
 
 - **Report a problem hands focus back.** Closing the card returns focus to
