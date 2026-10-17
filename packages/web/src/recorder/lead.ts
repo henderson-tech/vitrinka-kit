@@ -97,6 +97,8 @@ let stopping: string | null = null;
 let face: HudFace = 'none';
 let remoteStop: (() => void) | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
+/** The claim holder `refresh` last announced. */
+let claimBy: Leader | null = null;
 
 // -- what this document knows --------------------------------------------------
 
@@ -195,13 +197,20 @@ function armPing(): void {
   }
 }
 
-/** Re-derive the claim and who leads; announce a change of leader to the lanes and the HUD. */
+/**
+ * Re-derive the claim and who leads; announce a change of leader or of the
+ * claim's holder to the lanes and the HUD. The HUD's remote face reads the
+ * holder (`followingElsewhere`), and the extension's hello can land before
+ * its claim: a holder arriving under an unchanged leader announces too.
+ */
 function refresh(): void {
   if (!env) return;
   syncClaim();
   const next = computeFollowing();
-  if (next === leadState.following) return;
+  const by = readClaim(env)?.by ?? null;
+  if (next === leadState.following && by === claimBy) return;
   leadState.following = next;
+  claimBy = by;
   armPing();
   notify();
 }
@@ -338,6 +347,7 @@ function resetLead(): void {
   stopping = null;
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = null;
+  claimBy = null;
   if (leadState.following !== null) {
     leadState.following = null;
     notify();

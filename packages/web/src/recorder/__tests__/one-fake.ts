@@ -78,6 +78,11 @@ export function extensionHere(env: OneEnv, sessionId = '42') {
   return {
     id,
     commands,
+    /** Say it records before its claim lands: the hello can beat the claim write, which `start()` then makes. */
+    hello() {
+      state = 'recording';
+      announce(env, self, live());
+    },
     start() {
       const r = takeClaim(env, self, { id, state: 'recording', sessionId });
       if (r.ok) {
