@@ -262,6 +262,35 @@ test('a hide added after a failed send is blanked in the retried capture', async
   expect(chunks).not.toContain('1920 0014 5399');
 });
 
+test('a card opened before the recorder started still sends the page as it is at Send', async ({ page }) => {
+  // The recorder loads lazily: hold its script until the card is open, as a slow network or runner does.
+  let asked: () => void = () => undefined;
+  const requested = new Promise<void>((resolve) => {
+    asked = resolve;
+  });
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/vendor/rrweb-record-1.min.js', async (route) => {
+    asked();
+    await held;
+    await route.continue();
+  });
+  await page.goto(base);
+  await requested;
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('August is listed twice');
+  release();
+  await page.waitForFunction(() => (window as unknown as { __rrwebRecording?: boolean }).__rrwebRecording === true);
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
+  // A full snapshot of the page (its text masked under the strict profile), not an empty replay.
+  expect(chunks).toContain('"tagName":"table"');
+});
+
 test('a widget told identify(null) reports anonymously, whatever the page-wide identity', async ({ page }) => {
   await page.goto(base);
   await armed();

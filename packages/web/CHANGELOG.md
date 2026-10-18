@@ -22,6 +22,12 @@
   before the report goes without it. A leg past its deadline fails like a
   dropped connection: the card shows the error and **Try again**, which
   resumes at that leg. Since 0.7.0.
+- **A report opened early still shows the page.** The page recorder loads
+  lazily; a card opened before it ran (a slow network, device or CI
+  runner) froze a clip with no screen in it, and the report went without
+  its replay. When the recorder runs by Send, the report now takes its view
+  then, as it already did for a recorder that had only just started.
+  Since 0.7.0.
 - **Report a problem: motion where it belongs.** The marking bar's shape
   indicator is in place on its first frame instead of growing in; a parked
   card rescales and follows a resized window in its corner instead of
