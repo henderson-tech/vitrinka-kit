@@ -283,7 +283,7 @@ test('a card opened before the recorder started still sends the page as it is at
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('August is listed twice');
   release();
-  await page.waitForFunction(() => (window as unknown as { __rrwebRecording?: boolean }).__rrwebRecording === true);
+  await page.waitForFunction(() => ((globalThis as { __rrwebStarted?: number }).__rrwebStarted ?? 0) > 0);
   await card.getByRole('button', { name: 'Send' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
   const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
