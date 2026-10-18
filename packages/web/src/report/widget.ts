@@ -37,7 +37,7 @@ import { listen } from '../recorder/hud/listen';
 import { RECORDER_VERSION } from '../recorder/version';
 import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
 import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
-import { rememberDisplayMode } from './face';
+import { memberLinked, rememberDisplayMode } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
@@ -967,7 +967,8 @@ export class ReportWidget {
   }
 
   private async refreshMember(): Promise<void> {
-    const link = readLink();
+    // The browser-wide link goes only to the vitrinka it was minted on: its token never reaches another widget's base.
+    const link = memberLinked(this.opts.base) ? readLink() : null;
     if (!link) {
       if (this.member) {
         this.member = null;

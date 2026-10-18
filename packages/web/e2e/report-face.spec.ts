@@ -66,3 +66,19 @@ test('a dev-mode member who never picked a face starts on the pill on the next m
   await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Report a problem/ })).toHaveCount(0);
 });
+
+test('a member link minted on another vitrinka never sends its token to this one', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('vitrinka.recorder.link', JSON.stringify({
+      token: 'vkr_elsewhere', workspace: 'voke', label: 'Elsewhere', expires_in: 2592000, base: 'https://other.vitrinka.test',
+    }));
+  });
+  await page.goto(`${server.url}/npm`);
+  const asked = page.waitForRequest((r) => r.url().endsWith('/api/v1/recorder/me'), { timeout: 2_000 }).then(() => true, () => false);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem', exact: true });
+  await card.getByRole('button', { name: /^Your account/ }).click();
+  expect(await asked).toBe(false);
+  expect(server.seen.filter((s) => s.auth === 'Bearer vkr_elsewhere')).toEqual([]);
+  await expect(card.getByRole('button', { name: 'Link your vitrinka account', exact: true })).toBeVisible();
+});
