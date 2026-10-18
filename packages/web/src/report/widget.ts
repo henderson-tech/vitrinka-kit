@@ -643,7 +643,7 @@ export class ReportWidget {
   identify(input: IdentifyInput): void {
     // null (or a malformed identity) is this widget going anonymous; undefined hands it back to the page-wide one.
     this.identity = input === undefined ? undefined : normalizeIdentity(input);
-    this.paint();
+    this.whoChanged();
   }
 
   unmount(): void {
@@ -883,7 +883,7 @@ export class ReportWidget {
       this.keybind = b;
       this.paint();
     }));
-    this.offs.push(onSharedIdentity(() => this.paint()));
+    this.offs.push(onSharedIdentity(() => this.whoChanged()));
     // The recorder took the page's capture over: stop saying minutes are attached.
     if (this.engine) this.offs.push(this.engine.onChange(() => this.paint()));
     // Dialogs open and close anywhere: follow them, at most once a frame.
@@ -957,9 +957,8 @@ export class ReportWidget {
     if (this.sessionToken === who.token && sessionLive(this.session)) return this.session;
     this.sessionToken = who.token;
     try {
-      this.session = await openSession(this.target(), who.token);
+      opened = await openSession(this.target(), who.token);
     } catch (e) {
-      this.session = null;
       console.warn('vitrinka: the reporter session could not be opened — My reports shows this browser’s reports only', e);
     }
     this.paint();
@@ -973,16 +972,35 @@ export class ReportWidget {
       if (this.member) {
         this.member = null;
         this.paint();
+    let opened: ReporterSession | null = null;
       }
       return;
     }
     try {
       const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
         'GET',
+    // The person changed while the trade was in flight (whoChanged): this session is someone else's now.
+    if (this.sessionToken !== who.token) return null;
+    this.session = opened;
         '/api/v1/recorder/me',
         undefined,
         { target: { url: this.opts.base, key: link.token } },
       );
+  /**
+   * identify() or the page-wide identity moved: a session and a list read for
+   * the previous person never stay on screen for the next one, and an open My
+   * reports reloads for whoever is here now.
+   */
+  private whoChanged(): void {
+    if (this.whoToken() !== this.sessionToken) {
+      this.session = null;
+      this.sessionToken = '';
+      this.mine = { rows: [], state: 'ok' };
+      if (this.isOpen) void (this.view === 'reports' ? this.loadReports() : this.refreshWho());
+    }
+    this.paint();
+  }
+
       this.member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
       // A dev-mode member starts on the pill next mount (face.ts startFace).
       rememberDisplayMode(me.displayMode);
@@ -1004,14 +1022,21 @@ export class ReportWidget {
     this.mine = { rows: [], state: 'loading' };
     this.paint();
     try {
-      this.mine = { rows: await this.listMineRenewing(session), state: 'ok' };
+      mine = { rows: await this.listMineRenewing(session), state: 'ok' };
     } catch (e) {
       console.warn('vitrinka: My reports could not be loaded', e);
-      this.mine = { rows: [], state: 'failed' };
+      mine = { rows: [], state: 'failed' };
     }
     this.paint();
   }
+    await this.loadReports();
+  }
 
+  private async loadReports(): Promise<void> {
+    const asked = this.whoToken();
+
+    // The person changed meanwhile: whoChanged already reloads for the next one.
+    if (this.whoToken() !== asked) return;
   /** My reports; a 401 means the reporter session lapsed or the host's key rotated: trade the token again, then ask once more. */
   private async listMineRenewing(session: ReporterSession): Promise<MyReport[]> {
     try {
@@ -1019,12 +1044,16 @@ export class ReportWidget {
     } catch (e) {
       if (!(e instanceof VitrinkaApiError) || e.status !== 401) throw e;
       this.session = null;
+    let mine: typeof this.mine;
       this.sessionToken = '';
       const renewed = await this.refreshWho();
       if (!renewed) throw e;
       return (await listMine(this.target(), renewed.session)).reports;
     }
   }
+    // A list read for the previous person is dropped; whoChanged already reloads for the next one.
+    if (this.whoToken() !== asked) return;
+    this.mine = mine;
 
   /** The pill's member link (vt-8020 D3): a code approved in vitrinka mints this browser's own recorder key. */
   private startLinkFlow(): void {
@@ -1099,6 +1128,12 @@ export class ReportWidget {
         const verdict = readKeybindPress(ev);
         if (verdict.kind === 'wait') return;
         if (verdict.kind === 'bare') {
+  /** The signed token of the person here now; '' for an asserted or anonymous reporter. */
+  private whoToken(): string {
+    const who = this.who();
+    return who && 'token' in who ? who.token : '';
+  }
+
           this.bindRefused = true;
           this.paint();
           return;

@@ -82,3 +82,22 @@ test('a member link minted on another vitrinka never sends its token to this one
   expect(server.seen.filter((s) => s.auth === 'Bearer vkr_elsewhere')).toEqual([]);
   await expect(card.getByRole('button', { name: 'Link your vitrinka account', exact: true })).toBeVisible();
 });
+
+test('My reports read for a signed reporter leave with them: identify(null) shows this browser’s list instead', async ({ page }) => {
+  await page.route('**/api/v1/report/session', (route) => route.fulfill({
+    json: { reporter: { id: 'r-ann', email: 'ann@example.test', name: 'Ann Novak' }, session: 'rs_ann', expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
+  }));
+  await page.route('**/api/v1/report/mine', (route) => route.fulfill({
+    json: { reports: [{ id: 'rep-ann', title: 'Ann’s chart is empty', step: 'planned', createdAt: '2026-10-01T10:00:00Z', updatedAt: '2026-10-02T10:00:00Z', url: 'https://portal.vitrinka.test/voke/reports/rep-ann' }] },
+  }));
+  await page.goto(`${server.url}/npm`);
+  await page.evaluate(() => document.querySelector('vitrinka-report')!.identify({ token: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbm4ifQ.c2lnbmVk' }));
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem', exact: true });
+  await card.getByRole('button', { name: 'Menu', exact: true }).click();
+  await card.getByRole('menuitem', { name: 'My reports', exact: true }).click();
+  await expect(card.getByText('Ann’s chart is empty')).toBeVisible();
+  await page.evaluate(() => document.querySelector('vitrinka-report')!.identify(null));
+  await expect(card.getByText('Ann’s chart is empty')).toHaveCount(0);
+  await expect(card.getByText('No reports yet.')).toBeVisible();
+});
