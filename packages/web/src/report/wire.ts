@@ -101,6 +101,22 @@ export async function deadline<T>(what: string, ms: number, work: (signal: Abort
   }
 }
 
+/** What a report carries when its capture could not be prepared. */
+export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
+
+/**
+ * The capture a report sends, under its deadline like every leg (reading an
+ * earlier load's stored windows can hang): past it, or failed, the report
+ * goes without one. A build that finishes later is dropped — it never
+ * reaches the job this answer started.
+ */
+export function prepareCapture(build: () => Promise<BuiltCapture>, ms: number = LEG_LIMITS.ms): Promise<BuiltCapture> {
+  return deadline('preparing the capture', ms, build).catch((e: unknown) => {
+    console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
+    return EMPTY_CAPTURE;
+  });
+}
+
 export class ReportJob {
   id = '';
   custody: 'direct' | 'quarantined' | '' = '';
@@ -128,7 +144,8 @@ export class ReportJob {
 
   /** One upload under a deadline that grows with its bytes. */
   private upload(path: string, contentType: string, body: string | Blob): Promise<{ blobKey?: string }> {
-    const bytes = typeof body === 'string' ? body.length : body.size;
+    // The bytes fetch sends: a JSON chunk's UTF-8, never its UTF-16 length (non-ASCII text runs up to 3× longer).
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body).byteLength : body.size;
     const ms = this.limits.ms + Math.ceil(bytes / this.limits.bytesPerMs);
     return deadline(`POST ${path}`, ms, (signal) => uploadTo(path, contentType, body, this.target, signal));
   }

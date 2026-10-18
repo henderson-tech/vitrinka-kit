@@ -61,7 +61,7 @@ import { listMine, type MyReport, openSession, type ReporterSession, sessionLive
 import { noteSent, readSent } from './sent';
 import { readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
-import { deadline, LEG_LIMITS, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
+import { EMPTY_CAPTURE, prepareCapture, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
 export interface WidgetOptions {
   base: string;
@@ -86,7 +86,6 @@ type Drawn = Marker & { key: number };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TITLE_CAP = 100;
-const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
 const TOOLS: readonly MarkerShape[] = ['circle', 'box', 'arrow', 'hide'];
 /** A keyboard mark starts as this, centred; arrows move it 10 px, Shift+arrows resize it. */
 const KB_DRAFT = { w: 160, h: 80 } as const;
@@ -1672,13 +1671,7 @@ export class ReportWidget {
         for (const m of this.markers) for (const id of this.hideIds.get(m.key) ?? []) marked.add(id);
         const engine = this.engine;
         const frozen = this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) };
-        // Under a deadline like every leg (wire.ts): a stored window's read that never settles must not hold Send.
-        const capture = engine
-          ? await deadline('preparing the capture', LEG_LIMITS.ms, () => engine.build(frozen, this.markers, marked)).catch((e: unknown) => {
-              console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
-              return EMPTY_CAPTURE;
-            })
-          : EMPTY_CAPTURE;
+        const capture = engine ? await prepareCapture(() => engine.build(frozen, this.markers, marked)) : EMPTY_CAPTURE;
         this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key }, this.files);
       }
       this.result = await this.job.run(this.envelope(description, this.job.capture));
