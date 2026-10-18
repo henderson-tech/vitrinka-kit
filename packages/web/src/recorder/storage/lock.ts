@@ -5,21 +5,109 @@ export async function withRecorderLock(name: string, run: () => void): Promise<v
     await navigator.locks.request(key, { signal: AbortSignal.timeout(5000) }, run);
     return;
   }
+  const fence = { area: localArea(), key: `vitrinka.recorder.lock.${name}` };
   // Web Locks requires a secure context. IndexedDB readwrite transactions
   // also serialize across tabs, including ordinary HTTP development hosts.
   const db = await lockDatabase();
-  await new Promise<void>((resolve, reject) => {
+  const unheard: Unheard = { fence: undefined, since: 0 };
+  while (!(await holdOnce(db, key, fence, run, unheard))) await pause();
+}
+
+/** The calling document's localStorage, and where the lock's fence lives in it. */
+interface Fence { area: Storage | null; key: string }
+
+/** The last holder's fence this tab has not heard yet, and since when it has known of it. */
+interface Unheard { fence: unknown; since: number }
+
+/** One fence this tab never hears (its storage cleared, a write lost) holds it back this long; then it runs anyway. */
+const HAND_OVER_MS = 1000;
+const HEAR_POLL_MS = 5;
+
+const pause = () => new Promise<void>((resolve) => setTimeout(resolve, HEAR_POLL_MS));
+
+function localArea(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null; // refused (a sandboxed frame): exclusion alone
+  }
+}
+
+/** Has this document's localStorage heard the last holder's fence (none yet: nothing to hear)? */
+function heard(fence: Fence, last: unknown): boolean {
+  return typeof last !== 'string' || !fence.area || fence.area.getItem(fence.key) === last;
+}
+
+/** A new fence, written after this holder's own writes; null when the store refused it. */
+function publishFence(fence: Fence): string | null {
+  if (!fence.area) return null;
+  const next = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
+  try {
+    fence.area.setItem(fence.key, next);
+    return next;
+  } catch (error) {
+    console.warn('vitrinka: recorder lock fence not stored — the next tab may not see this allocation', error);
+    return null;
+  }
+}
+
+/**
+ * Has this tab waited out `last`? The clock starts when a transaction first
+ * shows that fence, and again for a newer one: time spent queued for the
+ * lock, or suspended, never counts as time spent hearing its holder.
+ */
+function waitedOut(unheard: Unheard, last: unknown): boolean {
+  const now = Date.now();
+  if (unheard.fence !== last) {
+    unheard.fence = last;
+    unheard.since = now;
+    return false;
+  }
+  if (now - unheard.since < HAND_OVER_MS) return false;
+  warnUnheard();
+  return true;
+}
+
+let unheardWarned = false;
+function warnUnheard(): void {
+  if (unheardWarned) return;
+  unheardWarned = true;
+  console.warn(`vitrinka: this tab did not hear the last recorder lock holder within ${HAND_OVER_MS} ms — numbering anyway`);
+}
+
+/**
+ * One IndexedDB hold. A readwrite transaction excludes the other tabs but
+ * does not show them the holder's localStorage writes: Chromium keeps a copy
+ * of localStorage per renderer and delivers another tab's writes to it
+ * later, unordered with the transaction hand-over, so the next holder could
+ * read the seq watermark from before the last allocation and number a
+ * capture twice. Each holder therefore leaves a fresh fence in localStorage,
+ * after its own writes (they reach every tab in order), and in this
+ * transaction's record, which every tab reads coherently. A tab whose
+ * localStorage does not show the record's fence yet lets go and retries
+ * (the transaction would commit across a timer) until it hears it or waited
+ * it out.
+ */
+function holdOnce(db: IDBDatabase, key: string, fence: Fence, run: () => void, unheard: Unheard): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
     const tx = db.transaction('locks', 'readwrite');
-    tx.oncomplete = () => resolve();
+    const store = tx.objectStore('locks');
+    let ran = false;
+    tx.oncomplete = () => resolve(ran);
     tx.onabort = () => reject(tx.error ?? new Error('vitrinka: recorder lock transaction aborted'));
-    const request = tx.objectStore('locks').get(key);
+    const request = store.get(key);
     request.onsuccess = () => {
+      if (!heard(fence, request.result) && !waitedOut(unheard, request.result)) return;
       try {
         run();
       } catch (error) {
         reject(error);
         tx.abort();
+        return;
       }
+      ran = true;
+      const next = publishFence(fence);
+      if (next) store.put(next, key);
     };
   });
 }
