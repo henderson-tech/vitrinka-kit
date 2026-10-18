@@ -73,6 +73,36 @@ export interface Strings {
   needModifier: string;
   removeShortcut: string;
   back: string;
+  // -- the account and the menu (vt-8020 D2, D3, D5) --
+  account: string;
+  menu: string;
+  anonymous: string;
+  anonymousHint: string;
+  signedInByApp: string;
+  linkVitrinka: string;
+  linkedAs: (who: string) => string;
+  unlink: string;
+  myReports: string;
+  recentRecordings: string;
+  record: string;
+  openVitrinka: string;
+  openPortal: string;
+  // -- the lists --
+  loading: string;
+  listFailed: string;
+  noReports: string;
+  noRecordings: string;
+  fromThisBrowser: string;
+  /** A report's step as the portal names it; an unknown key shows as is. */
+  steps: Record<string, string>;
+  waiting: string;
+  sentQueued: string;
+  // -- the link sheet --
+  linkCode: string;
+  linkHint: string;
+  linkWaiting: string;
+  linkExpired: string;
+  linkFailed: string;
 }
 
 /** Czech plural: 1 · 2–4 · 5+ (and 0). */
@@ -145,6 +175,32 @@ const en: Strings = {
   needModifier: 'Add Ctrl, Alt or ⌘ — a key on its own would get in the way of typing',
   removeShortcut: 'Remove',
   back: 'Back',
+  account: 'Your account',
+  menu: 'Menu',
+  anonymous: 'Not signed in',
+  anonymousHint: 'The team checks your report before it’s filed.',
+  signedInByApp: 'Signed in by this app',
+  linkVitrinka: 'Link your vitrinka account',
+  linkedAs: (who) => `Linked to vitrinka as ${who}`,
+  unlink: 'Unlink',
+  myReports: 'My reports',
+  recentRecordings: 'Recent recordings',
+  record: 'Record',
+  openVitrinka: 'Open vitrinka',
+  openPortal: 'Open the report portal',
+  loading: 'Loading…',
+  listFailed: 'Couldn’t load — try again',
+  noReports: 'No reports yet.',
+  noRecordings: 'No recordings yet.',
+  fromThisBrowser: 'Sent from this browser',
+  steps: { received: 'Received', planned: 'Planned', in_progress: 'In progress', fixed: 'Fixed', done: 'Done' },
+  waiting: 'Waiting for approval',
+  sentQueued: 'The team checks it before it’s filed.',
+  linkCode: 'Your code',
+  linkHint: 'Approve this code in vitrinka — on this device or another one where you’re signed in.',
+  linkWaiting: 'Waiting for approval…',
+  linkExpired: 'The code expired.',
+  linkFailed: 'Linking didn’t work.',
 };
 
 const cs: Strings = {
@@ -212,6 +268,32 @@ const cs: Strings = {
   needModifier: 'Přidejte Ctrl, Alt nebo ⌘ — samotná klávesa by překážela při psaní',
   removeShortcut: 'Odebrat',
   back: 'Zpět',
+  account: 'Váš účet',
+  menu: 'Nabídka',
+  anonymous: 'Nepřihlášeno',
+  anonymousHint: 'Hlášení nejdřív zkontroluje tým.',
+  signedInByApp: 'Přihlášen touto aplikací',
+  linkVitrinka: 'Propojit s vitrinkou',
+  linkedAs: (who) => `Propojeno s vitrinkou jako ${who}`,
+  unlink: 'Odpojit',
+  myReports: 'Moje hlášení',
+  recentRecordings: 'Nedávné nahrávky',
+  record: 'Nahrávat',
+  openVitrinka: 'Otevřít vitrinku',
+  openPortal: 'Otevřít portál hlášení',
+  loading: 'Načítám…',
+  listFailed: 'Nepodařilo se načíst — zkuste to znovu',
+  noReports: 'Zatím žádná hlášení.',
+  noRecordings: 'Zatím žádné nahrávky.',
+  fromThisBrowser: 'Odesláno z tohoto prohlížeče',
+  steps: { received: 'Přijato', planned: 'Naplánováno', in_progress: 'Řešíme', fixed: 'Opraveno', done: 'Hotovo' },
+  waiting: 'Čeká na schválení',
+  sentQueued: 'Než ho zařadíme, tým ho zkontroluje.',
+  linkCode: 'Váš kód',
+  linkHint: 'Schvalte kód ve vitrince — na tomto nebo jiném zařízení, kde jste přihlášeni.',
+  linkWaiting: 'Čekám na schválení…',
+  linkExpired: 'Kód vypršel.',
+  linkFailed: 'Propojení se nepodařilo.',
 };
 
 const CATALOGS: Readonly<Record<Locale, Strings>> = { cs, en };

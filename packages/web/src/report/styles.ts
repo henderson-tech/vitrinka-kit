@@ -87,6 +87,57 @@ kbd {
 }
 .icon:hover { background: var(--faint); color: var(--ink); }
 .icon svg { width: 16px; height: 16px; }
+.icon[aria-expanded="true"] { background: var(--faint); color: var(--ink); }
+
+/* -- who you are and the menu (vt-8020 D5 A) -------------------------------- */
+.who {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 132px; height: 32px; padding: 0 11px 0 5px; margin-right: 2px;
+  border: 1px solid rgba(255, 255, 255, .14); border-radius: 999px; background: transparent; color: var(--ink);
+  font-size: 13px; font-weight: 600;
+}
+.who:hover, .who[aria-expanded="true"] { background: var(--faint); }
+.who .av {
+  display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: #3a3940; font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+}
+.who-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop {
+  position: absolute; top: 52px; right: 10px; z-index: 2; min-width: 240px; max-width: calc(100% - 20px); padding: 6px;
+  background: #222126; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .42); animation: vr-in .14s ease-out;
+}
+.pop-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 550; text-decoration: none; text-align: left;
+}
+.pop-item:hover, .pop-item:focus-visible { background: var(--faint); }
+.pop-item svg { width: 15px; height: 15px; flex: none; color: var(--dim); }
+.acc-who { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
+.acc-who strong { font-size: 14px; }
+.acc-mail, .acc-via { color: var(--dim); font-size: 12.5px; margin: 0; }
+.acc-member { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; }
+.acc-member:has(.acc-linked:not([hidden])) { padding: 8px 10px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.acc-linked { margin: 0; font-size: 12.5px; color: var(--ink); }
+
+/* -- the lists: My reports, recent recordings — in the card body ------------ */
+.back { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px -4px; padding: 4px; border: 0; background: none; color: var(--ink); font-size: 14px; font-weight: 650; }
+.back svg { width: 14px; height: 14px; color: var(--dim); }
+.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.row {
+  display: grid; grid-template-columns: 1fr auto; grid-template-areas: "t step" "age step"; column-gap: 10px;
+  padding: 9px 10px; border-radius: 10px; background: rgba(242, 241, 239, .045); color: var(--ink); text-decoration: none;
+}
+a.row:hover { background: var(--faint); }
+.row-t { grid-area: t; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
+.age { grid-area: age; color: var(--dim); font-size: 12px; }
+.step { grid-area: step; align-self: center; padding: 3px 9px; border-radius: 999px; background: var(--bg-deep); color: var(--dim); font-size: 12px; font-weight: 600; }
+.step:empty { display: none; }
+.list-status, .list-note { margin: 8px 0; color: var(--dim); font-size: 13px; }
+
+/* -- the member link sheet (the pill's flow, vt-8020 D3) ------------------- */
+.code { margin: 6px 0 14px; font: 650 26px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .08em; }
+.link-go { display: flex; align-items: center; gap: 16px; }
+.qr { width: 104px; height: 104px; border-radius: 8px; background: #fff; padding: 6px; }
 .pane { padding: 14px 16px 16px; }
 /* The reporter's word for it (vt-8020 D11): chips above the input, like the board composer's intents. */
 .kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }

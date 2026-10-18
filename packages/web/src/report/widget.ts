@@ -20,7 +20,12 @@
  *   so a locale switch keeps the typed draft, the marks and their notes.
  *   Drafts live in memory only.
  */
+import { LinkExpired, type LinkStart, linkWorkspace, pollLink, startLink } from '@vitrinka/link';
+
+import { api } from '../recorder/api';
 import { redactUrl } from '../recorder/capture/redact';
+import { clearLink, defaultLinkLabel, readLink, storeLink } from '../recorder/config';
+import { readRecents } from '../recorder/recents';
 import { createHudHost, createSheetHost, type HudHost, insideHud, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
@@ -42,6 +47,8 @@ import {
 } from './markers';
 import { type Corner, cornerRect, type Frame, pickCorner } from './place';
 import type { CaptureNarrowing } from './profile';
+import { listMine, type MyReport, openSession, type ReporterSession, sessionLive } from './reader';
+import { noteSent, readSent } from './sent';
 import { REPORT_CSS } from './styles';
 import { ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
@@ -61,7 +68,9 @@ export interface WidgetOptions {
   loadRecord: RecordLoader;
 }
 
-type View = 'describe' | 'settings' | 'sent';
+type View = 'describe' | 'settings' | 'sent' | 'reports' | 'recents' | 'link';
+type Popover = 'account' | 'more';
+type LinkFlow = { start: LinkStart | null; state: 'starting' | 'waiting' | 'expired' | 'failed'; abort: AbortController };
 type Drawn = Marker & { key: number };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -90,6 +99,13 @@ const ICON = {
   box: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="3.4" width="11.6" height="9.2" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13L12.5 3.5M7 3.5h5.5V9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   hide: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8s2.3-4 6-4 6 4 6 4-2.3 4-6 4-6-4-6-4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M3 13L13 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  dots: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>',
+  left: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ext: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  list: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  clock: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.8V8l2.2 1.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  rec: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="2.8" fill="currentColor"/></svg>',
+  link: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 9a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2l-.8.8M9 7a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l.8-.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
   clip: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 4.5l-5 5a1.6 1.6 0 002.3 2.3l5.4-5.4a3 3 0 00-4.2-4.2L3.6 7.6a4.4 4.4 0 006.2 6.2l4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   chevron: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   pen: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.1 0.6 0.6-3.1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
@@ -156,6 +172,18 @@ function deepActiveElement(): HTMLElement | SVGElement | null {
   return active instanceof HTMLElement || active instanceof SVGElement ? active : null;
 }
 
+/** Up to two initials of a name, or an email's first letter. */
+function initials(label: string): string {
+  const words = label.split('@')[0]?.split(/[\s._-]+/).filter(Boolean) ?? [];
+  return words.slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('') || '?';
+}
+
+/** A menu row's text: the span after its icon. */
+function setLabel(el: HTMLElement, text: string): void {
+  const span = el.querySelector('span');
+  if (span) span.textContent = text;
+}
+
 /** A text field has the focus — its own editing keys (⌘Z included) are its. */
 function typing(): boolean {
   const el = deepActiveElement();
@@ -169,9 +197,36 @@ function buildDom(mount: HTMLElement) {
   const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabLabel, fabKbd);
 
   const title = h('h2', { id: 'vr-title' });
-  const gear = h('button', { class: 'icon', type: 'button' }, icon(ICON.gear));
+  // Who you are, at a glance (vt-8020 D5 A): the chip opens the account popover, ⋯ the menu.
+  const whoAv = h('span', { class: 'av', 'aria-hidden': 'true' });
+  const whoName = h('span', { class: 'who-name' });
+  const whoBtn = h('button', { class: 'who', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, whoAv, whoName);
+  const more = h('button', { class: 'icon', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, icon(ICON.dots));
   const closeBtn = h('button', { class: 'icon', type: 'button' }, icon(ICON.close));
-  const head = h('header', { class: 'head' }, title, gear, closeBtn);
+  const head = h('header', { class: 'head' }, title, whoBtn, more, closeBtn);
+
+  const accName = h('strong');
+  const accMail = h('span', { class: 'acc-mail' });
+  const accVia = h('p', { class: 'acc-via' });
+  const accLinked = h('p', { class: 'acc-linked' });
+  const accUnlink = h('button', { class: 'link', type: 'button' });
+  const accLink = h('button', { class: 'pop-item', type: 'button' }, icon(ICON.link), h('span'));
+  const accPortal = h('a', { class: 'pop-item', target: '_blank', rel: 'noopener noreferrer' }, icon(ICON.ext), h('span'));
+  const accountPop = h(
+    'div',
+    { class: 'pop acc', role: 'dialog' },
+    h('div', { class: 'acc-who' }, accName, accMail, accVia),
+    h('div', { class: 'acc-member' }, accLinked, accUnlink),
+    accLink,
+    accPortal,
+  );
+  const menuItem = (glyph: string) => h('button', { class: 'pop-item', type: 'button', role: 'menuitem' }, icon(glyph), h('span'));
+  const mReports = menuItem(ICON.list);
+  const mRecents = menuItem(ICON.clock);
+  const mRecord = menuItem(ICON.rec);
+  const mSettings = menuItem(ICON.gear);
+  const mOpen = h('a', { class: 'pop-item', role: 'menuitem', target: '_blank', rel: 'noopener noreferrer' }, icon(ICON.ext), h('span'));
+  const morePop = h('div', { class: 'pop more', role: 'menu' }, mReports, mRecents, mRecord, mSettings, mOpen);
 
   const kindsLabel = h('span', { class: 'sr', id: 'vr-kinds' });
   const kindButtons = new Map<ReportKind, HTMLButtonElement>();
@@ -225,8 +280,31 @@ function buildDom(mount: HTMLElement) {
     h('div', { class: 'sent-actions' }, see, sentClose),
   );
 
-  const body = h('div', { class: 'body' }, describe, settings, sent);
-  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, body, foot);
+  // A list opens in the card body with ← back (vt-8020 D5); the card keeps its size.
+  const backRow = () => h('button', { class: 'back', type: 'button' }, icon(ICON.left), h('span'));
+  const repBack = backRow();
+  const repStatus = h('p', { class: 'list-status' });
+  const repRows = h('ul', { class: 'rows' });
+  const repLocal = h('p', { class: 'list-note' });
+  const repPortal = h('a', { class: 'link', target: '_blank', rel: 'noopener noreferrer' });
+  const reports = h('div', { class: 'pane list' }, repBack, repStatus, repRows, repLocal, repPortal);
+  const recBack = backRow();
+  const recStatus = h('p', { class: 'list-status' });
+  const recRows = h('ul', { class: 'rows' });
+  const recents = h('div', { class: 'pane list' }, recBack, recStatus, recRows);
+  const linkBack = backRow();
+  const linkLabel = h('p', { class: 'list-note' });
+  const linkCode = h('div', { class: 'code' });
+  const linkOpenText = h('span');
+  const linkOpen = h('a', { class: 'see', target: '_blank', rel: 'noopener noreferrer' }, linkOpenText);
+  const linkQr = h('img', { class: 'qr', alt: '' });
+  const linkHint = h('p', { class: 'hint' });
+  const linkWait = h('p', { class: 'list-status', role: 'status' });
+  const linkRetry = h('button', { class: 'link', type: 'button' });
+  const linking = h('div', { class: 'pane linking' }, linkBack, linkLabel, linkCode, h('div', { class: 'link-go' }, linkOpen, linkQr), linkHint, linkWait, linkRetry);
+
+  const body = h('div', { class: 'body' }, describe, settings, sent, reports, recents, linking);
+  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, accountPop, morePop, body, foot);
 
   const ink = svgEl('svg', { class: 'ink', 'aria-hidden': 'true' });
   const defs = svgEl('defs', {});
@@ -271,7 +349,11 @@ function buildDom(mount: HTMLElement) {
   root.prepend(style);
   mount.append(root);
   return {
-    root, fab, fabLabel, fabKbd, card, head, title, gear, closeBtn, body, foot,
+    root, fab, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
+    accountPop, accName, accMail, accVia, accLinked, accUnlink, accLink, accPortal,
+    morePop, mReports, mRecents, mRecord, mSettings, mOpen,
+    reports, repBack, repStatus, repRows, repLocal, repPortal, recents, recBack, recStatus, recRows,
+    linking, linkBack, linkLabel, linkCode, linkOpen, linkOpenText, linkQr, linkHint, linkWait, linkRetry,
     describe, kinds, kindsLabel, kindButtons, prompt, desc, lines, linesEmpty, attached, attachedText, disclose, discloseText, included,
     notify, notifyBox, notifyText, error, where, whereText, send,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
@@ -338,6 +420,14 @@ export class ReportWidget {
   private parked: Corner | null = null;
   /** Swaps this widget for the recorder pill; set only for a linked member (setRecordSwitch). */
   private recordSwitch: (() => void) | null = null;
+  private menu: Popover | null = null;
+  /** The reporter session the host's signed token was traded for (vt-8020 D4), and that token. */
+  private session: ReporterSession | null = null;
+  private sessionToken = '';
+  /** The vitrinka member this browser is linked to (vt-8020 D3), read with the link's own token. */
+  private member: { name: string; email: string; workspace: string } | null = null;
+  private mine: { rows: MyReport[]; state: 'loading' | 'failed' | 'ok' } = { rows: [], state: 'ok' };
+  private linkFlow: LinkFlow | null = null;
   private drawing: { start: Point; shape: MarkerShape; pointer: number } | null = null;
   private readonly offs: (() => void)[] = [];
   private readonly pins = new Map<number, Pin>();
@@ -433,6 +523,9 @@ export class ReportWidget {
     if (!this.job) this.frozen = this.engine?.freeze() ?? null;
     this.paint();
     requestAnimationFrame(() => this.e.desc.focus());
+    // Who you are fills the chip as soon as the server says it.
+    void this.refreshWho();
+    void this.refreshMember();
   }
 
   close(): void {
@@ -488,6 +581,7 @@ export class ReportWidget {
 
   unmount(): void {
     this.stopRecordingBind();
+    this.linkFlow?.abort.abort();
     for (const off of this.offs.splice(0).reverse()) off();
     releaseEngine(this.engine);
     this.sheet?.host.destroy();
@@ -504,7 +598,35 @@ export class ReportWidget {
     };
     on(e.fab, 'click', () => (this.isOpen ? this.close() : this.open()));
     on(e.closeBtn, 'click', () => this.close());
-    on(e.gear, 'click', () => this.show(this.view === 'settings' ? 'describe' : 'settings'));
+    on(e.whoBtn, 'click', () => this.toggleMenu('account'));
+    on(e.more, 'click', () => this.toggleMenu('more'));
+    const fromMenu = (fn: () => void) => () => {
+      this.menu = null;
+      fn();
+      this.paint();
+    };
+    on(e.mReports, 'click', fromMenu(() => void this.openReports()));
+    on(e.mRecents, 'click', fromMenu(() => this.show('recents')));
+    on(e.mRecord, 'click', fromMenu(() => this.recordSwitch?.()));
+    on(e.mSettings, 'click', fromMenu(() => this.show('settings')));
+    on(e.mOpen, 'click', fromMenu(() => undefined));
+    on(e.accPortal, 'click', fromMenu(() => undefined));
+    on(e.accLink, 'click', fromMenu(() => this.startLinkFlow()));
+    on(e.accUnlink, 'click', () => {
+      clearLink();
+      this.member = null;
+      this.paint();
+    });
+    for (const b of [e.repBack, e.recBack, e.linkBack]) on(b, 'click', () => this.show('describe'));
+    on(e.linkRetry, 'click', () => this.startLinkFlow());
+    // A press anywhere in the card but the open popover (or its button) closes it.
+    on(e.card, 'pointerdown', (ev) => {
+      const t = ev.target;
+      if (!this.menu || !(t instanceof Node)) return;
+      if ([e.accountPop, e.morePop, e.whoBtn, e.more].some((el) => el.contains(t))) return;
+      this.menu = null;
+      this.paint();
+    });
     on(e.back, 'click', () => this.show('describe'));
     on(e.sentClose, 'click', () => this.close());
     on(e.desc, 'input', () => this.paint());
@@ -534,7 +656,13 @@ export class ReportWidget {
       // Marking's own Escape (the window listener) already acted on it.
       if (ev.key !== 'Escape' || this.recordingBind || ev.defaultPrevented) return;
       ev.preventDefault();
-      if (this.view === 'settings') this.show('describe');
+      // Esc steps back one layer: an open popover, then a list or settings, then the card itself.
+      if (this.menu) {
+        const opener = this.menu === 'account' ? e.whoBtn : e.more;
+        this.menu = null;
+        this.paint();
+        opener.focus();
+      } else if (this.view !== 'describe' && this.view !== 'sent') this.show('describe');
       else this.close();
     });
     for (const [tool, btn] of e.toolButtons) {
@@ -657,10 +785,143 @@ export class ReportWidget {
 
   private show(view: View): void {
     this.stopRecordingBind();
+    if (view !== 'link' && this.linkFlow) {
+      this.linkFlow.abort.abort();
+      this.linkFlow = null;
+    }
     this.view = view;
     this.paint();
-    if (view === 'describe') requestAnimationFrame(() => this.e.desc.focus());
-    if (view === 'settings') requestAnimationFrame(() => this.e.bindBtn.focus());
+    const focus = { describe: this.e.desc, settings: this.e.bindBtn, sent: null, reports: this.e.repBack, recents: this.e.recBack, link: this.e.linkBack }[view];
+    if (focus) requestAnimationFrame(() => focus.focus());
+  }
+
+  // -- the account and the lists (vt-8020 D2–D5) ------------------------------
+
+  private target(): { url: string; key: string } {
+    return { url: this.opts.base, key: this.opts.key };
+  }
+
+  private toggleMenu(which: Popover): void {
+    this.menu = this.menu === which ? null : which;
+    if (this.menu === 'account') {
+      void this.refreshWho();
+      void this.refreshMember();
+    }
+    this.paint();
+    const pop = this.menu === 'account' ? this.e.accountPop : this.menu === 'more' ? this.e.morePop : null;
+    const first = pop?.querySelector<HTMLElement>('button:not([hidden]), a:not([hidden])');
+    first?.focus();
+  }
+
+  /** The host's signed token traded once for a reporter session; renewed only when it is about to lapse. */
+  private async refreshWho(): Promise<void> {
+    const who = this.who();
+    if (!who || !('token' in who)) {
+      this.session = null;
+      this.sessionToken = '';
+      return;
+    }
+    if (this.sessionToken === who.token && sessionLive(this.session)) return;
+    this.sessionToken = who.token;
+    try {
+      this.session = await openSession(this.target(), who.token);
+    } catch (e) {
+      this.session = null;
+      console.warn('vitrinka: the reporter session could not be opened — My reports shows this browser’s reports only', e);
+    }
+    this.paint();
+  }
+
+  private async refreshMember(): Promise<void> {
+    const link = readLink();
+    if (!link) {
+      if (this.member) {
+        this.member = null;
+        this.paint();
+      }
+      return;
+    }
+    try {
+      const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string } }>('GET', '/api/v1/recorder/me', undefined, {
+        target: { url: this.opts.base, key: link.token },
+      });
+      this.member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
+    } catch (e) {
+      console.warn('vitrinka: the linked vitrinka account could not be read', e);
+      this.member = { email: '', name: '', workspace: link.workspace };
+    }
+    this.paint();
+  }
+
+  private async openReports(): Promise<void> {
+    this.show('reports');
+    await this.refreshWho();
+    if (!this.session) {
+      this.mine = { rows: [], state: 'ok' };
+      this.paint();
+      return;
+    }
+    this.mine = { rows: [], state: 'loading' };
+    this.paint();
+    try {
+      this.mine = { rows: (await listMine(this.target(), this.session.session)).reports, state: 'ok' };
+    } catch (e) {
+      console.warn('vitrinka: My reports could not be loaded', e);
+      this.mine = { rows: [], state: 'failed' };
+    }
+    this.paint();
+  }
+
+  /** The pill's member link (vt-8020 D3): a code approved in vitrinka mints this browser's own recorder key. */
+  private startLinkFlow(): void {
+    this.linkFlow?.abort.abort();
+    const flow: LinkFlow = { start: null, state: 'starting', abort: new AbortController() };
+    this.linkFlow = flow;
+    this.show('link');
+    const base = this.opts.base;
+    const workspace = linkWorkspace(base);
+    void (async () => {
+      try {
+        flow.start = await startLink(base, { label: defaultLinkLabel(), workspace });
+        flow.state = 'waiting';
+        this.paint();
+        const linked = await pollLink(base, flow.start.device_code, {
+          interval: flow.start.interval,
+          expiresIn: flow.start.expires_in,
+          workspace,
+          signal: flow.abort.signal,
+        });
+        storeLink(linked);
+        this.linkFlow = null;
+        this.show('describe');
+        await this.refreshMember();
+      } catch (e) {
+        if (flow.abort.signal.aborted) return;
+        flow.state = e instanceof LinkExpired ? 'expired' : 'failed';
+        if (flow.state === 'failed') console.warn('vitrinka: linking the vitrinka account failed', e);
+        this.paint();
+      }
+    })();
+  }
+
+  /** "2 h ago" in the widget's language. */
+  private ago(at: number): string {
+    const rtf = new Intl.RelativeTimeFormat(this.locale, { numeric: 'auto' });
+    const s = Math.round((at - Date.now()) / 1000);
+    const steps: [number, Intl.RelativeTimeFormatUnit][] = [[60, 'second'], [60, 'minute'], [24, 'hour'], [30, 'day'], [12, 'month'], [Infinity, 'year']];
+    let v = s;
+    for (const [size, unit] of steps) {
+      if (Math.abs(v) < size) return rtf.format(v, unit);
+      v = Math.round(v / size);
+    }
+    return rtf.format(v, 'year');
+  }
+
+  /** One list row: a title, a quiet state chip and its age; a link when the server minted an address. */
+  private row(title: string, state: string, at: number, url?: string): HTMLLIElement {
+    const kids = [h('span', { class: 'row-t' }, title), h('span', { class: 'step' }, state), h('span', { class: 'age' }, this.ago(at))];
+    const inner = url ? h('a', { class: 'row', href: url, target: '_blank', rel: 'noopener noreferrer' }, ...kids) : h('div', { class: 'row' }, ...kids);
+    return h('li', {}, inner);
   }
 
   private who(): Identity | null {
@@ -1029,6 +1290,12 @@ export class ReportWidget {
         this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key });
       }
       this.result = await this.job.run(this.envelope(description, this.job.capture));
+      noteSent(this.opts.base, globalThis.location?.host ?? '', {
+        title: titleOf(description),
+        at: Date.now(),
+        status: this.result.status,
+        ...(this.result.reportUrl ? { url: this.result.reportUrl } : {}),
+      });
       this.sentNotify = this.notify && this.who() !== null;
       this.view = 'sent';
       this.job = null;
@@ -1069,6 +1336,102 @@ export class ReportWidget {
     return items;
   }
 
+  /** Who the face says you are (vt-8020 D2): the host's person, then the linked member; never a guess. */
+  private paintAccount(): void {
+    const { e, s } = this;
+    const who = this.who();
+    const person = !who ? null : 'email' in who ? { name: who.name ?? '', email: who.email } : this.session ? { name: this.session.reporter.name ?? '', email: this.session.reporter.email } : null;
+    const label = person?.name || person?.email || '';
+    e.whoAv.textContent = who ? initials(label) : '?';
+    e.whoName.textContent = label.split(/[\s@]/)[0] ?? '';
+    e.whoName.hidden = !label;
+    e.whoBtn.setAttribute('aria-label', `${s.account}: ${label || (who ? '' : s.anonymous)}`.replace(/: $/, ''));
+    e.whoBtn.setAttribute('aria-expanded', String(this.menu === 'account'));
+    e.more.setAttribute('aria-label', s.menu);
+    e.more.setAttribute('aria-expanded', String(this.menu === 'more'));
+    e.accountPop.hidden = this.menu !== 'account';
+    e.morePop.hidden = this.menu !== 'more';
+    e.accountPop.setAttribute('aria-label', s.account);
+    e.morePop.setAttribute('aria-label', s.menu);
+
+    e.accName.textContent = who ? person?.name || person?.email || '' : s.anonymous;
+    e.accMail.textContent = person?.name ? person.email : '';
+    e.accMail.hidden = !e.accMail.textContent;
+    e.accVia.textContent = who ? s.signedInByApp : s.anonymousHint;
+    const member = this.member;
+    e.accLinked.hidden = !member;
+    e.accUnlink.hidden = !member;
+    e.accLinked.textContent = member ? s.linkedAs(member.email || member.name || member.workspace) : '';
+    e.accUnlink.textContent = s.unlink;
+    e.accLink.hidden = Boolean(member);
+    setLabel(e.accLink, s.linkVitrinka);
+    const portal = this.session?.portalUrl;
+    e.accPortal.hidden = !portal;
+    if (portal) e.accPortal.setAttribute('href', portal);
+    setLabel(e.accPortal, s.openPortal);
+
+    setLabel(e.mReports, s.myReports);
+    setLabel(e.mRecents, s.recentRecordings);
+    setLabel(e.mRecord, s.record);
+    setLabel(e.mSettings, s.settings);
+    // Recording lives where the pill does: only a linked member gets it, its recents and the way to vitrinka.
+    e.mRecents.hidden = !this.recordSwitch;
+    e.mRecord.hidden = !this.recordSwitch;
+    const open = member ? this.opts.base : portal;
+    e.mOpen.hidden = !open;
+    if (open) e.mOpen.setAttribute('href', open);
+    setLabel(e.mOpen, member ? s.openVitrinka : s.openPortal);
+  }
+
+  private paintReports(): void {
+    const { e, s } = this;
+    setLabel(e.repBack, s.myReports);
+    const local = !this.session;
+    const rows = local
+      ? readSent(this.opts.base, globalThis.location?.host ?? '').map((r) => this.row(r.title, r.status === 'quarantined' ? s.waiting : s.steps.received ?? '', r.at, r.url))
+      : this.mine.rows.map((r) => this.row(r.title, s.steps[r.step] ?? r.step, Date.parse(r.updatedAt), r.url));
+    e.repRows.replaceChildren(...rows);
+    const state = local ? 'ok' : this.mine.state;
+    e.repStatus.hidden = state === 'ok' && rows.length > 0;
+    e.repStatus.textContent = state === 'loading' ? s.loading : state === 'failed' ? s.listFailed : s.noReports;
+    e.repLocal.hidden = !local || rows.length === 0;
+    e.repLocal.textContent = s.fromThisBrowser;
+    const portal = this.session?.portalUrl;
+    e.repPortal.hidden = !portal;
+    if (portal) e.repPortal.setAttribute('href', portal);
+    e.repPortal.textContent = s.openPortal;
+  }
+
+  private paintRecents(): void {
+    const { e, s } = this;
+    setLabel(e.recBack, s.recentRecordings);
+    const rows = readRecents().map((r) => this.row(r.title, '', r.startedAt, r.boardUrl));
+    e.recRows.replaceChildren(...rows);
+    e.recStatus.hidden = rows.length > 0;
+    e.recStatus.textContent = s.noRecordings;
+  }
+
+  private paintLink(): void {
+    const { e, s } = this;
+    const flow = this.linkFlow;
+    setLabel(e.linkBack, s.linkVitrinka);
+    e.linkLabel.textContent = s.linkCode;
+    e.linkCode.textContent = flow?.start?.user_code ?? '…';
+    e.linkOpenText.textContent = s.openVitrinka;
+    const start = flow?.start;
+    e.linkOpen.hidden = !start;
+    if (start) e.linkOpen.setAttribute('href', start.verifyUrl);
+    // The QR is for another device: a fine pointer (a desk) shows it, a phone is already the other device.
+    const fine = globalThis.matchMedia?.('(pointer: fine)').matches ?? true;
+    e.linkQr.hidden = !start || !fine;
+    if (start && fine && e.linkQr.getAttribute('src') !== start.qrUrl) e.linkQr.setAttribute('src', start.qrUrl);
+    e.linkHint.textContent = s.linkHint;
+    const state = flow?.state ?? 'failed';
+    e.linkWait.textContent = state === 'expired' ? s.linkExpired : state === 'failed' ? s.linkFailed : state === 'waiting' ? s.linkWaiting : s.loading;
+    e.linkRetry.hidden = state !== 'expired' && state !== 'failed';
+    e.linkRetry.textContent = s.retry;
+  }
+
   private paint(): void {
     const { e, s } = this;
     const who = this.who();
@@ -1085,12 +1448,17 @@ export class ReportWidget {
     e.card.hidden = !this.isOpen;
     e.card.classList.toggle('busy', this.sending);
     e.title.textContent = s.title;
-    e.gear.setAttribute('aria-label', s.settings);
-    e.gear.setAttribute('aria-pressed', String(this.view === 'settings'));
     e.closeBtn.setAttribute('aria-label', s.close);
+    this.paintAccount();
     e.describe.hidden = this.view !== 'describe';
     e.settings.hidden = this.view !== 'settings';
     e.sent.hidden = this.view !== 'sent';
+    e.reports.hidden = this.view !== 'reports';
+    e.recents.hidden = this.view !== 'recents';
+    e.linking.hidden = this.view !== 'link';
+    if (this.view === 'reports') this.paintReports();
+    if (this.view === 'recents') this.paintRecents();
+    if (this.view === 'link') this.paintLink();
     e.foot.hidden = this.view !== 'describe';
 
     e.kindsLabel.textContent = s.kindsLabel;
@@ -1138,7 +1506,8 @@ export class ReportWidget {
     e.back.textContent = s.back;
 
     e.sentTitle.textContent = s.sentTitle;
-    e.sentBody.textContent = this.sentNotify ? s.sentNotify : s.sentBody;
+    // Filed or waiting: an unsigned report is checked by the team before it is filed, and says so.
+    e.sentBody.textContent = this.result?.status === 'quarantined' ? s.sentQueued : this.sentNotify ? s.sentNotify : s.sentBody;
     e.seeText.textContent = s.seeReport;
     const url = this.result?.reportUrl;
     e.see.hidden = !url;
