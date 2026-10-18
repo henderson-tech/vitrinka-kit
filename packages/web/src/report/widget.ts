@@ -245,6 +245,9 @@ function buildDom(mount: HTMLElement) {
   const mReports = menuItem(ICON.list);
   const mRecents = menuItem(ICON.clock);
   const mRecord = menuItem(ICON.rec);
+  // Why Record waits, a second line under its label: its description, so aria-hidden keeps it out of the name.
+  const mRecordWhy = h('small', { class: 'pop-why', id: 'vr-record-why', 'aria-hidden': 'true' });
+  mRecord.append(mRecordWhy);
   const mSettings = menuItem(ICON.gear);
   const mOpen = h('a', { class: 'pop-item', role: 'menuitem', target: '_blank', rel: 'noopener noreferrer' }, icon(ICON.ext), h('span'));
   const morePop = h('div', { class: 'pop more', role: 'menu' }, mReports, mRecents, mRecord, mSettings, mOpen);
@@ -391,7 +394,7 @@ function buildDom(mount: HTMLElement) {
   return {
     root, fab, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
     accountPop, accName, accMail, accVia, accLinked, accUnlink, accLink, accPortal,
-    morePop, mReports, mRecents, mRecord, mSettings, mOpen,
+    morePop, mReports, mRecents, mRecord, mRecordWhy, mSettings, mOpen,
     reports, repBack, repStatus, repRows, repLocal, repPortal, recents, recBack, recStatus, recRows,
     linking, linkBack, linkLabel, linkCode, linkOpen, linkOpenText, linkQr, linkHint, linkWait, linkRetry,
     describe, kinds, kindsLabel, kindButtons, prompt, desc, lines, linesEmpty, attached, attachedText, disclose, discloseText, included,
@@ -1636,6 +1639,16 @@ export class ReportWidget {
     return this.e.desc.value.trim() || (this.markers.find((m) => m.note.trim())?.note.trim() ?? '');
   }
 
+  /**
+   * The card holds something the reporter made and has not sent: words in the
+   * description or a mark's note (a note lives on its mark), a mark, the
+   * picked word for it, a file. Record unmounts the card (vt-8020 D8), so it
+   * waits while one exists.
+   */
+  private hasDraft(): boolean {
+    return this.e.desc.value.trim() !== '' || this.markers.length > 0 || this.kind !== null || this.files.length > 0;
+  }
+
   private async send(): Promise<void> {
     const description = this.words();
     if (this.sending || !description) return;
@@ -1750,8 +1763,14 @@ export class ReportWidget {
     // Recording lives where the pill does: only a linked member gets it, its recents and the way to vitrinka.
     e.mRecents.hidden = !this.recordSwitch;
     e.mRecord.hidden = !this.recordSwitch;
-    // The switch unmounts this card: never while a report is sending or waiting on Try again, which would be lost with it.
-    e.mRecord.disabled = this.sending || this.job !== null;
+    // The switch unmounts this card (vt-8020 D8): never while it holds an unsent draft or a report sending or
+    // waiting on Try again, which would be lost with it — and the item says why it waits.
+    const waits = this.sending || this.job !== null || this.hasDraft();
+    e.mRecord.disabled = waits;
+    e.mRecordWhy.hidden = !waits;
+    e.mRecordWhy.textContent = s.recordHasDraft;
+    if (waits) e.mRecord.setAttribute('aria-describedby', e.mRecordWhy.id);
+    else e.mRecord.removeAttribute('aria-describedby');
     const open = member ? this.opts.base : portal;
     e.mOpen.hidden = !open;
     if (open) e.mOpen.setAttribute('href', open);

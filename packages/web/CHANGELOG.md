@@ -1,5 +1,17 @@
 # @vitrinka/web
 
+## 0.8.1
+
+- **Record keeps the report you started.** A linked member's **Record**
+  swaps Report a problem for the recorder pill by unmounting the card, so a
+  typed but unsent report — the description, a mark and its note, the
+  picked type, an attached file — went with it. Record now waits while the
+  card holds any of them, as it already did while a report was sending or
+  waiting on **Try again**, and says why under its label: "Send or clear
+  the report you started first" (cs "Odešlete nebo smažte rozepsané
+  hlášení", also its accessible description). A disabled menu item now
+  looks it. Since 0.8.0.
+
 ## 0.8.0
 
 **Report a problem grows back up.** The calm face now gives the people in
