@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { clearLink, configureRecorder, storeLink, type StoredLink } from '../../recorder/config';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../../recorder/storage';
-import { FACE_KEY, memberLinked, rememberedFace, rememberFace, startFace, watchMemberLink } from '../face';
+import { FACE_KEY, memberLinked, rememberDisplayMode, rememberedFace, rememberFace, startFace, watchMemberLink } from '../face';
 
 const BASE = 'https://vitrinka.test';
 const link = (over: Partial<StoredLink> = {}): StoredLink => ({ token: 'vkr_member', workspace: 'acme', label: 'Chrome', expires_in: 3600, ...over });
@@ -78,5 +78,13 @@ describe('the remembered face', () => {
   it('ignores a value it never wrote', () => {
     localStorage.setItem(FACE_KEY, 'pill');
     expect(rememberedFace()).toBeNull();
+  });
+
+  it('starts a dev-mode member who never picked on the pill, and their pick wins after', () => {
+    storeLink(link({ base: BASE }));
+    rememberDisplayMode('dev');
+    expect(startFace(BASE)).toBe('recorder');
+    rememberFace('report');
+    expect(startFace(BASE)).toBe('report');
   });
 });
