@@ -24,9 +24,14 @@ test.beforeEach(() => {
   seen.length = 0;
 });
 
-/** The widget is armed: config read and the recorder loaded (its first snapshot is in the buffer). */
-async function armed(): Promise<void> {
+/**
+ * The widget is armed: config read and the recorder RUNNING (its first snapshot
+ * is in the buffer). The module's request comes before that — a card opened in
+ * between freezes a clip with no screen — so wait for the stand-in's start count.
+ */
+async function armed(page: Page): Promise<void> {
   await expect.poll(() => seen.some((s) => s.path === '/vendor/rrweb-record-1.min.js')).toBe(true);
+  await expect.poll(() => page.evaluate(() => (globalThis as { __rrwebStarted?: number }).__rrwebStarted ?? 0)).toBeGreaterThan(0);
 }
 
 function created(): Record<string, unknown> {
@@ -97,7 +102,7 @@ test('the host hides the button, opens the card from its own control and gets th
 
 test('describe and send without marking', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await expect(card.getByText('The last 5 minutes are attached')).toBeVisible();
@@ -131,7 +136,7 @@ test('describe and send without marking', async ({ page }) => {
 
 test('markers 1..n with notes; the coach says click, hold and move and leaves after the first; no element selector', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('August is listed twice');
@@ -217,7 +222,7 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
 
 test('a hide blanks what was under it when it was drawn, even when the page changes before Send', async ({ page }) => {
   await page.goto(`${base}/?balanced`);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
@@ -240,7 +245,7 @@ test('a hide blanks what was under it when it was drawn, even when the page chan
 
 test('a hide added after a failed send is blanked in the retried capture', async ({ page }) => {
   await page.goto(`${base}/?balanced`);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
@@ -293,7 +298,7 @@ test('a card opened before the recorder started still sends the page as it is at
 
 test('a widget told identify(null) reports anonymously, whatever the page-wide identity', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   await page.evaluate(async () => {
     const widget: { identify: (who: { email: string } | null) => void } = await import('/vendor/report-widget-1.mjs' as string);
     widget.identify({ email: 'jana@example.test' });
@@ -327,7 +332,7 @@ test('mountReport({identity: null}) reports anonymously under a page-wide identi
 
 test('the standalone widget yields to a host recorder from another bundle', async ({ page }) => {
   await page.goto(`${base}/?recorder`);
-  await armed();
+  await armed(page);
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   const fab = page.getByRole('button', { name: /^Report a problem/ });
   await fab.click();
@@ -346,7 +351,7 @@ test('the standalone widget yields to a host recorder from another bundle', asyn
 
 test('under an open modal dialog the report stays reachable, and keeps its draft when the dialog closes', async ({ page }) => {
   await page.goto(`${base}/?dialog`);
-  await armed();
+  await armed(page);
   await page.evaluate(() => (window as unknown as { openModal(): void }).openModal());
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
@@ -361,7 +366,7 @@ test('under an open modal dialog the report stays reachable, and keeps its draft
 
 test('the report follows the modal shown last, not the last dialog in the page', async ({ page }) => {
   await page.goto(`${base}/?dialog`);
-  await armed();
+  await armed(page);
   // The later sibling opens first; the earlier one opens on top of it.
   await page.evaluate(() => {
     const w = window as unknown as { openModal(id?: string): void };
@@ -376,7 +381,7 @@ test('the report follows the modal shown last, not the last dialog in the page',
 
 test('a redundant write to an open dialog never promotes it over the modal on top', async ({ page }) => {
   await page.goto(`${base}/?dialog`);
-  await armed();
+  await armed(page);
   await page.evaluate(async () => {
     const w = window as unknown as { openModal(id?: string): void };
     w.openModal('modal');
@@ -405,7 +410,7 @@ test('a tag that gets its key after it connected mounts then', async ({ page }) 
 
 test('marks can be made from the keyboard alone', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).focus();
   await page.keyboard.press('Enter');
   const card = page.getByRole('dialog', { name: 'Report a problem' });
@@ -449,7 +454,7 @@ for (const viewport of [{ width: 1440, height: 810 }, { width: 390, height: 844 
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(base);
-    await armed();
+    await armed(page);
     await page.getByRole('button', { name: /^Report a problem/ }).click();
     const card = page.getByRole('dialog', { name: 'Report a problem' });
     await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The card stays put');
@@ -551,7 +556,7 @@ for (const answer of ['Discard', 'Keep'] as const) {
 for (const shortcut of ['Meta+z', 'Control+z']) {
   test(`${shortcut} removes the newest mark when no field is focused`, async ({ page }) => {
     await page.goto(base);
-    await armed();
+    await armed(page);
     await page.getByRole('button', { name: /^Report a problem/ }).click();
     const card = page.getByRole('dialog', { name: 'Report a problem' });
     await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Keep the first mark');
@@ -573,7 +578,7 @@ for (const shortcut of ['Meta+z', 'Control+z']) {
 for (const [label, type] of [['Bug', 'bug'], ['Suggestion', 'suggestion'], ['Question', 'question'], ['Other', 'other']] as const) {
   test(`the ${label} chip reaches the report envelope as type ${type}`, async ({ page }) => {
     await page.goto(base);
-    await armed();
+    await armed(page);
     await page.getByRole('button', { name: /^Report a problem/ }).click();
     const card = page.getByRole('dialog', { name: 'Report a problem' });
     const chip = card.getByRole('radiogroup', { name: 'What is it?' }).getByRole('radio', { name: label, exact: true });
@@ -588,7 +593,7 @@ for (const [label, type] of [['Bug', 'bug'], ['Suggestion', 'suggestion'], ['Que
 
 test('a mark note alone enables Send and reaches the report with an empty description field', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   const send = card.getByRole('button', { name: 'Send', exact: true });
