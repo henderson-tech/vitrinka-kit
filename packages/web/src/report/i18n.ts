@@ -8,6 +8,8 @@
  * first-time reporter does not know the word.
  */
 export type Locale = 'cs' | 'en';
+export type ReportKind = 'bug' | 'suggestion' | 'question' | 'other';
+export const REPORT_KINDS: readonly ReportKind[] = ['bug', 'suggestion', 'question', 'other'];
 
 export interface Strings {
   button: string;
@@ -29,7 +31,11 @@ export interface Strings {
   incIdentity: string;
   incMarks: string;
   showWhere: string;
-  marked: (n: number) => string;
+  /** The reporter's own word for what this is (vt-8020 D11) — a hint Eve reads, never the category. */
+  kinds: Record<ReportKind, string>;
+  kindsLabel: string;
+  /** The marks' list in the card while there are none yet. */
+  linesEmpty: string;
   notify: string;
   send: string;
   sending: string;
@@ -42,8 +48,13 @@ export interface Strings {
   seeReport: string;
   tools: { circle: string; box: string; arrow: string; hide: string };
   toolbar: string;
-  undo: string;
-  done: string;
+  /** The marking bar's one plain line. */
+  barLead: string;
+  /** Leaves marking and drops the marks of this pass (vt-8020 D12). */
+  cancelMarking: string;
+  discardMarks: (n: number) => string;
+  discard: string;
+  keep: string;
   coach: string;
   coachMore: string;
   /** The marking layer's name, for assistive technology. */
@@ -98,7 +109,9 @@ const en: Strings = {
   incIdentity: 'Your name and email from this app',
   incMarks: 'The places you marked, with your notes',
   showWhere: 'Show us where',
-  marked: (n) => (n === 1 ? '1 place marked' : `${n} places marked`),
+  kinds: { bug: 'Bug', suggestion: 'Suggestion', question: 'Question', other: 'Other' },
+  kindsLabel: 'What is it?',
+  linesEmpty: 'Each place you mark gets a line here for its note.',
   notify: 'Email me when it’s fixed',
   send: 'Send',
   sending: 'Sending…',
@@ -111,8 +124,11 @@ const en: Strings = {
   seeReport: 'See your report',
   tools: { circle: 'Circle', box: 'Box', arrow: 'Arrow', hide: 'Hide' },
   toolbar: 'Marking tools',
-  undo: 'Undo',
-  done: 'Done',
+  barLead: 'Mark where the problem is',
+  cancelMarking: 'Cancel',
+  discardMarks: (n) => (n === 1 ? 'Discard 1 mark?' : `Discard ${n} marks?`),
+  discard: 'Discard',
+  keep: 'Keep',
   coach: 'Click, hold and move around the problem.',
   coachMore: 'You can mark more than one place.',
   marking: 'Marking',
@@ -160,7 +176,9 @@ const cs: Strings = {
   incIdentity: 'Vaše jméno a e-mail z této aplikace',
   incMarks: 'Místa, která jste označili, i s poznámkami',
   showWhere: 'Ukažte nám kde',
-  marked: (n) => csPlural(n, '1 označené místo', `${n} označená místa`, `${n} označených míst`),
+  kinds: { bug: 'Chyba', suggestion: 'Návrh', question: 'Dotaz', other: 'Jiné' },
+  kindsLabel: 'Co to je?',
+  linesEmpty: 'Každé označené místo tu dostane řádek pro poznámku.',
   notify: 'Pošlete mi e-mail, až to bude opravené',
   send: 'Odeslat',
   sending: 'Odesílám…',
@@ -173,8 +191,11 @@ const cs: Strings = {
   seeReport: 'Zobrazit hlášení',
   tools: { circle: 'Kruh', box: 'Obdélník', arrow: 'Šipka', hide: 'Skrýt' },
   toolbar: 'Nástroje pro označení',
-  undo: 'Zpět',
-  done: 'Hotovo',
+  barLead: 'Označte, kde je problém',
+  cancelMarking: 'Zrušit',
+  discardMarks: (n) => csPlural(n, 'Zahodit 1 značku?', `Zahodit ${n} značky?`, `Zahodit ${n} značek?`),
+  discard: 'Zahodit',
+  keep: 'Ponechat',
   coach: 'Klikněte, podržte a veďte kolem problému.',
   coachMore: 'Označit můžete i více míst.',
   marking: 'Označování',

@@ -17,7 +17,7 @@
  */
 import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
-import type { Locale } from './i18n';
+import type { Locale, ReportKind } from './i18n';
 import type { Identity } from './identity';
 import type { WireMarker } from './markers';
 
@@ -42,6 +42,8 @@ export interface ReportEnvelope {
   /** The widget's language (the reporter reads mail and the portal in it). */
   locale: Locale;
   notify?: boolean;
+  /** The reporter's own word for it (vt-8020 D11), absent when they picked none. */
+  type?: ReportKind;
 }
 
 export interface SubmitReply {

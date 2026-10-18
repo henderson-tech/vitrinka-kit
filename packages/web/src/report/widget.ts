@@ -4,12 +4,17 @@
  * - A large floating "Report a problem" button (hidden with `button: false`;
  *   the host then opens it from its own control, `open-selector`, or
  *   `open()`), and the reporter's own shortcut (keybind.ts).
- * - Describe first: a small card "What went wrong?" + Send. The capture is
- *   frozen when the card opens (the buffer rolls on).
- * - "Show us where" marks the frozen page: circle, box, arrow, hide, numbered
- *   1, 2, 3… with an optional note each. No element selector. Until the first
- *   mark exists a coach card rides beside the pointer with a tiny loop of the
- *   gesture and the words "click, hold and move".
+ * - ONE card (vt-8020 D10 A), one fixed size from drafting through sending
+ *   to thanks: the reporter's word for it (vt-8020 D11 chips), "What went wrong?",
+ *   one numbered note line per mark, and Send — the capture frozen when the
+ *   card opens (the buffer rolls on).
+ * - "Show us where" marks the frozen page under a top bar (vt-8020 D6 A): a segmented
+ *   circle · box · arrow · hide, and Cancel, which leaves marking and drops
+ *   this pass's marks (vt-8020 D12). The card stays on screen while marking, parked
+ *   in the corner that covers none of the marks (place.ts). No element
+ *   selector. Until the first mark exists a coach card rides beside the
+ *   pointer with a tiny loop of the gesture and the words "click, hold and
+ *   move".
  * - Rendered once into the shared HUD host's shadow root (top layer,
  *   shielded, blocked from rrweb); `paint()` rewrites text and state in place,
  *   so a locale switch keeps the typed draft, the marks and their notes.
@@ -19,7 +24,7 @@ import { redactUrl } from '../recorder/capture/redact';
 import { createHudHost, createSheetHost, type HudHost, insideHud, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
-import { browserLocale, type Locale, parseLocale, strings, type Strings } from './i18n';
+import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
 import { type Keybind, keybindLabel, loadKeybind, matchesKeybind, readKeybindPress, saveKeybind, watchKeybind } from './keybind';
 import {
@@ -35,6 +40,7 @@ import {
   renumber,
   toWire,
 } from './markers';
+import { type Corner, cornerRect, type Frame, pickCorner } from './place';
 import type { CaptureNarrowing } from './profile';
 import { REPORT_CSS } from './styles';
 import { ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
@@ -65,6 +71,9 @@ const TOOLS: readonly MarkerShape[] = ['circle', 'box', 'arrow', 'hide'];
 /** A keyboard mark starts as this, centred; arrows move it 10 px, Shift+arrows resize it. */
 const KB_DRAFT = { w: 160, h: 80 } as const;
 const MIN_KB_SIZE = 16;
+/** The one card's size (vt-8020 D10: it never changes between states) and the clear band the marking bar keeps at the top. */
+const CARD = { w: 380, h: 460 } as const;
+const BAR_CLEAR = 72;
 const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
   ArrowLeft: [-10, 0],
   ArrowRight: [10, 0],
@@ -74,8 +83,13 @@ const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
 
 const ICON = {
   close: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  // A toothed cog: the sun-like ring of rays read as brightness, not settings.
   gear:
-    '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.9 1.5h2.2l.35 1.75a5 5 0 011.3.75l1.7-.57 1.1 1.9-1.35 1.18a5 5 0 010 1.5l1.35 1.18-1.1 1.9-1.7-.57a5 5 0 01-1.3.75L9.1 14.5H6.9l-.35-1.75a5 5 0 01-1.3-.75l-1.7.57-1.1-1.9 1.35-1.18a5 5 0 010-1.5L2.45 6.81l1.1-1.9 1.7.57a5 5 0 011.3-.75z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+  circle: '<svg viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="8" rx="6" ry="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  box: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.2" y="3.4" width="11.6" height="9.2" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+  arrow: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13L12.5 3.5M7 3.5h5.5V9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  hide: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8s2.3-4 6-4 6 4 6 4-2.3 4-6 4-6-4-6-4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M3 13L13 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
   clip: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 4.5l-5 5a1.6 1.6 0 002.3 2.3l5.4-5.4a3 3 0 00-4.2-4.2L3.6 7.6a4.4 4.4 0 006.2 6.2l4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   chevron: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   pen: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.1 0.6 0.6-3.1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
@@ -142,6 +156,12 @@ function deepActiveElement(): HTMLElement | SVGElement | null {
   return active instanceof HTMLElement || active instanceof SVGElement ? active : null;
 }
 
+/** A text field has the focus — its own editing keys (⌘Z included) are its. */
+function typing(): boolean {
+  const el = deepActiveElement();
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable);
+}
+
 /** The widget's DOM, built once into the HUD host's shadow mount. */
 function buildDom(mount: HTMLElement) {
   const fabLabel = h('span');
@@ -153,24 +173,29 @@ function buildDom(mount: HTMLElement) {
   const closeBtn = h('button', { class: 'icon', type: 'button' }, icon(ICON.close));
   const head = h('header', { class: 'head' }, title, gear, closeBtn);
 
+  const kindsLabel = h('span', { class: 'sr', id: 'vr-kinds' });
+  const kindButtons = new Map<ReportKind, HTMLButtonElement>();
+  for (const k of REPORT_KINDS) kindButtons.set(k, h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', 'data-kind': k }));
+  const kinds = h('div', { class: 'kinds', role: 'radiogroup', 'aria-labelledby': 'vr-kinds' }, kindsLabel, ...kindButtons.values());
   const prompt = h('label', { class: 'prompt', for: 'vr-desc' });
   const desc = h('textarea', { class: 'desc', id: 'vr-desc', rows: '3' });
+  const lines = h('ol', { class: 'lines' });
+  const linesEmpty = h('p', { class: 'ln-empty' });
   const attachedText = h('span');
   const discloseText = h('span');
   const disclose = h('button', { class: 'link', type: 'button', 'aria-expanded': 'false', 'aria-controls': 'vr-included' }, discloseText, icon(ICON.chevron));
   const attached = h('div', { class: 'attached' }, icon(ICON.clip), attachedText, h('span', { 'aria-hidden': 'true' }, '·'), disclose);
   const included = h('ul', { class: 'included', id: 'vr-included' });
-  const markedChips = h('span', { class: 'chips' });
-  const markedText = h('span');
-  const marked = h('div', { class: 'marked' }, markedChips, markedText);
   const notifyBox = h('input', { type: 'checkbox' });
   const notifyText = h('span');
   const notify = h('label', { class: 'notify' }, notifyBox, notifyText);
   const error = h('p', { class: 'error', role: 'alert' });
   const whereText = h('span');
-  const where = h('button', { class: 'where', type: 'button' }, icon(ICON.pen), whereText);
+  const where = h('button', { class: 'where', type: 'button', 'aria-pressed': 'false' }, icon(ICON.pen), whereText);
   const send = h('button', { class: 'send', type: 'button' });
-  const describe = h('div', { class: 'pane describe' }, prompt, desc, attached, included, marked, notify, error, h('div', { class: 'actions' }, where, send));
+  const describe = h('div', { class: 'pane describe' }, kinds, prompt, desc, h('div', { class: 'lines-wrap' }, lines, linesEmpty), attached, included, notify, error);
+  // The bottom actions, the chat-input foot of the board's composer: attachments join `where` here.
+  const foot = h('div', { class: 'foot' }, where, send);
 
   const bindLabel = h('span', { class: 'label', id: 'vr-bind-label' });
   const bindBtn = h('button', { class: 'bind', type: 'button', 'aria-pressed': 'false', 'aria-describedby': 'vr-bind-label' });
@@ -200,7 +225,8 @@ function buildDom(mount: HTMLElement) {
     h('div', { class: 'sent-actions' }, see, sentClose),
   );
 
-  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, describe, settings, sent);
+  const body = h('div', { class: 'body' }, describe, settings, sent);
+  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, body, foot);
 
   const ink = svgEl('svg', { class: 'ink', 'aria-hidden': 'true' });
   const defs = svgEl('defs', {});
@@ -216,36 +242,58 @@ function buildDom(mount: HTMLElement) {
   const coachKeys = h('p', { class: 'keys', id: 'vr-keys' });
   const coach = h('div', { class: 'coach', role: 'status' });
   coach.append(icon(coachArt(reducedMotion())), coachText, coachMore, coachKeys);
+  // The top bar (vt-8020 D6): one plain line, the shape as a segmented control whose indicator slides, Cancel.
   const toolButtons = new Map<MarkerShape, HTMLButtonElement>();
-  for (const t of TOOLS) toolButtons.set(t, h('button', { type: 'button', 'aria-pressed': 'false', 'data-tool': t }));
-  const undo = h('button', { type: 'button' });
-  const done = h('button', { type: 'button', class: 'done' });
-  const toolbar = h('div', { class: 'toolbar', role: 'toolbar' }, ...toolButtons.values(), h('span', { class: 'sep', 'aria-hidden': 'true' }), undo, done);
+  const toolLabels = new Map<MarkerShape, HTMLSpanElement>();
+  for (const t of TOOLS) {
+    const label = h('span');
+    toolLabels.set(t, label);
+    toolButtons.set(t, h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', 'data-tool': t }, icon(ICON[t]), label));
+  }
+  const segInd = h('span', { class: 'seg-ind', 'aria-hidden': 'true' });
+  const seg = h('div', { class: 'seg', role: 'radiogroup' }, segInd, ...toolButtons.values());
+  const barLead = h('span', { class: 'tb-lead' });
+  const cancel = h('button', { type: 'button', class: 'tb-quiet' });
+  const askText = h('span', { class: 'tb-ask' });
+  const discard = h('button', { type: 'button', class: 'tb-discard' });
+  const keep = h('button', { type: 'button', class: 'tb-quiet' });
+  const ask = h('span', { class: 'tb-confirm', role: 'group' }, askText, discard, keep);
+  const toolbar = h('div', { class: 'tb', role: 'toolbar' }, barLead, seg, h('span', { class: 'tb-sep', 'aria-hidden': 'true' }), cancel, ask);
   // Focusable: from the keyboard, Enter places a mark the arrows then move (markKey).
   const mark = h('div', { class: 'mark', tabindex: '0', role: 'application', 'aria-describedby': 'vr-keys' }, pins, coach, toolbar);
   mark.prepend(ink);
 
-  const root = h('div', { class: 'vr' }, fab, card, mark);
+  // The card after the marking layer: it stays on top of it, usable, while the reporter marks.
+  const root = h('div', { class: 'vr' }, fab, mark, card);
   const style = h('style');
   style.textContent = REPORT_CSS;
   // The sheet rides inside the root: the whole tree moves into an open dialog and back (followDialog).
   root.prepend(style);
   mount.append(root);
   return {
-    root, fab, fabLabel, fabKbd, card, title, gear, closeBtn,
-    describe, prompt, desc, attached, attachedText, disclose, discloseText, included, marked, markedChips, markedText,
+    root, fab, fabLabel, fabKbd, card, head, title, gear, closeBtn, body, foot,
+    describe, kinds, kindsLabel, kindButtons, prompt, desc, lines, linesEmpty, attached, attachedText, disclose, discloseText, included,
     notify, notifyBox, notifyText, error, where, whereText, send,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
     sent, sentTitle, sentBody, see, seeText, sentClose,
-    mark, ink, shapes, draft, pins, coach, coachText, coachMore, coachKeys, toolButtons, toolbar, undo, done,
+    mark, ink, shapes, draft, pins, coach, coachText, coachMore, coachKeys,
+    toolbar, barLead, seg, segInd, toolButtons, toolLabels, cancel, ask, askText, discard, keep,
   };
 }
 
 type Els = ReturnType<typeof buildDom>;
 
+/** A mark's number on the page; its note lives in the card (vt-8020 D10), the pin only points there. */
 interface Pin {
   el: HTMLElement;
   num: HTMLButtonElement;
+  rm: HTMLButtonElement;
+}
+
+/** A mark's note line in the card. */
+interface Line {
+  el: HTMLLIElement;
+  num: HTMLSpanElement;
   note: HTMLInputElement;
   rm: HTMLButtonElement;
 }
@@ -280,11 +328,18 @@ export class ReportWidget {
   private includedOpen = false;
   private recordingBind = false;
   private bindRefused = false;
-  /** The note input the reporter is in (or just drew); others with no text fold away. */
-  private noteOpen: number | null = null;
+  /** The reporter's own word for it (vt-8020 D11); null until they pick one. */
+  private kind: ReportKind | null = null;
+  /** The marks that existed when this marking pass began: Cancel keeps exactly these (vt-8020 D12). */
+  private passKeys = new Set<number>();
+  /** Cancel asked "Discard N marks?" and waits for the answer. */
+  private confirming = false;
+  /** The corner the card is parked in once marking has moved it; null = its anchored place. */
+  private parked: Corner | null = null;
   private drawing: { start: Point; shape: MarkerShape; pointer: number } | null = null;
   private readonly offs: (() => void)[] = [];
   private readonly pins = new Map<number, Pin>();
+  private readonly lines = new Map<number, Line>();
   /** Per hide mark: the page nodes it covered when drawn (they are blanked in the capture). */
   private readonly hideIds = new Map<number, Set<number>>();
   /** Native dialogs in the order they opened (seeded with those already open, in DOM order). */
@@ -384,6 +439,7 @@ export class ReportWidget {
     this.stopRecordingBind();
     this.isOpen = false;
     this.view = 'describe';
+    this.unpark();
     this.paint();
     // Focus goes back where it came from — the host's control, the field the
     // shortcut fired in — else to the button; never lost to <body> when the
@@ -447,7 +503,7 @@ export class ReportWidget {
     on(e.notifyBox, 'change', () => {
       this.notify = e.notifyBox.checked;
     });
-    on(e.where, 'click', () => this.startMarking());
+    on(e.where, 'click', () => (this.marking ? this.endMarking(true) : this.startMarking()));
     on(e.send, 'click', () => void this.send());
     on(e.bindBtn, 'click', () => (this.recordingBind ? this.stopRecordingBind() : this.startRecordingBind()));
     on(e.unbind, 'click', () => {
@@ -455,8 +511,16 @@ export class ReportWidget {
       saveKeybind(null);
       this.paint();
     });
+    for (const [kind, btn] of e.kindButtons) {
+      // A second press on the picked word unpicks it: the word is optional.
+      on(btn, 'click', () => {
+        this.kind = this.kind === kind ? null : kind;
+        this.paint();
+      });
+    }
     on(e.card, 'keydown', (ev) => {
-      if (ev.key !== 'Escape' || this.recordingBind) return;
+      // Marking's own Escape (the window listener) already acted on it.
+      if (ev.key !== 'Escape' || this.recordingBind || ev.defaultPrevented) return;
       ev.preventDefault();
       if (this.view === 'settings') this.show('describe');
       else this.close();
@@ -466,17 +530,23 @@ export class ReportWidget {
         this.tool = tool;
         this.renderKbDraft();
         this.paint();
+        this.placeSeg();
         // From the keyboard (no pointer: detail 0), go straight back to drawing with it.
         if (ev.detail === 0) e.mark.focus();
       });
     }
     on(e.mark, 'keydown', (ev) => this.markKey(ev));
-    on(e.undo, 'click', () => {
-      this.markers = renumberDrawn(this.markers.slice(0, -1));
+    on(e.cancel, 'click', () => this.cancelMarking());
+    on(e.discard, 'click', () => {
+      this.markers = renumberDrawn(this.markers.filter((m) => this.passKeys.has(m.key)));
       this.renderMarks();
-      this.paint();
+      this.endMarking(true);
     });
-    on(e.done, 'click', () => this.endMarking(true));
+    on(e.keep, 'click', () => {
+      this.confirming = false;
+      this.paint();
+      e.cancel.focus();
+    });
     on(e.mark, 'pointerdown', (ev) => this.pointerDown(ev));
     on(e.mark, 'pointermove', (ev) => this.pointerMove(ev));
     on(e.mark, 'pointerup', (ev) => this.pointerUp(ev));
@@ -493,9 +563,18 @@ export class ReportWidget {
           if (this.recordingBind) return;
           if (this.marking && ev.key === 'Escape') {
             ev.preventDefault();
-            // Esc drops a keyboard mark being placed; the next one leaves marking.
-            if (this.kbDraft) this.cancelDraft();
+            // Esc answers an open "Discard?" with Keep, drops a keyboard mark being placed, and only then leaves marking — keeping the marks.
+            if (this.confirming) e.keep.click();
+            else if (this.kbDraft) this.cancelDraft();
             else this.endMarking(true);
+            return;
+          }
+          // ⌘Z / Ctrl+Z takes the newest mark back — unless a field is being typed in, whose own undo wins.
+          if (this.marking && (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'z' && !typing()) {
+            ev.preventDefault();
+            this.markers = renumberDrawn(this.markers.slice(0, -1));
+            this.renderMarks();
+            this.paint();
             return;
           }
           if (this.keybind && matchesKeybind(ev, this.keybind)) {
@@ -523,6 +602,10 @@ export class ReportWidget {
         this.open();
       }),
     );
+    this.offs.push(listen(window, 'resize', () => {
+      if (this.parked) this.placeCard();
+      if (this.marking) this.placeSeg();
+    }));
     this.offs.push(watchKeybind((b) => {
       this.keybind = b;
       this.paint();
@@ -617,21 +700,71 @@ export class ReportWidget {
   private startMarking(): void {
     if (this.job?.id) return; // the report is on its way: Retry finishes it as it was marked
     this.marking = true;
-    this.noteOpen = null;
+    this.confirming = false;
+    this.passKeys = new Set(this.markers.map((m) => m.key));
+    this.parked ??= 'br';
     this.renderMarks();
     this.paint();
+    this.placeCard();
+    this.placeSeg();
     const vw = globalThis.innerWidth || 800;
-    const vh = globalThis.innerHeight || 600;
-    this.placeCoach({ x: vw / 2 - 150, y: vh - 260 }, false);
+    this.placeCoach({ x: vw / 2 - 150, y: BAR_CLEAR + 12 }, false);
     this.e.mark.focus();
   }
 
+  /** Leaves marking; the card stays where marking parked it until it closes (it never jumps back). */
   private endMarking(backToCard: boolean): void {
     this.cancelDraft();
     this.marking = false;
-    this.noteOpen = null;
+    this.confirming = false;
     this.paint();
     if (backToCard && this.isOpen) requestAnimationFrame(() => this.e.desc.focus());
+  }
+
+  /** Cancel (vt-8020 D12): leave marking and drop this pass's marks — asking first when there are any. */
+  private cancelMarking(): void {
+    const added = this.markers.filter((m) => !this.passKeys.has(m.key)).length;
+    if (added === 0) {
+      this.endMarking(true);
+      return;
+    }
+    this.confirming = true;
+    this.paint();
+    this.e.discard.focus();
+  }
+
+  private frame(): Frame {
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    return { vw, vh, w: Math.min(CARD.w, vw - 32), h: Math.min(CARD.h, vh - BAR_CLEAR - 16), top: BAR_CLEAR, edge: 16 };
+  }
+
+  /** Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`). */
+  private placeCard(): void {
+    if (!this.parked) return;
+    const f = this.frame();
+    this.parked = pickCorner(this.parked, this.markers.map((m) => m.rect), f);
+    const r = cornerRect(this.parked, f);
+    const s = this.e.card.style;
+    this.e.card.classList.add('parked');
+    s.left = `${r.x}px`;
+    s.top = `${r.y}px`;
+  }
+
+  private unpark(): void {
+    this.parked = null;
+    this.e.card.classList.remove('parked');
+    this.e.card.style.removeProperty('left');
+    this.e.card.style.removeProperty('top');
+  }
+
+  /** The segmented control's indicator under the picked shape. */
+  private placeSeg(): void {
+    const btn = this.e.toolButtons.get(this.tool);
+    if (!btn || !btn.offsetWidth) return;
+    this.e.segInd.style.width = `${btn.offsetWidth}px`;
+    this.e.segInd.style.transform = `translateX(${btn.offsetLeft}px)`;
+    this.e.seg.classList.add('measured');
   }
 
   private onChrome(t: EventTarget | null): boolean {
@@ -643,7 +776,6 @@ export class ReportWidget {
     ev.preventDefault();
     const root = this.e.root.getRootNode();
     if (root instanceof ShadowRoot && root.activeElement instanceof HTMLElement) root.activeElement.blur();
-    this.noteOpen = null;
     this.drawing = { start: { x: ev.clientX, y: ev.clientY }, shape: this.tool, pointer: ev.pointerId };
     try {
       this.e.mark.setPointerCapture(ev.pointerId);
@@ -651,7 +783,6 @@ export class ReportWidget {
       // a synthetic pointer: no capture needed
     }
     this.e.coach.classList.add('pressing');
-    this.renderPins();
   }
 
   private pointerMove(ev: PointerEvent): void {
@@ -678,10 +809,10 @@ export class ReportWidget {
       if (ids) this.hideIds.set(key, ids);
     }
     this.markers = renumberDrawn([...this.markers, { key, n: this.markers.length + 1, shape, rect, note: '', ...(head ? { head } : {}) }]);
-    this.noteOpen = key;
     this.renderMarks();
     this.paint();
-    this.pins.get(key)?.note.focus();
+    // Drawing a shape opens its note: the new line in the card takes the typing.
+    this.lines.get(key)?.note.focus();
   }
 
   private cancelDraft(): void {
@@ -766,59 +897,72 @@ export class ReportWidget {
       pin.el.remove();
       this.pins.delete(key);
     }
+    for (const [key, line] of this.lines) {
+      if (live.has(key)) continue;
+      line.el.remove();
+      this.lines.delete(key);
+    }
+    const remove = (key: number) => {
+      this.markers = renumberDrawn(this.markers.filter((x) => x.key !== key));
+      this.renderMarks();
+      this.paint();
+    };
     for (const m of this.markers) {
       if (this.pins.has(m.key)) continue;
       const num = h('button', { class: 'num', type: 'button' });
-      const note = h('input', { class: 'note', type: 'text', maxlength: '500' });
       const rm = h('button', { class: 'rm', type: 'button' }, icon(ICON.close));
-      const el = h('div', { class: 'pin' }, num, note, rm);
-      num.addEventListener('click', () => {
-        this.noteOpen = m.key;
-        this.renderPins();
-        note.focus();
-      });
+      const el = h('div', { class: 'pin' }, num, rm);
+      // The pin points at its note: a press on the number puts the caret in its line.
+      num.addEventListener('click', () => this.lines.get(m.key)?.note.focus());
+      rm.addEventListener('click', () => remove(m.key));
+      this.e.pins.append(el);
+      this.pins.set(m.key, { el, num, rm });
+
+      const lineNum = h('span', { class: 'ln-n', 'aria-hidden': 'true' });
+      const note = h('input', { class: 'ln-t', type: 'text', maxlength: '500' });
+      const lineRm = h('button', { class: 'ln-x', type: 'button' }, icon(ICON.close));
+      const line = h('li', { class: 'ln' }, lineNum, note, lineRm);
       note.addEventListener('input', () => {
         this.markers = this.markers.map((x) => (x.key === m.key ? { ...x, note: note.value } : x));
-      });
-      note.addEventListener('focus', () => {
-        this.noteOpen = m.key;
-        this.renderPins();
+        this.paint();
       });
       note.addEventListener('keydown', (ev) => {
-        if (ev.key !== 'Enter') return;
+        if (ev.key !== 'Enter' || !this.marking) return;
         ev.preventDefault();
         // Back to the page, ready for the next mark from the keyboard.
         this.e.mark.focus();
       });
-      rm.addEventListener('click', () => {
-        this.markers = renumberDrawn(this.markers.filter((x) => x.key !== m.key));
-        this.renderMarks();
-        this.paint();
-      });
-      this.e.pins.append(el);
-      this.pins.set(m.key, { el, num, note, rm });
+      lineRm.addEventListener('click', () => remove(m.key));
+      this.e.lines.append(line);
+      this.lines.set(m.key, { el: line, num: lineNum, note, rm: lineRm });
+    }
+    // Renumbering after a removal keeps the lines in mark order.
+    for (const m of this.markers) {
+      const line = this.lines.get(m.key);
+      if (line) this.e.lines.append(line.el);
     }
     this.renderPins();
+    if (this.parked) this.placeCard();
   }
 
-  /** Pin numbers, positions and which notes show; text in place (the locale may have changed). */
+  /** Pin numbers and positions, line numbers and labels; text in place (the locale may have changed). */
   private renderPins(): void {
     const vw = globalThis.innerWidth || 800;
     for (const m of this.markers) {
       const pin = this.pins.get(m.key);
-      if (!pin) continue;
+      const line = this.lines.get(m.key);
+      if (!pin || !line) continue;
       const anchor = m.shape === 'arrow' ? arrowEnds(m.rect, m.head ?? 'se').tail : { x: m.rect.x, y: m.rect.y };
-      const showNote = this.noteOpen === m.key || m.note.trim() !== '';
-      const width = showNote ? 290 : 30;
-      pin.el.style.left = `${Math.min(Math.max(4, anchor.x - 12), vw - width)}px`;
-      pin.el.style.top = `${Math.max(4, anchor.y - 12)}px`;
+      pin.el.style.left = `${Math.min(Math.max(4, anchor.x - 12), vw - 60)}px`;
+      pin.el.style.top = `${Math.max(BAR_CLEAR - 12, anchor.y - 12)}px`;
       pin.num.textContent = String(m.n);
       pin.num.setAttribute('aria-label', this.s.mark(m.n));
-      pin.note.hidden = !showNote;
-      pin.rm.hidden = !showNote;
-      pin.note.placeholder = this.s.notePlaceholder;
-      pin.note.setAttribute('aria-label', `${this.s.mark(m.n)} — ${this.s.notePlaceholder}`);
       pin.rm.setAttribute('aria-label', this.s.removeMark(m.n));
+      line.num.textContent = String(m.n);
+      line.el.classList.toggle('hide', m.shape === 'hide');
+      line.note.placeholder = this.s.notePlaceholder;
+      line.note.setAttribute('aria-label', `${this.s.mark(m.n)} — ${this.s.notePlaceholder}`);
+      line.rm.setAttribute('aria-label', this.s.removeMark(m.n));
     }
   }
 
@@ -842,12 +986,19 @@ export class ReportWidget {
       ...(who ? { identity: who, notify: this.notify } : {}),
       markers: toWire(this.markers),
       locale: this.locale,
+      ...(this.kind ? { type: this.kind } : {}),
     };
   }
 
+  /** The words the report goes with: the description, else the first mark's note — either one is enough to send. */
+  private words(): string {
+    return this.e.desc.value.trim() || (this.markers.find((m) => m.note.trim())?.note.trim() ?? '');
+  }
+
   private async send(): Promise<void> {
-    const description = this.e.desc.value.trim();
+    const description = this.words();
     if (this.sending || !description) return;
+    if (this.marking) this.endMarking(false);
     this.sending = true;
     this.error = '';
     this.paint();
@@ -873,6 +1024,7 @@ export class ReportWidget {
       this.e.desc.value = '';
       this.markers = [];
       this.hideIds.clear();
+      this.kind = null;
       this.notify = false;
       this.e.notifyBox.checked = false;
       this.includedOpen = false;
@@ -917,7 +1069,9 @@ export class ReportWidget {
     e.fabKbd.hidden = !this.keybind;
     e.fabKbd.textContent = this.keybind ? keybindLabel(this.keybind) : '';
 
-    e.card.hidden = !this.isOpen || this.marking;
+    // The one card stays up while marking (vt-8020 D10): its note lines and Send are where the reporter finishes.
+    e.card.hidden = !this.isOpen;
+    e.card.classList.toggle('busy', this.sending);
     e.title.textContent = s.title;
     e.gear.setAttribute('aria-label', s.settings);
     e.gear.setAttribute('aria-pressed', String(this.view === 'settings'));
@@ -925,7 +1079,14 @@ export class ReportWidget {
     e.describe.hidden = this.view !== 'describe';
     e.settings.hidden = this.view !== 'settings';
     e.sent.hidden = this.view !== 'sent';
+    e.foot.hidden = this.view !== 'describe';
 
+    e.kindsLabel.textContent = s.kindsLabel;
+    for (const [kind, btn] of e.kindButtons) {
+      btn.textContent = s.kinds[kind];
+      btn.setAttribute('aria-checked', String(this.kind === kind));
+      btn.disabled = this.sending;
+    }
     e.prompt.textContent = s.prompt;
     e.desc.placeholder = s.placeholder;
     e.attachedText.textContent = s.attached(this.config?.profile.windowSec ?? 60);
@@ -935,19 +1096,23 @@ export class ReportWidget {
     e.disclose.setAttribute('aria-expanded', String(this.includedOpen));
     e.included.hidden = !this.includedOpen;
     e.included.replaceChildren(...this.includedItems().map((t) => h('li', {}, t)));
-    e.marked.hidden = this.markers.length === 0;
-    e.markedChips.replaceChildren(
-      ...this.markers.map((m) => h('span', { class: m.shape === 'hide' ? 'chip hide' : 'chip', 'aria-hidden': 'true' }, String(m.n))),
-    );
-    e.markedText.textContent = s.marked(this.markers.length);
+    e.desc.disabled = this.sending;
+    e.lines.hidden = this.markers.length === 0;
+    e.linesEmpty.hidden = !this.marking || this.markers.length > 0;
+    e.linesEmpty.textContent = s.linesEmpty;
+    for (const line of this.lines.values()) {
+      line.note.disabled = this.sending;
+      line.rm.disabled = this.sending;
+    }
     e.notify.hidden = who === null;
     e.notifyText.textContent = s.notify;
     e.error.hidden = this.error === '';
     e.error.textContent = this.error === 'create' ? s.errorCreate : this.error === 'capture' ? s.errorCapture : '';
     e.whereText.textContent = s.showWhere;
+    e.where.setAttribute('aria-pressed', String(this.marking));
     e.where.disabled = this.sending || Boolean(this.job?.id);
     e.send.textContent = this.sending ? s.sending : this.error ? s.retry : s.send;
-    e.send.disabled = this.sending || e.desc.value.trim() === '';
+    e.send.disabled = this.sending || this.words() === '';
 
     e.bindLabel.textContent = s.shortcut;
     e.bindBtn.setAttribute('aria-pressed', String(this.recordingBind));
@@ -971,13 +1136,19 @@ export class ReportWidget {
 
     e.mark.hidden = !this.marking;
     e.toolbar.setAttribute('aria-label', s.toolbar);
+    e.seg.setAttribute('aria-label', s.toolbar);
+    e.barLead.textContent = s.barLead;
     for (const [tool, btn] of e.toolButtons) {
-      btn.textContent = s.tools[tool];
-      btn.setAttribute('aria-pressed', String(this.tool === tool));
+      const label = e.toolLabels.get(tool);
+      if (label) label.textContent = s.tools[tool];
+      btn.setAttribute('aria-checked', String(this.tool === tool));
     }
-    e.undo.textContent = s.undo;
-    e.undo.disabled = this.markers.length === 0;
-    e.done.textContent = s.done;
+    e.cancel.textContent = s.cancelMarking;
+    e.cancel.hidden = this.confirming;
+    e.ask.hidden = !this.confirming;
+    e.askText.textContent = s.discardMarks(this.markers.filter((m) => !this.passKeys.has(m.key)).length);
+    e.discard.textContent = s.discard;
+    e.keep.textContent = s.keep;
     e.coach.hidden = !this.marking || this.markers.length > 0;
     e.coachText.textContent = s.coach;
     e.coachMore.textContent = s.coachMore;
