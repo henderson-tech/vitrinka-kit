@@ -25,15 +25,16 @@ export interface RecorderStorage {
    * shares (memory) has nothing to hear.
    */
   watch?(key: string, onChange: (value: string | null) => void): () => void;
-  /** Run synchronously inside an exclusive cross-document lock. Required when shared across tabs. */
+  /** Run synchronously inside an exclusive cross-document lock that sees every earlier holder's writes. Required when shared across tabs. */
   withLock?(name: string, run: () => void): Promise<void>;
   /** Enumerate this driver's namespaced keys (cross-tab Stop participants). */
   keys?(): string[];
 }
 
 // Keys land as `vitrinka.recorder.<key>`: rec · buffer · chunks · images ·
-// blobs · link (the recorder) and dock · prefs · me · recents (the HUD). An
-// attached image's bytes live in the blob journal (./blobs, IndexedDB).
+// blobs · link (the recorder), lock.seq (the seq lock's fence, ./lock) and
+// dock · prefs · me · recents (the HUD). An attached image's bytes live in
+// the blob journal (./blobs, IndexedDB).
 const PREFIX = 'vitrinka.recorder.';
 
 let current: RecorderStorage | null = null;

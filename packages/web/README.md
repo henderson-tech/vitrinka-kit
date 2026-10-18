@@ -633,10 +633,15 @@ others through the driver's optional `watch(key, onChange)` (the
 `localStorage` driver implements it with the `storage` event).
 
 Event and rrweb-chunk sequence numbers are allocated under a cross-tab
-Web Lock, or an IndexedDB transaction on hosts without Web Locks. Stop
-waits for these allocations before draining. A custom driver shared across
-documents must implement `withLock(name, run)` and run the synchronous
-callback exclusively across them; a document-local driver needs no lock.
+Web Lock, or an IndexedDB transaction on hosts without Web Locks. A
+browser can deliver another tab's `localStorage` writes after that
+transaction has handed over, so on that lane each holder leaves a fence in
+`localStorage` (`vitrinka.recorder.lock.seq`) and in IndexedDB, and the
+next one waits until it reads that fence. Stop waits for these allocations
+before draining. A custom driver shared across documents must implement
+`withLock(name, run)` and run the synchronous callback exclusively across
+them, with every earlier holder's writes readable; a document-local driver
+needs no lock.
 A driver that shares an origin with the package's own (e.g. one that
 re-keys a single entry) passes the package's `withRecorderLock` from
 `@vitrinka/web/recorder`, so both number events under the same lock.
