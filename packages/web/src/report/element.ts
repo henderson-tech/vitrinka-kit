@@ -12,9 +12,13 @@
  * hides the floating button, `open-selector` rebinds; a changed `key` or
  * `base` remounts. The face is config (QA Studio D6): `face: 'recorder'`
  * mounts the recorder pill instead (npm entry only — it needs React and a
- * `vkr_` key or a device link).
+ * `vkr_` key or a device link). A linked vitrinka member also switches faces
+ * in place (vt-8020 D8, face.ts): the report menu's Record swaps in the pill
+ * on the device link, the pill's "Report a problem" swaps back, and the pick
+ * survives a reload (npm entry only, like `face: 'recorder'`).
  */
 import type { RecordLoader } from './engine';
+import { memberLinked, rememberFace, startFace, watchMemberLink } from './face';
 import { type Locale, parseLocale } from './i18n';
 import type { IdentifyInput } from './identity';
 import type { CaptureNarrowing } from './profile';
@@ -53,6 +57,7 @@ export interface ReportOptions extends ReportScriptOptions {
 }
 
 export interface ReportHandle {
+  /** The face on screen — a linked member's Record switch turns a `report` mount into `recorder`. */
   readonly face: ReportFace;
   open(): void;
   close(): void;
@@ -65,6 +70,8 @@ export interface ReportHandle {
 export interface VitrinkaReportElement extends HTMLElement {
   /** Set before the element connects (mountReport does). */
   options: ReportScriptOptions;
+  /** The face on screen: `recorder` while a linked member has switched to the pill. */
+  readonly face: ReportFace;
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
@@ -79,9 +86,12 @@ declare global {
 
 export interface RecorderFaceOptions {
   base: string;
-  key: string;
+  /** A `vkr_` key; absent or empty = the stored device link (never a baked env key). */
+  key?: string;
   appVersion?: string;
   sanitizeUrl?: (url: string) => string;
+  /** The pill's menu offers "Report a problem", which calls this; absent = no row. */
+  onReportFace?: () => void;
 }
 
 /** What each build brings: how rrweb loads, the recorder face (npm only), the default base. */
@@ -107,34 +117,50 @@ export function defineReportElement(faces: Faces): void {
     }
 
     options: ReportScriptOptions = {};
+    /** The mounted key and base; null until both are set. */
+    private at: { key: string; base: string } | null = null;
+    /** The face on screen once mounted. */
+    private shown: ReportFace | null = null;
     private widget: ReportWidget | null = null;
+    /** Unmounts the recorder pill once its lazy face has loaded. */
+    private pill: (() => void) | null = null;
+    /** Bumped whenever a face comes down: a pill that loads after its face was left never mounts. */
+    private gen = 0;
+    /** The report widget currently offers Record. */
+    private recordOffered = false;
+    private offLink: (() => void) | null = null;
     private pendingIdentity: IdentifyInput | undefined = undefined;
+
+    get face(): ReportFace {
+      return this.shown ?? 'report';
+    }
 
     connectedCallback(): void {
       this.hidden = true;
-      this.mountWidget();
+      this.mount();
     }
 
     disconnectedCallback(): void {
-      this.widget?.unmount();
-      this.widget = null;
+      this.unmount();
     }
 
     attributeChangedCallback(name: string, old: string | null, value: string | null): void {
       if (old === value) return;
-      if (!this.widget) {
+      if (!this.at) {
         // Connected but waiting for its key or base (a host that configures later): mount now.
-        if (this.isConnected && (name === 'key' || name === 'base')) this.mountWidget();
+        if (this.isConnected && (name === 'key' || name === 'base')) this.mount();
         return;
       }
+      if (name === 'key' || name === 'base') {
+        this.unmount();
+        this.mount();
+        return;
+      }
+      // The rest are the report face's: the pill reads none, and a switch back reads them afresh.
+      if (!this.widget) return;
       if (name === 'locale') this.widget.setLocale(value);
       else if (name === 'button') this.widget.setButton(value !== 'false');
       else if (name === 'open-selector') this.widget.setOpenSelector(value);
-      else {
-        this.widget.unmount();
-        this.widget = null;
-        this.mountWidget();
-      }
     }
 
     open(): void {
@@ -156,17 +182,67 @@ export function defineReportElement(faces: Faces): void {
     }
 
     /** Idempotent: an upgrade runs attributeChangedCallback before connectedCallback, and both land here. */
-    private mountWidget(): void {
-      if (this.widget) return;
+    private mount(): void {
+      if (this.at) return;
       const key = (this.getAttribute('key') ?? '').trim();
       const base = trimBase(this.getAttribute('base') ?? faces.defaultBase());
       if (!key || !base) {
         console.warn(`vitrinka: <${REPORT_TAG}> needs a key${base ? '' : ' and a base'} — nothing mounted`);
         return;
       }
+      this.at = { key, base };
+      // Only a build that carries the pill can switch to it (the single-file widget does not).
+      if (faces.recorderFace) this.offLink = watchMemberLink(() => this.offerRecord());
+      this.show(faces.recorderFace ? startFace(base) : 'report');
+    }
+
+    private unmount(): void {
+      this.offLink?.();
+      this.offLink = null;
+      this.takeDown();
+      this.at = null;
+      this.shown = null;
+    }
+
+    /** Take the face on screen down; the mount (and its link watch) stays. */
+    private takeDown(): void {
+      this.gen++;
+      this.widget?.unmount();
+      this.widget = null;
+      this.recordOffered = false;
+      this.pill?.();
+      this.pill = null;
+    }
+
+    private show(face: ReportFace): void {
+      const at = this.at;
+      if (!at) return;
+      this.takeDown();
+      const loadPill = faces.recorderFace;
+      if (face === 'recorder' && loadPill) {
+        this.shown = 'recorder';
+        const gen = this.gen;
+        loadPill()
+          .then((mountPill) => {
+            if (gen !== this.gen) return;
+            // The member's own device link, never the host's key: a `vkb_` key cannot record.
+            this.pill = mountPill({
+              base: at.base,
+              appVersion: this.options.appVersion,
+              sanitizeUrl: this.options.sanitizeUrl,
+              onReportFace: () => this.switchTo('report'),
+            });
+          })
+          .catch((e: unknown) => {
+            console.warn('vitrinka: the recorder face did not load — showing Report a problem', e);
+            if (gen === this.gen) this.show('report');
+          });
+        return;
+      }
+      this.shown = 'report';
       this.widget = new ReportWidget({
-        base,
-        key,
+        base: at.base,
+        key: at.key,
         locale: parseLocale(this.getAttribute('locale')),
         button: this.getAttribute('button') !== 'false',
         openSelector: this.getAttribute('open-selector'),
@@ -176,6 +252,25 @@ export function defineReportElement(faces: Faces): void {
         sanitizeUrl: this.options.sanitizeUrl,
         loadRecord: faces.loadRecord,
       });
+      this.offerRecord();
+    }
+
+    /** Record is on the report face's menu exactly while this browser holds a member link for this base. */
+    private offerRecord(): void {
+      if (!this.widget || !this.at) return;
+      const offer = faces.recorderFace !== null && memberLinked(this.at.base);
+      if (offer === this.recordOffered) return;
+      this.recordOffered = offer;
+      this.widget.setRecordSwitch(offer ? () => this.switchTo('recorder') : null);
+    }
+
+    /** The member's pick, remembered for this browser; applied once the menu that asked has let go of its click. */
+    private switchTo(face: ReportFace): void {
+      rememberFace(face);
+      const gen = this.gen;
+      setTimeout(() => {
+        if (gen === this.gen && this.shown !== face) this.show(face);
+      }, 0);
     }
   }
 
@@ -197,7 +292,9 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
   if (opts.identity !== undefined) el.identify(opts.identity);
   (opts.parent ?? document.body).append(el);
   return {
-    face: 'report',
+    get face() {
+      return el.face;
+    },
     open: () => el.open(),
     close: () => el.close(),
     identify: (who) => el.identify(who),
@@ -216,6 +313,7 @@ function mountRecorder(opts: ReportOptions, faces: Faces): ReportHandle {
     faces
       .recorderFace()
       .then((mount) => {
+        // The host picked this face: no "Report a problem" row — there is no report key to swap back to.
         if (!gone) unmount = mount({ base, key: opts.key, appVersion: opts.appVersion, sanitizeUrl: opts.sanitizeUrl });
       })
       .catch((e: unknown) => console.warn('vitrinka: the recorder face did not load', e));

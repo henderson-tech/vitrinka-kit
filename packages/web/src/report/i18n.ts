@@ -8,6 +8,8 @@
  * first-time reporter does not know the word.
  */
 export type Locale = 'cs' | 'en';
+export type ReportKind = 'bug' | 'suggestion' | 'question' | 'other';
+export const REPORT_KINDS: readonly ReportKind[] = ['bug', 'suggestion', 'question', 'other'];
 
 export interface Strings {
   button: string;
@@ -29,7 +31,11 @@ export interface Strings {
   incIdentity: string;
   incMarks: string;
   showWhere: string;
-  marked: (n: number) => string;
+  /** The reporter's own word for what this is (vt-8020 D11) — a hint Eve reads, never the category. */
+  kinds: Record<ReportKind, string>;
+  kindsLabel: string;
+  /** The marks' list in the card while there are none yet. */
+  linesEmpty: string;
   notify: string;
   send: string;
   sending: string;
@@ -42,8 +48,13 @@ export interface Strings {
   seeReport: string;
   tools: { circle: string; box: string; arrow: string; hide: string };
   toolbar: string;
-  undo: string;
-  done: string;
+  /** The marking bar's one plain line. */
+  barLead: string;
+  /** Leaves marking and drops the marks of this pass (vt-8020 D12). */
+  cancelMarking: string;
+  discardMarks: (n: number) => string;
+  discard: string;
+  keep: string;
   coach: string;
   coachMore: string;
   /** The marking layer's name, for assistive technology. */
@@ -62,6 +73,63 @@ export interface Strings {
   needModifier: string;
   removeShortcut: string;
   back: string;
+  // -- the account and the menu (vt-8020 D2, D3, D5) --
+  account: string;
+  menu: string;
+  anonymous: string;
+  anonymousHint: string;
+  signedInByApp: string;
+  linkVitrinka: string;
+  linkedAs: (who: string) => string;
+  unlink: string;
+  myReports: string;
+  recentRecordings: string;
+  record: string;
+  openVitrinka: string;
+  openPortal: string;
+  // -- the lists --
+  loading: string;
+  listFailed: string;
+  noReports: string;
+  noRecordings: string;
+  fromThisBrowser: string;
+  /** A report's step as the portal names it; an unknown key shows as is. */
+  steps: Record<string, string>;
+  waiting: string;
+  sentQueued: string;
+  // -- the link sheet --
+  linkCode: string;
+  linkHint: string;
+  linkWaiting: string;
+  linkExpired: string;
+  linkFailed: string;
+  // -- attachments (vt-8020 D9): one line names the cap a file broke --
+  attach: string;
+  removeFile: (name: string) => string;
+  fileTooBig: (name: string, cap: string) => string;
+  tooManyFiles: (n: number) => string;
+  fileType: (name: string, types: string) => string;
+  /** The default caps' types as a person reads them (the rest show as configured). */
+  typeNames: { image: string; pdf: string; text: string; office: string };
+  incFiles: string;
+  errorFiles: string;
+  // -- moving the button, size and technical details (vt-8020 D9) --
+  moveHint: string;
+  size: string;
+  sizes: { sm: string; md: string; lg: string };
+  techDetails: string;
+  techVersion: string;
+  techWindow: string;
+  techCapture: string;
+  techBuffer: string;
+  techServer: string;
+  captureOn: string;
+  captureOff: string;
+  captureStarting: string;
+  bufferMemory: string;
+  bufferBrowser: string;
+  /** "5 minutes" for a capture window of `sec` seconds. */
+  windowLength: (sec: number) => string;
 }
 
 /** Czech plural: 1 · 2–4 · 5+ (and 0). */
@@ -98,7 +166,9 @@ const en: Strings = {
   incIdentity: 'Your name and email from this app',
   incMarks: 'The places you marked, with your notes',
   showWhere: 'Show us where',
-  marked: (n) => (n === 1 ? '1 place marked' : `${n} places marked`),
+  kinds: { bug: 'Bug', suggestion: 'Suggestion', question: 'Question', other: 'Other' },
+  kindsLabel: 'What is it?',
+  linesEmpty: 'Each place you mark gets a line here for its note.',
   notify: 'Email me when it’s fixed',
   send: 'Send',
   sending: 'Sending…',
@@ -111,8 +181,11 @@ const en: Strings = {
   seeReport: 'See your report',
   tools: { circle: 'Circle', box: 'Box', arrow: 'Arrow', hide: 'Hide' },
   toolbar: 'Marking tools',
-  undo: 'Undo',
-  done: 'Done',
+  barLead: 'Mark where the problem is',
+  cancelMarking: 'Cancel',
+  discardMarks: (n) => (n === 1 ? 'Discard 1 mark?' : `Discard ${n} marks?`),
+  discard: 'Discard',
+  keep: 'Keep',
   coach: 'Click, hold and move around the problem.',
   coachMore: 'You can mark more than one place.',
   marking: 'Marking',
@@ -129,6 +202,59 @@ const en: Strings = {
   needModifier: 'Add Ctrl, Alt or ⌘ — a key on its own would get in the way of typing',
   removeShortcut: 'Remove',
   back: 'Back',
+  account: 'Your account',
+  menu: 'Menu',
+  anonymous: 'Not signed in',
+  anonymousHint: 'The team checks your report before it’s filed.',
+  signedInByApp: 'Signed in by this app',
+  linkVitrinka: 'Link your vitrinka account',
+  linkedAs: (who) => `Linked to vitrinka as ${who}`,
+  unlink: 'Unlink',
+  myReports: 'My reports',
+  recentRecordings: 'Recent recordings',
+  record: 'Record',
+  openVitrinka: 'Open vitrinka',
+  openPortal: 'Open the report portal',
+  loading: 'Loading…',
+  listFailed: 'Couldn’t load — try again',
+  noReports: 'No reports yet.',
+  noRecordings: 'No recordings yet.',
+  fromThisBrowser: 'Sent from this browser',
+  steps: { received: 'Received', planned: 'Planned', in_progress: 'In progress', fixed: 'Fixed', done: 'Done' },
+  waiting: 'Waiting for approval',
+  sentQueued: 'The team checks it before it’s filed.',
+  linkCode: 'Your code',
+  linkHint: 'Approve this code in vitrinka — on this device or another one where you’re signed in.',
+  linkWaiting: 'Waiting for approval…',
+  linkExpired: 'The code expired.',
+  linkFailed: 'Linking didn’t work.',
+  attach: 'Attach a file',
+  removeFile: (name) => `Remove ${name}`,
+  fileTooBig: (name, cap) => `${name} is over the ${cap} limit`,
+  tooManyFiles: (n) => (n === 1 ? 'Up to 1 file per report' : `Up to ${n} files per report`),
+  fileType: (name, types) => `${name} can’t be attached — ${types} only`,
+  typeNames: { image: 'images', pdf: 'PDF', text: 'text files', office: 'office documents' },
+  incFiles: 'The files you attached',
+  errorFiles: 'Your report arrived, a file not yet — try again to attach it',
+  moveHint: 'Click, hold and move it to another corner, or press Alt and an arrow key.',
+  size: 'Size',
+  sizes: { sm: 'Small', md: 'Medium', lg: 'Large' },
+  techDetails: 'Technical details',
+  techVersion: 'Version',
+  techWindow: 'Capture window',
+  techCapture: 'Capture',
+  techBuffer: 'Buffer',
+  techServer: 'Server',
+  captureOn: 'Running',
+  captureOff: 'Off',
+  captureStarting: 'Starting…',
+  bufferMemory: 'In memory',
+  bufferBrowser: 'In this browser',
+  windowLength: (sec) => {
+    if (sec < 60) return sec === 1 ? '1 second' : `${sec} seconds`;
+    const min = Math.round(sec / 60);
+    return min === 1 ? '1 minute' : `${min} minutes`;
+  },
 };
 
 const cs: Strings = {
@@ -160,7 +286,9 @@ const cs: Strings = {
   incIdentity: 'Vaše jméno a e-mail z této aplikace',
   incMarks: 'Místa, která jste označili, i s poznámkami',
   showWhere: 'Ukažte nám kde',
-  marked: (n) => csPlural(n, '1 označené místo', `${n} označená místa`, `${n} označených míst`),
+  kinds: { bug: 'Chyba', suggestion: 'Návrh', question: 'Dotaz', other: 'Jiné' },
+  kindsLabel: 'Co to je?',
+  linesEmpty: 'Každé označené místo tu dostane řádek pro poznámku.',
   notify: 'Pošlete mi e-mail, až to bude opravené',
   send: 'Odeslat',
   sending: 'Odesílám…',
@@ -173,8 +301,11 @@ const cs: Strings = {
   seeReport: 'Zobrazit hlášení',
   tools: { circle: 'Kruh', box: 'Obdélník', arrow: 'Šipka', hide: 'Skrýt' },
   toolbar: 'Nástroje pro označení',
-  undo: 'Zpět',
-  done: 'Hotovo',
+  barLead: 'Označte, kde je problém',
+  cancelMarking: 'Zrušit',
+  discardMarks: (n) => csPlural(n, 'Zahodit 1 značku?', `Zahodit ${n} značky?`, `Zahodit ${n} značek?`),
+  discard: 'Zahodit',
+  keep: 'Ponechat',
   coach: 'Klikněte, podržte a veďte kolem problému.',
   coachMore: 'Označit můžete i více míst.',
   marking: 'Označování',
@@ -191,6 +322,59 @@ const cs: Strings = {
   needModifier: 'Přidejte Ctrl, Alt nebo ⌘ — samotná klávesa by překážela při psaní',
   removeShortcut: 'Odebrat',
   back: 'Zpět',
+  account: 'Váš účet',
+  menu: 'Nabídka',
+  anonymous: 'Nepřihlášeno',
+  anonymousHint: 'Hlášení nejdřív zkontroluje tým.',
+  signedInByApp: 'Přihlášen touto aplikací',
+  linkVitrinka: 'Propojit s vitrinkou',
+  linkedAs: (who) => `Propojeno s vitrinkou jako ${who}`,
+  unlink: 'Odpojit',
+  myReports: 'Moje hlášení',
+  recentRecordings: 'Nedávné nahrávky',
+  record: 'Nahrávat',
+  openVitrinka: 'Otevřít vitrinku',
+  openPortal: 'Otevřít portál hlášení',
+  loading: 'Načítám…',
+  listFailed: 'Nepodařilo se načíst — zkuste to znovu',
+  noReports: 'Zatím žádná hlášení.',
+  noRecordings: 'Zatím žádné nahrávky.',
+  fromThisBrowser: 'Odesláno z tohoto prohlížeče',
+  steps: { received: 'Přijato', planned: 'Naplánováno', in_progress: 'Řešíme', fixed: 'Opraveno', done: 'Hotovo' },
+  waiting: 'Čeká na schválení',
+  sentQueued: 'Než ho zařadíme, tým ho zkontroluje.',
+  linkCode: 'Váš kód',
+  linkHint: 'Schvalte kód ve vitrince — na tomto nebo jiném zařízení, kde jste přihlášeni.',
+  linkWaiting: 'Čekám na schválení…',
+  linkExpired: 'Kód vypršel.',
+  linkFailed: 'Propojení se nepodařilo.',
+  attach: 'Přiložit soubor',
+  removeFile: (name) => `Odebrat ${name}`,
+  fileTooBig: (name, cap) => `${name} přesahuje limit ${cap}`,
+  tooManyFiles: (n) => csPlural(n, 'Nejvýš 1 soubor na hlášení', `Nejvýš ${n} soubory na hlášení`, `Nejvýš ${n} souborů na hlášení`),
+  fileType: (name, types) => `${name} nelze přiložit — jen ${types}`,
+  typeNames: { image: 'obrázky', pdf: 'PDF', text: 'textové soubory', office: 'kancelářské dokumenty' },
+  incFiles: 'Soubory, které jste přiložili',
+  errorFiles: 'Hlášení dorazilo, soubor zatím ne — zkuste to znovu a přiložíme ho',
+  moveHint: 'Klikněte, podržte a veďte ho do jiného rohu, nebo stiskněte Alt a šipku.',
+  size: 'Velikost',
+  sizes: { sm: 'Malá', md: 'Střední', lg: 'Velká' },
+  techDetails: 'Technické údaje',
+  techVersion: 'Verze',
+  techWindow: 'Okno záznamu',
+  techCapture: 'Záznam',
+  techBuffer: 'Vyrovnávací paměť',
+  techServer: 'Server',
+  captureOn: 'Běží',
+  captureOff: 'Vypnutý',
+  captureStarting: 'Spouští se…',
+  bufferMemory: 'V paměti',
+  bufferBrowser: 'V tomto prohlížeči',
+  windowLength: (sec) => {
+    if (sec < 60) return csPlural(sec, '1 sekunda', `${sec} sekundy`, `${sec} sekund`);
+    const min = Math.round(sec / 60);
+    return csPlural(min, '1 minuta', `${min} minuty`, `${min} minut`);
+  },
 };
 
 const CATALOGS: Readonly<Record<Locale, Strings>> = { cs, en };

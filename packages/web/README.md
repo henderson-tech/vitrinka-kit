@@ -16,9 +16,9 @@ the last minute as a bug report ([Report a bug](#report-a-bug)).
 
 The same engine has a second face for the people who use your app:
 **[Report a problem](#report-a-problem-vitrinkawebreport)** — a large
-button, "What went wrong?", optional marks drawn on the page, and the last
-minutes attached under your project's capture profile. No React needed; it
-also ships as one file vitrinka serves.
+button and one card: "What went wrong?", optional marks drawn on the page,
+files, and the last minutes attached under your project's capture profile.
+No React needed; it also ships as one file vitrinka serves.
 
 ## Install
 
@@ -185,7 +185,7 @@ vitrinka` (or `sending N`) · actions · frames · notes · pages:
 | ✎ Note | ⌥⇧N | the note sheet — Enter sends, ⇧Enter newline, Esc / ✕ / click-outside cancel. A cancelled draft (and its images) parks as a small drop on the pill: hover shows its first line, a click resumes it. The clock says **queued**, then **Saved** once the server has the note. Images: see [Attach images](#attach-images) |
 | ⌖ Annotate | ⌥⇧A | click or tap an element, or drag a region (a finger too). While annotating, the page gets no press, move or hover, does not scroll, and selects no text. Then describe it; the sheet names what you picked (its size and route; a crop only from a host that can show pixels outside the page — `HudController.captureRegion` — which neither recorder does, since the HUD's shadow root is open to the page) with **Reselect**. Everything lands on the board |
 | ■ Stop | ⌥⇧S | the pill asks **Stop & save?** (Esc / **Keep recording** cancels), shows **Saving…** with progress while the tail drains, then **Building board · k/n** while the server builds it, then **Board ready · Open board** until **Done** (a failed build says so, with **Retry**) |
-| ⋯ | | the linked account · **Report a bug** (below) · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
+| ⋯ | | the linked account · **Report a bug** (below) · **Open this board** · **Recent** (this device's last five recordings, each linked to its board) · **Report a problem** (idle, with `onReportFace`: the way back from [Report a problem](#report-a-problem-vitrinkawebreport)'s face switch) · **Go to vitrinka** · **Size** S/M/L · **Technical details** · **Position** · **Unlink this device** (asks first) |
 
 Move it anywhere: drag the puck or capsule and it lands on one of eight
 spots (a 3×3 grid without the centre). A flick lands where it is thrown.
@@ -294,14 +294,30 @@ offered only during one.
 ## Report a problem (`@vitrinka/web/report`)
 
 The report face of the same engine, for the people using your app: a large
-**Report a problem** / **Nahlásit problém** button, a card that asks
-**What went wrong?** with Send, and **Show us where** to circle, box, point
-at or hide parts of the page — numbered marks with an optional note each,
-taught by a coach card ("click, hold and move") until the first mark
-exists; from the keyboard, Enter places a mark, arrows move it,
-Shift+arrows resize it and Enter sets it. The minutes before are attached under your project's **capture
+**Report a problem** / **Nahlásit problém** button and ONE card. Its header
+says who is reporting (the account chip) and holds the ⋯ menu; its body
+takes the reporter's word for it — **Bug · Suggestion · Question · Other**,
+optional, sent as `type`, a hint for your team's triage — and **What went
+wrong?**, then one numbered note line per mark and the attached files; its
+foot holds 📎, **Show us where** and **Send**. The card keeps one size from
+drafting through sending, an error and the thanks, so Send is always in
+view. The minutes before are attached under your project's **capture
 profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
 § Report a problem). You need the project's report key (`vkb_…`).
+
+**Marking.** **Show us where** puts a glass bar at the top of the page —
+"Mark where the problem is", a segmented **Circle · Box · Arrow · Hide**
+and **Cancel** — and you circle, box, point at or hide parts of the page,
+taught by a coach card ("click, hold and move") until the first mark
+exists. A mark carries a pin on the page (its number and ✕) and a line in
+the card for its note; a press on the number puts the caret there, and a
+note on a mark is enough to send. The card stays where it rested and moves
+only when a mark lands under it, to the corner that covers the least of
+the marks. Esc or **Show us where** again ends marking and keeps the
+marks; **Cancel** drops this pass's marks, asking first (**Discard 2
+marks?**); ⌘Z / Ctrl+Z removes the newest when no field has the caret.
+From the keyboard, Enter places a mark, arrows move it, Shift+arrows
+resize it and Enter sets it.
 
 **Script tag** — vitrinka serves the single-file build; `base` defaults to
 the origin it came from:
@@ -352,13 +368,14 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 | `locale` | `cs` · `en`; live as an attribute, and through `setLocale()` |
 | `button` | `false` hides the floating button: open the card from your own control |
 | `open-selector` / `openSelector` | a CSS selector of your control(s) that open the card |
-| `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link) |
+| `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link). A linked member also switches in place: **The face switch** below |
 | `capture` | narrow the capture profile: `{storage: 'memory', windowSec, maxBytes, classes}` |
 | `identity` | as `identify()` below |
 | `appVersion`, `sanitizeUrl` | as on the recorder |
 
 The handle (and the element) has `open()`, `close()`, `identify()`,
-`setLocale()`; the handle also `unmount()`s. For the tag from npm, call
+`setLocale()` and `face`, the face on screen (`recorder` while a member has
+switched to the pill); the handle also `unmount()`s. For the tag from npm, call
 `defineReportElement()` once. Closing the card hands focus back to whatever
 had it when the card opened (your control, the field the shortcut fired in),
 else to the button: call `open()` once your control holds focus again — after
@@ -394,18 +411,95 @@ on the page; a widget's own `identify()` wins (`null` makes that widget
 anonymous, `undefined` hands it back to the page-wide one). Identity lives
 in memory only; pass it on every load.
 
+**The account and the menu.** The header's chip shows the reporter's
+initials and first name — the person your token names (the name as
+vitrinka returns it) or the email you asserted — else **?**. It opens the
+account popover: who, and how ("Signed in by this app", or that the team
+checks an anonymous report first); the member link below; and **Open the
+report portal** when the project has one bound. The ⋯ menu holds **My
+reports**, **Recent recordings** and **Record** (a linked member, npm
+only), **Settings**, and **Open vitrinka** (a member) or **Open the report
+portal**. A list opens inside the card with ← back.
+
+**My reports** depends on who reports:
+
+- **A token your server signed**: vitrinka's list. The widget trades the
+  token once for a short-lived reporter session (`POST
+  /api/v1/report/session`, renewed when it lapses) and reads `GET
+  /api/v1/report/mine` with it (header `X-Vitrinka-Reporter`): each report
+  with its step — Received, Planned, In progress, Fixed, Done — linked to
+  its page. The `vkb_` key alone reads nothing.
+- **An asserted email, or anonymous**: this browser's own sends — the last
+  20 for this vitrinka and this site, filed or "Waiting for approval",
+  marked "Sent from this browser" (`localStorage`). A signed reporter gets
+  the same on a vitrinka without the session door.
+
+**The member link.** A vitrinka member testing your app links their
+account from the account popover with the pill's flow: a short code,
+**Open vitrinka** (approve on this device) and a QR. Approval mints this
+browser's own `vkr_` token, kept where the pill keeps its link
+(`vitrinka.recorder.link`, with the `base` it was minted on), so linking
+here links the pill on this site and **Unlink** forgets it for both.
+Reporters never need it: your token vouches for them.
+
+**The face switch** (npm entry only). A browser holding a member link for
+the widget's `base` gets **Record** and **Recent recordings** in the ⋯
+menu. **Record** swaps Report a problem for the recorder pill in place,
+recording on the member's link, never your `vkb_` key; the idle pill's ⋯
+menu then offers **Report a problem**, which swaps back. The pick is
+remembered per browser and origin (`vitrinka.report.face`); a member who
+never picked starts on the pill when their vitrinka display mode is dev
+(`displayMode` from `/api/v1/recorder/me`, learned when the card opens).
+`report-widget.mjs` carries no pill, so the script tag offers neither.
+Your own pill takes the same way back with `onReportFace` on
+`VitrinkaRecorderPill` (or `mountRecorderHud`).
+
 **Beside the recorder.** One page runs one capture: when the recorder face
 (`VitrinkaRecorderRoot`) is mounted it owns it, and Report a problem sends
 its reports without a capture of its own — mount one face per page (pick it
 by your app's mode, or with `face`).
 
-**The shortcut.** There is none by default. A reporter sets their own in the
-card's settings (⚙) by pressing it: a modifier other than Shift is required,
-Esc cancels. It is kept in `localStorage` (`vitrinka.recorder.report.keybind`).
+**Attachments.** 📎 picks files; pasting or dropping a file onto the card
+adds it (pasted text stays text). They line up above the foot, each with a
+remove ✕, and the card keeps its size. Each file is checked against the
+project's caps — `attachments` in `GET /api/v1/report-config`: bytes per
+file, files per report and the types, by default 10 MiB, 5, and images,
+PDF and text — before anything is sent, and one that breaks a cap is
+refused at once, the line naming the cap. The files ride their own leg
+(`POST /api/v1/reports/{id}/attachment?name=`) before the replay; **Try
+again** sends only those that did not land, and a file the server refuses
+for good is left out while the report still files.
 
-**What the reporter sees after Send**: "Thanks — we've got it", and **See
-your report** when the server returns the report's page. A failed send
-keeps every word; **Try again** resumes the same report.
+**Where it sits.** Drag the button to any corner (it snaps to the nearest)
+or press Alt+arrow while it has focus; the corner is remembered per site
+(`vitrinka.report.dock`), and the card opens beside the button — above it
+at the bottom, below it at the top. **Settings** (⋯) holds the shortcut
+below, **Size** — Small · Medium · Large, one scale for the button, the
+card and the marking bar (`vitrinka.report.size`) — and **Technical
+details** for a support conversation: version, capture window, whether
+capture runs, the buffer and its cap, the server.
+
+**The shortcut.** There is none by default. A reporter sets their own in
+**Settings** by pressing it: a modifier other than Shift is required, Esc
+cancels. It is kept in `localStorage` (`vitrinka.recorder.report.keybind`).
+
+**Typing stays in the widget.** A key typed into a field of the card, a
+mark's line or a pill sheet never reaches your page's shortcuts — even one
+bound in the capture phase on `window` or `document`, which runs before the
+widget's own shield and, through shadow retargeting, sees the widget's
+host element as `event.target`, never the field, so its "ignore keys while
+typing" check cannot work. One `window` capture listener stops those keys;
+the text still lands, and Enter, Esc, Tab and chords that do not edit text
+pass. Its limit: a `window` capture listener your page registered before
+the widget mounted still runs first — read `event.composedPath()[0]`
+there, not `event.target`.
+
+**What the reporter sees after Send**: "Thanks — we've got it", then what
+happens next: a filed report says the team will take a look, with **See
+your report** when the server returns the report's page; one held for
+approval (an asserted or anonymous reporter) says the team checks it
+before it is filed. A failed send keeps every word; **Try again** resumes
+the same report.
 
 ## Attach images
 
@@ -460,6 +554,10 @@ import { mountRecorderHud, type HudController } from '@vitrinka/web/hud';
 
 const unmount = mountRecorderHud(controller, { title: () => document.title });
 ```
+
+`onReportFace` in the options adds **Report a problem** to the idle ⋯
+menu and is called when it is picked (`VitrinkaRecorderPill` takes the same
+prop).
 
 `HudController` is a snapshot plus actions:
 

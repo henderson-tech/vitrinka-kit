@@ -2,7 +2,9 @@
  * `face: 'recorder'` (QA Studio D6): the same engine with the recorder pill
  * as its face — `VitrinkaRecorderRoot` + `VitrinkaRecorderPill` rendered
  * into a detached root of their own. Loaded lazily by the npm entry only, so
- * a report-only host never pays for React or the recorder.
+ * a report-only host never pays for React or the recorder. Mounted by a
+ * member's Record switch (vt-8020 D8) it gets no key — the device link
+ * authenticates — and `onReportFace`, the pill's way back.
  */
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -18,8 +20,9 @@ export function mountRecorderFace(opts: RecorderFaceOptions): () => void {
   root.render(
     createElement(
       VitrinkaRecorderRoot,
-      { url: opts.base, recorderKey: opts.key, appVersion: opts.appVersion, sanitizeUrl: opts.sanitizeUrl },
-      createElement(VitrinkaRecorderPill),
+      // '' rather than undefined: an absent key would fall back to a baked NEXT_PUBLIC_VITRINKA_KEY.
+      { url: opts.base, recorderKey: opts.key ?? '', appVersion: opts.appVersion, sanitizeUrl: opts.sanitizeUrl },
+      createElement(VitrinkaRecorderPill, { onReportFace: opts.onReportFace }),
     ),
   );
   return () => {

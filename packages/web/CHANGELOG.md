@@ -1,5 +1,124 @@
 # @vitrinka/web
 
+## 0.8.0
+
+**Report a problem grows back up.** The calm face now gives the people in
+your app what the recorder pill gave its testers: it says who they are,
+links a vitrinka account, finds their earlier reports, and marks a problem
+without hiding how to finish.
+
+- **One card.** The describe card and every mark's note are now one card:
+  the reporter's word for it (**Bug · Suggestion · Question · Other**,
+  optional, sent as `type` — a hint for triage, never the category),
+  "What went wrong?", one numbered note line per mark, the attached files,
+  and **Send** in the foot. It keeps one size from drafting through
+  sending, an error and the thanks, so Send never leaves the screen; a long
+  list scrolls inside it. A note on a mark is now enough to send.
+- **Marking under a top bar.** "Show us where" puts a glass bar at the top
+  of the page: one plain line ("Mark where the problem is"), a segmented
+  **Circle · Box · Arrow · Hide** whose indicator slides to the pick, and
+  **Cancel**. Cancel leaves marking and drops this pass's marks, asking
+  first ("Discard 2 marks?" · **Discard** / **Keep**); ⌘Z / Ctrl+Z takes
+  back the newest mark when no field has the caret; Esc, or "Show us where"
+  again, leaves marking and keeps the marks. **Done** and **Undo** are
+  gone: Done only returned to a card that no longer leaves the screen, and
+  the bottom bar it sat in hid how to finish.
+- **Notes no longer float on the page.** Since 0.7.0 each mark's note
+  opened at the mark, a 220 px field over the page and over the other
+  marks. A mark now carries only a pin — its number and ✕ — and a press on
+  the number puts the caret in its line in the card.
+- **The card parks away from the marks.** Marking starts with the card
+  exactly where it rested. It moves only when a mark lands under it, to the
+  corner that covers the least of the marks, clear of the top bar.
+- **Who you are.** The header shows an account chip: the initials and
+  first name of the person your app signed (`identify({token})`, the name
+  as vitrinka returns it) or asserted, else **?**. It opens the account
+  popover: who, and how ("Signed in by this app", or that the team checks
+  an anonymous report first); **Link your vitrinka account** — the pill's
+  flow, a code with **Open vitrinka** and a QR — or **Linked to vitrinka
+  as …** with **Unlink**; and **Open the report portal** when the project
+  has one.
+- **The ⋯ menu.** **My reports**; **Recent recordings** and **Record** for
+  a linked member; **Settings**; **Open vitrinka** (a member) or **Open the
+  report portal**. A list opens inside the card with ← back. Settings sits
+  behind a real cog: since 0.7.0 its glyph was a ring of rays that read as
+  brightness, a sun.
+- **My reports.** For a reporter your server signed, the widget trades the
+  token once for a short-lived reporter session (`POST
+  /api/v1/report/session`) and lists their reports from `GET
+  /api/v1/report/mine` (header `X-Vitrinka-Reporter`), each with its step:
+  Received, Planned, In progress, Fixed, Done. A lapsed session is renewed
+  and asked once more; the `vkb_` key alone still reads nothing. An
+  asserted email or an anonymous reporter gets this browser's own sends
+  instead — the last 20 for this vitrinka and site, filed or "Waiting for
+  approval", marked "Sent from this browser".
+- **The face switch for linked members** (npm entry only). A browser
+  holding a vitrinka member link for the widget's `base` gets **Record**:
+  it swaps Report a problem for the recorder pill in place, recording on
+  the member's own link, never your `vkb_` key. The idle pill's ⋯ menu then
+  offers **Report a problem**, which swaps back. The pick is remembered per
+  browser and origin (`vitrinka.report.face`); a member who never picked
+  starts on the pill when their vitrinka display mode is dev. Reporters
+  never see the switch, and a `vkr_` key the host passes is a build's, not
+  a person's. `report-widget.mjs` carries no pill, so the script tag offers
+  neither Record nor Recent recordings. New API: `onReportFace` on
+  `VitrinkaRecorderPill` and in `mountRecorderHud`'s options adds the
+  pill's row; `face` on the handle and the element now says which face is
+  on screen; a stored device link remembers the `base` it was minted on.
+- **Attachments.** 📎 in the foot picks files; pasting or dropping a file
+  onto the card adds it (pasted text stays text). Each file is checked
+  against the project's caps — `attachments` in `GET
+  /api/v1/report-config`, by default 10 MiB per file, 5 per report, images,
+  PDF and text — before anything is sent, and one that breaks a cap is
+  refused at once, the line naming the cap. They ride their own leg, `POST
+  /api/v1/reports/{id}/attachment?name=`, after the create and before the
+  replay; **Try again** sends only the files that did not land, and a file
+  the server refuses for good is left out while the report still files.
+- **Typing in the widget never fires the page's shortcuts.** A host that
+  listens in the capture phase on `window` or `document` (a BPMN modeler's
+  `e`) ran before the shadow host's bubble-phase shield, and shadow
+  retargeting showed it the host element as `event.target`, never the
+  field, so its "ignore keys while typing" check failed. One `window`
+  capture listener now stops typing keys aimed at a field of the card, a
+  mark's line or a pill sheet; the text still lands, and Enter, Esc, Tab
+  and chords that do not edit text (the reporter's shortcut, the pill's
+  ⌥⇧ keys) pass. Its limit: a `window` capture listener the page
+  registered before the widget mounted still runs first. Since 0.7.0 on
+  Report a problem; the pill's sheets had the same leak.
+- **The button moves.** Drag it to any corner (it snaps to the nearest) or
+  press Alt+arrow while it has focus; the corner is remembered per origin
+  (`vitrinka.report.dock`) and the card opens beside it.
+- **Size and technical details.** Settings adds Small · Medium · Large, one
+  scale for the button, the card and the marking bar
+  (`vitrinka.report.size`), and read-only technical details for a support
+  conversation: version, capture window, whether capture runs, the buffer
+  and its cap, the server.
+- **The thanks say what happens next.** A filed report says the team will
+  take a look, with **See your report** when the server returned its page;
+  one held for approval (an asserted or anonymous reporter) says the team
+  checks it before it is filed.
+
+Upgrading:
+
+- **Upgrade vitrinka first.** My reports from the server, attachments, the
+  report type and a dev-mode member's start use doors that ship with the
+  vitrinka release serving this version as `/vendor/report-widget-1.mjs`:
+  `POST /api/v1/report/session`, `GET /api/v1/report/mine`, `POST
+  /api/v1/reports/{id}/attachment`, `type` in the report envelope,
+  `attachments` in `/api/v1/report-config` and `displayMode` on
+  `/api/v1/recorder/me`. The script tag always matches its server; an npm
+  host can run ahead of it. On an older vitrinka, My reports falls back to
+  this browser's list, each attachment is refused (the report files
+  without it, under the default caps) and a dev-mode start never triggers.
+  An older vitrinka refuses the unknown `type` field; the widget then sends
+  the report again without it, so the reporter's word is lost but the report
+  is not.
+- **Done, Undo and "N places marked" are gone** (the `done`, `undo` and
+  `marked` strings). The catalog is internal, so no host code changes, but
+  a host test that clicked **Done** / **Hotovo** or **Undo** / **Zpět** in
+  marking now presses Esc or "Show us where" to finish, and the pin's ✕ or
+  ⌘Z to take a mark back.
+
 ## 0.7.2
 
 - **One pill when the extension starts in this tab.** The extension's hello

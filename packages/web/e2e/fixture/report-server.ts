@@ -55,6 +55,9 @@ const TABLE =
 
 function page(query: string): string {
   const head = '<!doctype html><html><head><meta charset="utf-8"><title>Voke</title><style>body{font:16px system-ui;margin:40px}td,th{padding:10px 24px;text-align:left}</style></head><body>';
+  if (query.startsWith('/npm')) {
+    return `${head}${TABLE}<script type="module" src="/report-face.mjs"></script></body></html>`;
+  }
   if (query.includes('mount')) {
     // The npm-style call: mountReport with the locale option.
     return `${head}${TABLE}<script type="module">import { mountReport } from '/vendor/report-widget-1.mjs'; window.report = mountReport({ key: 'vkb_e2e', locale: 'cs' });</script></body></html>`;
@@ -87,6 +90,11 @@ export async function startReportServer(options: { host?: string; port?: number 
     cwd: pkg,
   });
   const claimRecorder = readFileSync(join(tmp, 'claim-recorder.js'), 'utf8');
+  execFileSync('bun', ['build', join(here, 'report-face.ts'), '--format=esm', '--target=browser', '--define', 'process.env.NODE_ENV="production"', '--outfile', join(tmp, 'report-face.mjs')], {
+    stdio: 'inherit',
+    cwd: pkg,
+  });
+  const reportFace = readFileSync(join(tmp, 'report-face.mjs'), 'utf8');
   const seen: ReportSeen[] = [];
   let failCreate = false;
 
@@ -106,10 +114,23 @@ export async function startReportServer(options: { host?: string; port?: number 
     if (path === '/vendor/report-widget-1.mjs') return js(widget);
     if (path === '/vendor/rrweb-record-1.min.js') return js(rrweb);
     if (path === '/claim-recorder.js') return js(claimRecorder);
+    if (path === '/report-face.mjs') return js(reportFace);
+    if (path === '/api/v1/recorder/me') {
+      return json({
+        kind: 'linked', workspace: { slug: 'voke', name: 'Voke' },
+        user: { email: 'member@example.test', name: 'Member' }, prefs: null,
+        displayMode: String(req.headers.referer ?? '').includes('dev') ? 'dev' : 'regular',
+      });
+    }
+    if (path === '/api/v1/recorder/policy') return json({ policy: null });
     if (path === '/api/v1/report-config') {
       return json({
         project: 'voke',
-        captureProfile: { storage: 'memory', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'] },
+        captureProfile: {
+          storage: 'memory', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'],
+          // The capture profile's attachment caps (vt-8020 D9), where vitrinka serves them; a spec narrows them with page.route.
+          attachments: { maxBytes: 10 * 1024 * 1024, maxCount: 5, types: ['image/*', 'application/pdf', 'text/*'] },
+        },
         // A page opened with `?balanced` gets the profile that keeps page text.
         profile: String(req.headers.referer ?? '').includes('balanced') ? 'balanced' : 'strict',
         portalUrl: 'https://portal.vitrinka.test/voke',
@@ -125,6 +146,12 @@ export async function startReportServer(options: { host?: string; port?: number 
     }
     const chunk = /^\/api\/v1\/reports\/rep-1\/chunk\?seq=(\d+)$/.exec(path);
     if (chunk) return json({ blobKey: `reports/rep-1/chunk-${chunk[1]}`, ok: true }, 201);
+    // The attachment leg: one file, raw body under its own Content-Type (the recorded body is lossy for binaries).
+    const file = /^\/api\/v1\/reports\/rep-1\/attachment\?name=([^&]+)$/.exec(path);
+    if (file && req.method === 'POST') {
+      const name = decodeURIComponent(file[1] ?? '');
+      return json({ id: `att-${seen.length}`, name, size: Number(req.headers['content-length'] ?? 0), type: String(req.headers['content-type'] ?? '') }, 201);
+    }
     if (path === '/api/v1/reports/rep-1/events') return json({ inserted: 1 });
     if (path === '/api/v1/reports/rep-1/submit') return json({ status: 'quarantined', reportUrl: REPORT_URL });
     if (path.startsWith('/api/')) return json({ error: 'not here' }, 404);

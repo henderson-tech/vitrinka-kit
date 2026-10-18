@@ -9,7 +9,12 @@
  * Its one runtime import is rrweb's recorder, loaded lazily (only when the
  * project's capture profile records the page) from the same deployment:
  * `<base>/vendor/rrweb-record-1.min.js`. `base` defaults to the origin this
- * module was served from. The recorder face is not in this build.
+ * module was served from. The recorder face is not in this build, so neither
+ * is a linked member's Record switch (vt-8020 D8): the pill needs React and
+ * the page recorder, and vitrinka serves no self-contained pill beside this
+ * module (`build/hud.iife.js` is the HUD alone, vendored only into the
+ * extension). Serving one is the step that would let `recorderFace` below
+ * lazy-load it from `<base>/vendor/` like rrweb.
  */
 import type { RecordFn } from '../recorder/capture/rrweb-lane';
 import { defineReportElement, type Faces, mountReport as mount, type ReportHandle, type ReportOptions } from './element';

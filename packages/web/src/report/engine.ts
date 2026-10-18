@@ -3,7 +3,8 @@
  * driven by the project's capture profile instead of a recording:
  *
  * 1. `GET /api/v1/report-config` with the `vkb_` key → the capture profile
- *    (narrowed by the host's `capture` option) and the masking profile. An
+ *    (narrowed by the host's `capture` option), the masking profile and the
+ *    attachment caps (attachments.ts). An
  *    unreachable or older server means the safe fallback: memory, the last
  *    minute, strict masking.
  * 2. The redaction rules first, then the lanes — so capture runs under the
@@ -47,6 +48,7 @@ import { listen } from '../recorder/hud/listen';
 import { EVENTS_PER_POST, splitRRWebEvents, utf8Bytes } from '../recorder/queue';
 import { browserTabId, claimCapture, currentRoute, releaseCapture, setTabIdentity } from '../recorder/state';
 import { type CaptureStore, deleteCaptureStore, openCaptureStore } from '../recorder/storage/capture';
+import { type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, parseAttachmentCaps } from './attachments';
 import { applyHides, hiddenNodeIds, type Marker, type NodeIds } from './markers';
 import {
   type CaptureLanes,
@@ -88,6 +90,8 @@ export interface ReportConfig {
   reachable: boolean;
   /** This widget captures (false while the recorder face runs the page's capture). */
   capturing: boolean;
+  /** What the reporter may attach (vt-8020 D9): the server's caps, else the defaults. */
+  attachments: AttachmentCaps;
 }
 
 export interface ConsoleEntry {
@@ -204,7 +208,9 @@ function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keepLane']>
   };
 }
 
-async function fetchConfig(target: ApiTarget): Promise<{ project: string; profile: CaptureProfile; masking: MaskingProfile; reachable: boolean }> {
+async function fetchConfig(
+  target: ApiTarget,
+): Promise<{ project: string; profile: CaptureProfile; masking: MaskingProfile; reachable: boolean; attachments: AttachmentCaps }> {
   try {
     const res = await api<Record<string, unknown>>('GET', '/api/v1/report-config', undefined, { target });
     const flight = typeof res.flightRecorder === 'boolean' ? res.flightRecorder : undefined;
@@ -213,10 +219,16 @@ async function fetchConfig(target: ApiTarget): Promise<{ project: string; profil
       profile: res.captureProfile == null ? legacyProfile(flight) : parseProfile(res.captureProfile, flight),
       masking: maskingOf(res.profile),
       reachable: true,
+      // vitrinka serves the caps inside the capture profile; a top-level `attachments` is read as a fallback.
+      attachments: parseAttachmentCaps(
+        typeof res.captureProfile === 'object' && res.captureProfile !== null && 'attachments' in res.captureProfile
+          ? (res.captureProfile as { attachments?: unknown }).attachments
+          : res.attachments,
+      ),
     };
   } catch (e) {
     console.warn('vitrinka: report config unavailable — capturing the last minute, strictly masked', e);
-    return { project: '', profile: legacyProfile(), masking: 'strict', reachable: false };
+    return { project: '', profile: legacyProfile(), masking: 'strict', reachable: false, attachments: DEFAULT_ATTACHMENT_CAPS };
   }
 }
 
@@ -263,6 +275,7 @@ export class CaptureEngine {
       masking: fetched.masking,
       reachable: fetched.reachable,
       capturing: false,
+      attachments: fetched.attachments,
     };
     if (this.stopped) return config;
     // The page-wide runtime (lanes, buffer, rrweb, rules) is the recorder's

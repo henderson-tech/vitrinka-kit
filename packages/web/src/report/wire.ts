@@ -4,20 +4,23 @@
  *
  *   POST  /api/v1/reports                  envelope → {id, custody}
  *   PATCH /api/v1/reports/{id}             {title?, description?, markers?, notify?}
+ *   POST  /api/v1/reports/{id}/attachment?name=<name>
+ *                                          one file, raw body under its own Content-Type → {id, name, size, type}
  *   POST  /api/v1/reports/{id}/chunk?seq=N raw rrweb event array (≤ 4 MiB, N from 1) → {blobKey}
  *   POST  /api/v1/reports/{id}/events      {events: [{seq, ts, tabHost, kind: "rrweb", payload, blobKey}]}
  *   POST  /api/v1/reports/{id}/submit      {} → {status: "filed" | "quarantined", reportUrl?}
  *
- * LEG-RESUMABLE: a job remembers which legs landed, so a retry resumes the
- * failed one — one report, never a duplicate. Text the reporter changed
- * after the report was created rides a PATCH. A capture leg the server
- * refuses for good (a permanent 4xx) is skipped with a warning: the report
- * still files, without its replay. `reportUrl` is the server's — shown as
- * returned, never composed.
+ * LEG-RESUMABLE: a job remembers which legs landed — each file, each chunk —
+ * so a retry resumes the failed one: one report, never a duplicate, never a
+ * file twice. Text the reporter changed after the report was created rides a
+ * PATCH. A file or a capture leg the server refuses for good (a permanent
+ * 4xx) is skipped with a warning: the report still files, without it. The
+ * reporter's files go before the replay — they are what they chose to send.
+ * `reportUrl` is the server's — shown as returned, never composed.
  */
 import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
-import type { Locale } from './i18n';
+import type { Locale, ReportKind } from './i18n';
 import type { Identity } from './identity';
 import type { WireMarker } from './markers';
 
@@ -42,6 +45,8 @@ export interface ReportEnvelope {
   /** The widget's language (the reporter reads mail and the portal in it). */
   locale: Locale;
   notify?: boolean;
+  /** The reporter's own word for it (vt-8020 D11), absent when they picked none. */
+  type?: ReportKind;
 }
 
 export interface SubmitReply {
@@ -57,13 +62,21 @@ export class ReportJob {
   private readonly blobKeys = new Map<number, string>();
   private rowsPosted = 0;
   private skipCapture = false;
+  /** The files (by index) the server has — landed or refused for good. */
+  private readonly filesDone = new Set<number>();
 
-  /** `target`: the widget's own base and key — never whatever another widget configured. */
+  /** `target`: the widget's own base and key — never whatever another widget configured. `files`: the reporter's attachments, fixed for the job. */
   constructor(
     readonly capture: BuiltCapture,
     private readonly tabHost: string,
     private readonly target: ApiTarget,
+    readonly files: readonly File[] = [],
   ) {}
+
+  /** A file has not landed yet: the attachment leg is what a retry resumes. */
+  get filesPending(): boolean {
+    return this.filesDone.size < this.files.length;
+  }
 
   /** Run the legs from wherever the last run stopped; rejects with the failing leg's error. */
   async run(env: ReportEnvelope): Promise<SubmitReply> {
@@ -71,7 +84,13 @@ export class ReportJob {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to);
+      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to).catch((e: unknown) => {
+        // A vitrinka older than the report type refuses the unknown field: the hint is optional, the report is not.
+        if (env.type === undefined || !(e instanceof VitrinkaApiError) || e.status !== 400 || !/\btype\b/.test(e.message)) throw e;
+        console.warn('vitrinka: this server takes no report type yet — sending the report without it');
+        const { type: _dropped, ...rest } = env;
+        return api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', rest, to);
+      });
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
@@ -80,6 +99,7 @@ export class ReportJob {
       await api('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits, to);
       this.sent = editsKey;
     }
+    await this.sendFiles();
     if (!this.skipCapture) {
       try {
         await this.sendCapture();
@@ -94,6 +114,20 @@ export class ReportJob {
       status: reply.status === 'filed' ? 'filed' : 'quarantined',
       ...(typeof reply.reportUrl === 'string' && reply.reportUrl ? { reportUrl: reply.reportUrl } : {}),
     };
+  }
+
+  private async sendFiles(): Promise<void> {
+    const id = encodeURIComponent(this.id);
+    for (const [i, f] of this.files.entries()) {
+      if (this.filesDone.has(i)) continue;
+      try {
+        await uploadTo(`/api/v1/reports/${id}/attachment?name=${encodeURIComponent(f.name)}`, f.type || 'application/octet-stream', f, this.target);
+      } catch (e) {
+        if (!(e instanceof VitrinkaApiError) || !permanentStatus(e.status)) throw e;
+        console.warn(`vitrinka: the server refused ${f.name} — the report goes without it`, e);
+      }
+      this.filesDone.add(i);
+    }
   }
 
   private async sendCapture(): Promise<void> {

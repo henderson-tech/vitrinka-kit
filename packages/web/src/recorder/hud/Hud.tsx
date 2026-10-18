@@ -114,9 +114,11 @@ export interface HudProps {
   defaultTitle: () => string;
   /** Where the HUD remembers its own UI state (the dock spot). */
   storage: RecorderStorage;
+  /** The menu's "Report a problem" (the report face's way back); absent = no row. */
+  onReportFace?: () => void;
 }
 
-export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps): ReactElement {
+export function Hud({ controller, hostMount, defaultTitle, storage, onReportFace }: HudProps): ReactElement {
   const snap = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const rec = snap.recording;
   const [sheet, setSheet] = useState<SheetState | null>(null);
@@ -908,6 +910,7 @@ export function Hud({ controller, hostMount, defaultTitle, storage }: HudProps):
           onAskUnlink={askUnlink}
           onLink={beginLink}
           {...(snap.canReport && controller.report ? { onReport: openReport } : {})}
+          onReportFace={onReportFace}
         />
       ) : null}
       {/* before the details card: a showing tooltip fades it (styles.ts), they share a side */}
