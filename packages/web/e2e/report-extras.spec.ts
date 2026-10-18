@@ -32,9 +32,10 @@ test.beforeEach(() => {
   seen.length = 0;
 });
 
-/** The widget is armed: config read and the recorder loaded. */
-async function armed(): Promise<void> {
+/** The widget is armed: config read and the recorder running (report.spec.ts's armed says why both waits). */
+async function armed(page: Page): Promise<void> {
   await expect.poll(() => seen.some((s) => s.path === '/vendor/rrweb-record-1.min.js')).toBe(true);
+  await expect.poll(() => page.evaluate(() => (globalThis as { __rrwebStarted?: number }).__rrwebStarted ?? 0)).toBeGreaterThan(0);
 }
 
 async function draw(page: Page, from: [number, number], to: [number, number]): Promise<void> {
@@ -70,7 +71,7 @@ test('keys typed in the card and in a mark’s note never reach the page’s cap
     document.addEventListener('keydown', (e) => window.__heard.push(`document-bubble:${e.key}`));
   });
   await page.goto(base);
-  await armed();
+  await armed(page);
   // The modeler mounts once the app runs (after the widget): a window capture listener from then on.
   // One the page registered on window before the widget's first host still runs first — nothing can precede it.
   await page.evaluate(() => {
@@ -105,7 +106,7 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
   // No opening animation: the card's box is measured right after it opens.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(base);
-  await armed();
+  await armed(page);
   const card = await openCard(page);
   const desc = card.getByRole('textbox', { name: 'What went wrong?' });
   await desc.fill('The logo is cut off — this is how it should look');
@@ -158,7 +159,7 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
 
 test('a paste carrying text beside an image of it stays text', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   const card = await openCard(page);
   const prevented = await card.getByRole('textbox', { name: 'What went wrong?' }).evaluate((el, png) => {
     // What Office puts on the clipboard for copied cells: the text and a picture of it.
@@ -180,7 +181,7 @@ test('a file past the project’s caps is refused at once, the line naming the c
     await route.fulfill({ response, json: { ...json, captureProfile: { ...(json.captureProfile as Record<string, unknown>), attachments: { maxBytes: 2048, maxCount: 2, types: ['image/*', 'application/pdf'] } } } });
   });
   await page.goto(base);
-  await armed();
+  await armed(page);
   const card = await openCard(page);
   const pick = async (files: ReturnType<typeof file>[]) => {
     const chooser = page.waitForEvent('filechooser');
@@ -208,7 +209,7 @@ test('a file that did not land is the only one Try again sends', async ({ page }
     await route.fulfill({ status: 503, body: 'storage unavailable' });
   });
   await page.goto(base);
-  await armed();
+  await armed(page);
   const card = await openCard(page);
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Two files');
   const chooser = page.waitForEvent('filechooser');
@@ -281,7 +282,7 @@ test('Settings: Large and Small scale the card and the button, remembered; techn
   await page.setViewportSize({ width: 1440, height: 810 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(base);
-  await armed();
+  await armed(page);
   const fab = page.getByRole('button', { name: /^Report a problem/ });
   const fabMedium = (await fab.boundingBox())!;
   const card = await openCard(page);
