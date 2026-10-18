@@ -93,18 +93,23 @@ export function isVitrinkaUrl(url: string): boolean {
 /** Storage key of the linked token (`vitrinka.recorder.link` in localStorage). */
 export const LINK_KEY = 'link';
 
-export function readLink(): Linked | null {
+/** The stored device link; `base` names the vitrinka it was minted on (absent on links stored before web 0.8). */
+export interface StoredLink extends Linked {
+  base?: string;
+}
+
+export function readLink(): StoredLink | null {
   const raw = getRecorderStorage().getString(LINK_KEY);
   if (!raw) return null;
   try {
-    const l = JSON.parse(raw) as Linked;
+    const l = JSON.parse(raw) as StoredLink;
     return typeof l.token === 'string' && l.token ? l : null;
   } catch {
     return null;
   }
 }
 
-export function storeLink(link: Linked): void {
+export function storeLink(link: StoredLink): void {
   getRecorderStorage().set(LINK_KEY, JSON.stringify(link));
   notify();
 }

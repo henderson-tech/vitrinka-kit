@@ -20,6 +20,8 @@ export interface MountHudOptions {
    * Defaults to `localStorage` (`vitrinka.recorder.*`), memory where that is unavailable.
    */
   storage?: RecorderStorage;
+  /** Adds "Report a problem" to the idle ⋯ menu, which calls this (the report face's way back); absent = no row. */
+  onReportFace?: () => void;
 }
 
 /** Mount the HUD; returns the unmount (removes the host). */
@@ -33,6 +35,7 @@ export function mountRecorderHud(controller: HudController, opts: MountHudOption
       hostMount: host.mount,
       defaultTitle: opts.title ?? (() => document.title),
       storage,
+      onReportFace: opts.onReportFace,
     }),
   );
   return () => {

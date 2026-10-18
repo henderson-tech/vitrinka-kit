@@ -92,6 +92,12 @@ function RouteFeed({ route }: { route?: string | null }): null {
 export interface VitrinkaRecorderPillProps {
   /** Session title when the tester starts from the pill; defaults to `document.title`. */
   title?: string;
+  /**
+   * Adds "Report a problem" to the idle pill's ⋯ menu, which calls this —
+   * how `@vitrinka/web/report` swaps a member back to its report face. Read
+   * when the pill mounts; absent = no row.
+   */
+  onReportFace?: () => void;
 }
 
 /**
@@ -102,6 +108,8 @@ export interface VitrinkaRecorderPillProps {
 export function VitrinkaRecorderPill(props: VitrinkaRecorderPillProps): null {
   const titleRef = useRef(props.title);
   titleRef.current = props.title;
+  const reportFaceRef = useRef(props.onReportFace);
+  reportFaceRef.current = props.onReportFace;
   useEffect(() => {
     if (!vitrinkaConfigured()) return;
     // The idle pill keeps the last minute for "Report a bug" (report.ts gates it).
@@ -109,6 +117,7 @@ export function VitrinkaRecorderPill(props: VitrinkaRecorderPillProps): null {
     const unmount = mountRecorderHud(createPageController(), {
       title: () => titleRef.current ?? document.title,
       storage: getRecorderStorage(),
+      onReportFace: reportFaceRef.current ? () => reportFaceRef.current?.() : undefined,
     });
     return () => {
       unmount();

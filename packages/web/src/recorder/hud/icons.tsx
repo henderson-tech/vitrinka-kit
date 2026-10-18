@@ -228,6 +228,17 @@ export function BugIcon(): ReactElement {
   );
 }
 
+/** A speech bubble with "!" — Report a problem, the report face. */
+export function ReportIcon(): ReactElement {
+  return (
+    <svg {...base}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M12 7v2" />
+      <path d="M12 13h.01" />
+    </svg>
+  );
+}
+
 export function HomeIcon(): ReactElement {
   return (
     <svg {...base}>

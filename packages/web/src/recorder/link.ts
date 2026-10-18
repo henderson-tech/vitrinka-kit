@@ -32,7 +32,7 @@ export async function linkDevice(): Promise<DeviceLink> {
   const start = await startLink(url, { label: defaultLinkLabel(), workspace });
   const ac = new AbortController();
   const linked = pollLink(url, start.device_code, { interval: start.interval, expiresIn: start.expires_in, workspace, signal: ac.signal }).then((l) => {
-    storeLink(l);
+    storeLink({ ...l, base: url });
     return l;
   });
   return { start, linked, cancel: () => ac.abort() };

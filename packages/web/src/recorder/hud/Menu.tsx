@@ -1,6 +1,7 @@
 /**
  * The ⋯ menu: who the recorder is linked as, "Report a bug", the open board,
- * the device's recent recordings and "Go to vitrinka", then the HUD's own settings —
+ * the device's recent recordings, "Report a problem" (the report face's way
+ * back, idle only) and "Go to vitrinka", then the HUD's own settings —
  * size, verbose details, position (a miniature screen of the eight spots) —
  * and Unlink. A fixed float placed beside the dock by the caller; ↑/↓ move
  * between items, Esc closes.
@@ -8,7 +9,7 @@
 import { type KeyboardEvent, type ReactElement, type RefObject } from 'react';
 
 import type { HudAccount, HudSize, HudSnapshot } from './controller';
-import { BugIcon, HomeIcon, NewTabIcon, UnlinkIcon } from './icons';
+import { BugIcon, HomeIcon, NewTabIcon, ReportIcon, UnlinkIcon } from './icons';
 import { isVertical, type Place, SPOT_NAMES, SPOTS, type Spot } from './spots';
 import { fmtAgo, fmtDuration } from './status';
 
@@ -49,6 +50,11 @@ export interface MenuProps {
   onLink: () => void;
   /** Opens the bug report sheet; the row shows only when set. */
   onReport?: () => void;
+  /**
+   * Swaps the pill for the report face (vt-8020 D8); the row shows only when
+   * set, and only while idle — leaving mid-recording would strand the session.
+   */
+  onReportFace?: () => void;
 }
 
 export function Menu(p: MenuProps): ReactElement {
@@ -159,6 +165,11 @@ export function Menu(p: MenuProps): ReactElement {
           </div>
         );
       })}
+      {p.onReportFace && !rec ? (
+        <button type="button" role="menuitem" className="mi" onClick={act(p.onReportFace)}>
+          <ReportIcon /> Report a problem
+        </button>
+      ) : null}
       <a role="menuitem" className="mi" href={snap.workspaceUrl} target="_blank" rel="noopener noreferrer" onClick={p.onClose}>
         <HomeIcon /> Go to vitrinka
         <span className="end">
