@@ -160,7 +160,7 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
 
 test('a follow-up report carries a canvas-drawn PNG whole: every byte lands on the attachment leg before the submit', async ({ page }) => {
   await page.goto(base);
-  await armed();
+  await armed(page);
   let card = await openCard(page);
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The export is empty');
   await card.getByRole('button', { name: 'Send', exact: true }).click();
