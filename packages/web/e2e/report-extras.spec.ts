@@ -199,7 +199,7 @@ test('a file that did not land is the only one Try again sends', async ({ page }
   await (await chooser).setFiles([file('shot.png', 'image/png'), file('spec.pdf', 'application/pdf')]);
   await card.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(card.getByText('Your report arrived, a file not yet — try again to attach it')).toBeVisible();
-  // The report is on its way: its files are fixed until it lands.
+  // The report is on its way: its files and its type are fixed until it lands.
   await expect(card.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
   await card.getByRole('button', { name: 'Try again' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
@@ -218,6 +218,7 @@ test('the button drags to another corner, the card opens beside it, and the corn
   const grip = { x: home.x + 30, y: home.y + home.height / 2 };
 
   // A press that barely travels is still a click.
+  await expect(card.getByRole('radio', { name: 'Bug', exact: true })).toBeDisabled();
   await page.mouse.move(grip.x, grip.y);
   await page.mouse.down();
   await page.mouse.move(grip.x + 2, grip.y + 1);

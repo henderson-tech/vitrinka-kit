@@ -1867,7 +1867,8 @@ export class ReportWidget {
     for (const [kind, btn] of e.kindButtons) {
       btn.textContent = s.kinds[kind];
       btn.setAttribute('aria-checked', String(this.kind === kind));
-      btn.disabled = this.sending;
+      // The type rides only the create: once the report is on its way a retry cannot change it.
+      btn.disabled = this.sending || Boolean(this.job?.id);
     }
     e.prompt.textContent = s.prompt;
     e.desc.placeholder = s.placeholder;
