@@ -135,8 +135,9 @@ kbd {
   display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border: 0; border-radius: 8px;
   background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 550; text-decoration: none; text-align: left;
 }
-.pop-item:hover:not(:disabled), .pop-item:focus-visible { background: var(--faint); }
-.pop-item:disabled { color: var(--dim); cursor: default; }
+.pop-item:hover:not([aria-disabled="true"]), .pop-item:focus-visible { background: var(--faint); }
+/* A waiting item stays focusable (aria-disabled) so the arrows reach its reason; it only looks unavailable. */
+.pop-item[aria-disabled="true"] { color: var(--dim); cursor: default; }
 .pop-item svg { width: 15px; height: 15px; flex: none; color: var(--dim); }
 /* Why an item waits (Record over an unsent report): a second line under the label, aligned past the icon. */
 .pop-item:has(.pop-why:not([hidden])) { flex-wrap: wrap; row-gap: 2px; height: auto; min-height: 36px; padding: 8px 10px; }

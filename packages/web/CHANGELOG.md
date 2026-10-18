@@ -9,8 +9,9 @@
   card holds any of them, as it already did while a report was sending or
   waiting on **Try again**, and says why under its label: "Send or clear
   the report you started first" (cs "Odešlete nebo smažte rozepsané
-  hlášení", also its accessible description). A disabled menu item now
-  looks it. Since 0.8.0.
+  hlášení", also its accessible description). The waiting item stays
+  reachable with the menu's arrows, so a screen reader reads the reason,
+  and pressing it does nothing; it now looks unavailable. Since 0.8.0.
 
 ## 0.8.0
 

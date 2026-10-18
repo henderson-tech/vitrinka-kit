@@ -116,6 +116,14 @@ test('Record waits while the card holds an unsent draft, names why, and returns 
   await expect(record).toBeDisabled();
   await expect(record).toHaveAccessibleDescription('Send or clear the report you started first');
   await expect(card.getByText('Send or clear the report you started first')).toBeVisible();
+  // The arrows still reach it, so the reason is heard; pressing it keeps the card and the draft.
+  await expect(card.getByRole('menuitem', { name: 'My reports', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(record).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(record).toBeVisible();
+  await expect(desc).toHaveValue('The export is empty');
   await menu.click();
   // The words alone gone: the picked word is still the reporter's.
   await desc.fill('');

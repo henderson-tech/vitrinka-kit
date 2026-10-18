@@ -759,7 +759,11 @@ export class ReportWidget {
     });
     on(e.mReports, 'click', fromMenu(() => void this.openReports()));
     on(e.mRecents, 'click', fromMenu(() => this.show('recents')));
-    on(e.mRecord, 'click', fromMenu(() => this.recordSwitch?.()));
+    const switchFace = fromMenu(() => this.recordSwitch?.());
+    // A waiting Record stays focusable so it can say why (paintAccount), so its press must do nothing: the menu stays open.
+    on(e.mRecord, 'click', () => {
+      if (!this.recordWaits()) switchFace();
+    });
     on(e.mSettings, 'click', fromMenu(() => this.show('settings')));
     on(e.mOpen, 'click', fromMenu(() => undefined));
     on(e.accPortal, 'click', fromMenu(() => undefined));
@@ -1642,11 +1646,15 @@ export class ReportWidget {
   /**
    * The card holds something the reporter made and has not sent: words in the
    * description or a mark's note (a note lives on its mark), a mark, the
-   * picked word for it, a file. Record unmounts the card (vt-8020 D8), so it
-   * waits while one exists.
+   * picked word for it, a file.
    */
   private hasDraft(): boolean {
     return this.e.desc.value.trim() !== '' || this.markers.length > 0 || this.kind !== null || this.files.length > 0;
+  }
+
+  /** Record unmounts this card for the pill (vt-8020 D8), so it waits while the card holds a draft or a report sending or waiting on Try again — the switch would lose it. */
+  private recordWaits(): boolean {
+    return this.sending || this.job !== null || this.hasDraft();
   }
 
   private async send(): Promise<void> {
@@ -1763,10 +1771,11 @@ export class ReportWidget {
     // Recording lives where the pill does: only a linked member gets it, its recents and the way to vitrinka.
     e.mRecents.hidden = !this.recordSwitch;
     e.mRecord.hidden = !this.recordSwitch;
-    // The switch unmounts this card (vt-8020 D8): never while it holds an unsent draft or a report sending or
-    // waiting on Try again, which would be lost with it — and the item says why it waits.
-    const waits = this.sending || this.job !== null || this.hasDraft();
-    e.mRecord.disabled = waits;
+    // A waiting Record says why (recordWaits). aria-disabled, never `disabled`: the menu's arrows still reach it,
+    // so a keyboard and screen-reader user hears the reason too; its click is guarded in bind().
+    const waits = this.recordWaits();
+    if (waits) e.mRecord.setAttribute('aria-disabled', 'true');
+    else e.mRecord.removeAttribute('aria-disabled');
     e.mRecordWhy.hidden = !waits;
     e.mRecordWhy.textContent = s.recordHasDraft;
     if (waits) e.mRecord.setAttribute('aria-describedby', e.mRecordWhy.id);
