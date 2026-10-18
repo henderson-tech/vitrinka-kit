@@ -103,6 +103,33 @@ export interface Strings {
   linkWaiting: string;
   linkExpired: string;
   linkFailed: string;
+  // -- attachments (vt-8020 D9): one line names the cap a file broke --
+  attach: string;
+  removeFile: (name: string) => string;
+  fileTooBig: (name: string, cap: string) => string;
+  tooManyFiles: (n: number) => string;
+  fileType: (name: string, types: string) => string;
+  /** The default caps' types as a person reads them (the rest show as configured). */
+  typeNames: { image: string; pdf: string; text: string };
+  incFiles: string;
+  errorFiles: string;
+  // -- moving the button, size and technical details (vt-8020 D9) --
+  moveHint: string;
+  size: string;
+  sizes: { sm: string; md: string; lg: string };
+  techDetails: string;
+  techVersion: string;
+  techWindow: string;
+  techCapture: string;
+  techBuffer: string;
+  techServer: string;
+  captureOn: string;
+  captureOff: string;
+  captureStarting: string;
+  bufferMemory: string;
+  bufferBrowser: string;
+  /** "5 minutes" for a capture window of `sec` seconds. */
+  windowLength: (sec: number) => string;
 }
 
 /** Czech plural: 1 · 2–4 · 5+ (and 0). */
@@ -201,6 +228,33 @@ const en: Strings = {
   linkWaiting: 'Waiting for approval…',
   linkExpired: 'The code expired.',
   linkFailed: 'Linking didn’t work.',
+  attach: 'Attach a file',
+  removeFile: (name) => `Remove ${name}`,
+  fileTooBig: (name, cap) => `${name} is over the ${cap} limit`,
+  tooManyFiles: (n) => (n === 1 ? 'Up to 1 file per report' : `Up to ${n} files per report`),
+  fileType: (name, types) => `${name} can’t be attached — ${types} only`,
+  typeNames: { image: 'images', pdf: 'PDF', text: 'text files' },
+  incFiles: 'The files you attached',
+  errorFiles: 'Your report arrived, a file not yet — try again to attach it',
+  moveHint: 'Drag it, or press Alt and an arrow key, to move it to another corner.',
+  size: 'Size',
+  sizes: { sm: 'Small', md: 'Medium', lg: 'Large' },
+  techDetails: 'Technical details',
+  techVersion: 'Version',
+  techWindow: 'Capture window',
+  techCapture: 'Capture',
+  techBuffer: 'Buffer',
+  techServer: 'Server',
+  captureOn: 'Running',
+  captureOff: 'Off',
+  captureStarting: 'Starting…',
+  bufferMemory: 'In memory',
+  bufferBrowser: 'In this browser',
+  windowLength: (sec) => {
+    if (sec < 60) return sec === 1 ? '1 second' : `${sec} seconds`;
+    const min = Math.round(sec / 60);
+    return min === 1 ? '1 minute' : `${min} minutes`;
+  },
 };
 
 const cs: Strings = {
@@ -294,6 +348,33 @@ const cs: Strings = {
   linkWaiting: 'Čekám na schválení…',
   linkExpired: 'Kód vypršel.',
   linkFailed: 'Propojení se nepodařilo.',
+  attach: 'Přiložit soubor',
+  removeFile: (name) => `Odebrat ${name}`,
+  fileTooBig: (name, cap) => `${name} přesahuje limit ${cap}`,
+  tooManyFiles: (n) => csPlural(n, 'Nejvýš 1 soubor na hlášení', `Nejvýš ${n} soubory na hlášení`, `Nejvýš ${n} souborů na hlášení`),
+  fileType: (name, types) => `${name} nelze přiložit — jen ${types}`,
+  typeNames: { image: 'obrázky', pdf: 'PDF', text: 'textové soubory' },
+  incFiles: 'Soubory, které jste přiložili',
+  errorFiles: 'Hlášení dorazilo, soubor zatím ne — zkuste to znovu a přiložíme ho',
+  moveHint: 'Přetáhněte ho, nebo stiskněte Alt a šipku, a přesune se do jiného rohu.',
+  size: 'Velikost',
+  sizes: { sm: 'Malá', md: 'Střední', lg: 'Velká' },
+  techDetails: 'Technické údaje',
+  techVersion: 'Verze',
+  techWindow: 'Okno záznamu',
+  techCapture: 'Záznam',
+  techBuffer: 'Vyrovnávací paměť',
+  techServer: 'Server',
+  captureOn: 'Běží',
+  captureOff: 'Vypnutý',
+  captureStarting: 'Spouští se…',
+  bufferMemory: 'V paměti',
+  bufferBrowser: 'V tomto prohlížeči',
+  windowLength: (sec) => {
+    if (sec < 60) return csPlural(sec, '1 sekunda', `${sec} sekundy`, `${sec} sekund`);
+    const min = Math.round(sec / 60);
+    return csPlural(min, '1 minuta', `${min} minuty`, `${min} minut`);
+  },
 };
 
 const CATALOGS: Readonly<Record<Locale, Strings>> = { cs, en };

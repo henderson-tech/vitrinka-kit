@@ -14,8 +14,13 @@ export interface Frame {
   /** The card's fixed size. */
   w: number;
   h: number;
-  /** Clear space kept at the top (the marking bar) and around the edges. */
+  /**
+   * Clear space kept at the top (the marking bar), at the bottom and at the
+   * sides — the widget takes them from where the card rests when marking
+   * starts, so starting never moves it.
+   */
   top: number;
+  bottom: number;
   edge: number;
 }
 
@@ -25,7 +30,7 @@ const PAD = 12;
 
 export function cornerRect(c: Corner, f: Frame): Rect {
   const x = c === 'br' || c === 'tr' ? f.vw - f.w - f.edge : f.edge;
-  const y = c === 'br' || c === 'bl' ? f.vh - f.h - f.edge : f.top;
+  const y = c === 'br' || c === 'bl' ? f.vh - f.h - f.bottom : f.top;
   return { x: Math.max(f.edge, x), y: Math.max(f.top, y), w: f.w, h: f.h };
 }
 

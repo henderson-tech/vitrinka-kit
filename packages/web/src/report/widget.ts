@@ -15,6 +15,12 @@
  *   selector. Until the first mark exists a coach card rides beside the
  *   pointer with a tiny loop of the gesture and the words "click, hold and
  *   move".
+ * - The reporter's files (vt-8020 D9, attachments.ts): 📎 in the card's foot,
+ *   paste or drop onto the card; chips above the foot, refused at once past
+ *   the project's caps, sent on the wire's attachment leg.
+ * - The button drags to any corner, or moves with Alt+arrows (drag.ts); the
+ *   card rests beside it. Settings adds the size (S · M · L, settings.ts)
+ *   and the technical details a support conversation asks for.
  * - Rendered once into the shared HUD host's shadow root (top layer,
  *   shielded, blocked from rrweb); `paint()` rewrites text and state in place,
  *   so a locale switch keeps the typed draft, the marks and their notes.
@@ -22,12 +28,16 @@
  */
 import { LinkExpired, type LinkStart, linkWorkspace, pollLink, startLink } from '@vitrinka/link';
 
-import { api } from '../recorder/api';
+import { api, VitrinkaApiError } from '../recorder/api';
 import { redactUrl } from '../recorder/capture/redact';
 import { clearLink, defaultLinkLabel, readLink, storeLink } from '../recorder/config';
 import { readRecents } from '../recorder/recents';
 import { createHudHost, createSheetHost, type HudHost, insideHud, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
+import { RECORDER_VERSION } from '../recorder/version';
+import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
+import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
+import { rememberDisplayMode } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
@@ -49,6 +59,7 @@ import { type Corner, cornerRect, type Frame, pickCorner } from './place';
 import type { CaptureNarrowing } from './profile';
 import { listMine, type MyReport, openSession, type ReporterSession, sessionLive } from './reader';
 import { noteSent, readSent } from './sent';
+import { readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
 import { ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
@@ -83,6 +94,8 @@ const MIN_KB_SIZE = 16;
 /** The one card's size (vt-8020 D10: it never changes between states) and the clear band the marking bar keeps at the top. */
 const CARD = { w: 380, h: 460 } as const;
 const BAR_CLEAR = 72;
+/** The gap a parked card keeps on a side it did not rest against. */
+const PARK_EDGE = 16;
 const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
   ArrowLeft: [-10, 0],
   ArrowRight: [10, 0],
@@ -184,6 +197,14 @@ function setLabel(el: HTMLElement, text: string): void {
   if (span) span.textContent = text;
 }
 
+/** A segmented control's sliding indicator under its picked segment (the marking bar's shapes, the settings' sizes); unmeasurable while hidden. */
+function placeIndicator(seg: HTMLElement, ind: HTMLElement, btn: HTMLElement | undefined): void {
+  if (!btn || !btn.offsetWidth) return;
+  ind.style.width = `${btn.offsetWidth}px`;
+  ind.style.transform = `translateX(${btn.offsetLeft}px)`;
+  seg.classList.add('measured');
+}
+
 /** A text field has the focus — its own editing keys (⌘Z included) are its. */
 function typing(): boolean {
   const el = deepActiveElement();
@@ -249,8 +270,15 @@ function buildDom(mount: HTMLElement) {
   const where = h('button', { class: 'where', type: 'button', 'aria-pressed': 'false' }, icon(ICON.pen), whereText);
   const send = h('button', { class: 'send', type: 'button' });
   const describe = h('div', { class: 'pane describe' }, kinds, prompt, desc, h('div', { class: 'lines-wrap' }, lines, linesEmpty), attached, included, notify, error);
-  // The bottom actions, the chat-input foot of the board's composer: attachments join `where` here.
-  const foot = h('div', { class: 'foot' }, where, send);
+  // The reporter's files (vt-8020 D9): 📎 opens the picker (paste and drop land on the card too);
+  // the chips sit in a tray above the foot that scrolls — the card never grows.
+  const attach = h('button', { class: 'icon', type: 'button' }, icon(ICON.clip));
+  const fileInput = h('input', { type: 'file', multiple: '', tabindex: '-1', 'aria-hidden': 'true', hidden: '' });
+  const fileNote = h('p', { class: 'file-note', role: 'status' });
+  const files = h('ul', { class: 'files' });
+  const tray = h('div', { class: 'tray' }, fileNote, files);
+  // The bottom actions, the chat-input foot of the board's composer: attachments, `where`, Send.
+  const foot = h('div', { class: 'foot' }, attach, fileInput, where, send);
 
   const bindLabel = h('span', { class: 'label', id: 'vr-bind-label' });
   const bindBtn = h('button', { class: 'bind', type: 'button', 'aria-pressed': 'false', 'aria-describedby': 'vr-bind-label' });
@@ -258,12 +286,24 @@ function buildDom(mount: HTMLElement) {
   const bindHint = h('p', { class: 'hint' });
   const bindReason = h('p', { class: 'reason', role: 'status' });
   const back = h('button', { class: 'link', type: 'button' });
+  // Size (vt-8020 D9): the marking bar's segmented control, its indicator sliding under the pick.
+  const sizeLabel = h('span', { class: 'label', id: 'vr-size-label' });
+  const sizeButtons = new Map<WidgetSize, HTMLButtonElement>();
+  for (const z of SIZES) sizeButtons.set(z, h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', 'data-size': z }));
+  const sizeInd = h('span', { class: 'seg-ind', 'aria-hidden': 'true' });
+  const sizeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': 'vr-size-label' }, sizeInd, ...sizeButtons.values());
+  // Technical details: read-only, for support conversations.
+  const techText = h('span');
+  const techBtn = h('button', { class: 'link', type: 'button', 'aria-expanded': 'false', 'aria-controls': 'vr-tech' }, techText, icon(ICON.chevron));
+  const tech = h('dl', { class: 'tech', id: 'vr-tech' });
   const settings = h(
     'div',
     { class: 'pane settings' },
     h('div', { class: 'row' }, bindLabel, bindBtn),
     bindReason,
     bindHint,
+    h('div', { class: 'row size-row' }, sizeLabel, sizeSeg),
+    h('div', { class: 'tech-wrap' }, techBtn, tech),
     h('div', { class: 'settings-foot' }, back, unbind),
   );
 
@@ -304,7 +344,7 @@ function buildDom(mount: HTMLElement) {
   const linking = h('div', { class: 'pane linking' }, linkBack, linkLabel, linkCode, h('div', { class: 'link-go' }, linkOpen, linkQr), linkHint, linkWait, linkRetry);
 
   const body = h('div', { class: 'body' }, describe, settings, sent, reports, recents, linking);
-  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, accountPop, morePop, body, foot);
+  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, accountPop, morePop, body, tray, foot);
 
   const ink = svgEl('svg', { class: 'ink', 'aria-hidden': 'true' });
   const defs = svgEl('defs', {});
@@ -356,7 +396,9 @@ function buildDom(mount: HTMLElement) {
     linking, linkBack, linkLabel, linkCode, linkOpen, linkOpenText, linkQr, linkHint, linkWait, linkRetry,
     describe, kinds, kindsLabel, kindButtons, prompt, desc, lines, linesEmpty, attached, attachedText, disclose, discloseText, included,
     notify, notifyBox, notifyText, error, where, whereText, send,
+    attach, fileInput, fileNote, files, tray,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
+    sizeLabel, sizeButtons, sizeInd, sizeSeg, techText, techBtn, tech,
     sent, sentTitle, sentBody, see, seeText, sentClose,
     mark, ink, shapes, draft, pins, coach, coachText, coachMore, coachKeys,
     toolbar, barLead, seg, segInd, toolButtons, toolLabels, cancel, ask, askText, discard, keep,
@@ -377,6 +419,13 @@ interface Line {
   el: HTMLLIElement;
   num: HTMLSpanElement;
   note: HTMLInputElement;
+  rm: HTMLButtonElement;
+}
+
+/** An attached file's chip: its name, its size, its ✕. */
+interface Chip {
+  el: HTMLLIElement;
+  size: HTMLSpanElement;
   rm: HTMLButtonElement;
 }
 
@@ -403,7 +452,8 @@ export class ReportWidget {
   private frozen: Frozen | null = null;
   private job: ReportJob | null = null;
   private sending = false;
-  private error: '' | 'create' | 'capture' = '';
+  /** Which leg a failed send stopped at: nothing reached the server, a file, or the replay. */
+  private error: '' | 'create' | 'files' | 'capture' = '';
   private result: SubmitReply | null = null;
   private notify = false;
   private sentNotify = false;
@@ -418,6 +468,23 @@ export class ReportWidget {
   private confirming = false;
   /** The corner the card is parked in once marking has moved it; null = its anchored place. */
   private parked: Corner | null = null;
+  /** The insets marking parks the card with, read where it rested when marking started (insetsAt). */
+  private parkInsets: Pick<Frame, 'top' | 'bottom' | 'edge'> | null = null;
+  /** The corner the button docks in (drag.ts); the card rests beside it and marking parks it from there. */
+  private dock: Corner = readDock();
+  private size: WidgetSize = readSize();
+  private techOpen = false;
+  /** A press on the button: it becomes a drag once it travels DRAG_THRESHOLD; `grab` is where the pointer holds it. */
+  private fabDrag: { pointer: number; start: Point; grab: Point; moved: boolean } | null = null;
+  /** The click that ends a drag is the drop, not a press of the button. */
+  private swallowClick = false;
+  /** The button's glide to its new corner, while it runs. */
+  private glide: AbortController | null = null;
+  /** The reporter's attachments (vt-8020 D9), in the order added, and the reason the last refused one got. */
+  private files: File[] = [];
+  private fileRefusal: Refusal | null = null;
+  private pastes = 0;
+  private readonly chips = new Map<File, Chip>();
   /** Swaps this widget for the recorder pill; set only for a linked member (setRecordSwitch). */
   private recordSwitch: (() => void) | null = null;
   private menu: Popover | null = null;
@@ -596,7 +663,73 @@ export class ReportWidget {
     const on = <K extends keyof HTMLElementEventMap>(el: HTMLElement, type: K, fn: (ev: HTMLElementEventMap[K]) => void) => {
       el.addEventListener(type, fn);
     };
-    on(e.fab, 'click', () => (this.isOpen ? this.close() : this.open()));
+    on(e.fab, 'click', () => {
+      if (this.swallowClick) {
+        this.swallowClick = false;
+        return;
+      }
+      if (this.isOpen) this.close();
+      else this.open();
+    });
+    // The button moves to any corner (vt-8020 D9): dragged, or Alt+arrows while it has the focus.
+    on(e.fab, 'pointerdown', (ev) => this.fabDown(ev));
+    on(e.fab, 'pointermove', (ev) => this.fabMove(ev));
+    on(e.fab, 'pointerup', (ev) => this.fabUp(ev, true));
+    on(e.fab, 'pointercancel', (ev) => this.fabUp(ev, false));
+    on(e.fab, 'keydown', (ev) => {
+      if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      const next = cornerToward(this.dock, ev.key);
+      if (!next) return;
+      ev.preventDefault(); // Alt+← is the browser's Back
+      if (next !== this.dock) this.moveDock(next);
+    });
+    on(e.attach, 'click', () => e.fileInput.click());
+    on(e.fileInput, 'change', () => {
+      this.addFiles([...(e.fileInput.files ?? [])]);
+      e.fileInput.value = ''; // the same file picked again is a new pick
+    });
+    // A pasted or dropped file joins the attachments; pasted or dropped text stays the field's.
+    on(e.card, 'paste', (ev) => {
+      const pasted = [...(ev.clipboardData?.files ?? [])];
+      if (!pasted.length || !this.canAttach()) return;
+      ev.preventDefault();
+      this.addFiles(
+        pasted.map((f) => {
+          const name = pastedName(f.name, ++this.pastes);
+          return name === f.name ? f : new File([f], name, { type: f.type, lastModified: f.lastModified });
+        }),
+      );
+    });
+    on(e.card, 'dragover', (ev) => {
+      if (!ev.dataTransfer?.types.includes('Files') || !this.canAttach()) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+      e.card.classList.add('dropping');
+    });
+    on(e.card, 'dragleave', (ev) => {
+      if (ev.relatedTarget instanceof Node && e.card.contains(ev.relatedTarget)) return;
+      e.card.classList.remove('dropping');
+    });
+    on(e.card, 'drop', (ev) => {
+      e.card.classList.remove('dropping');
+      const dropped = [...(ev.dataTransfer?.files ?? [])];
+      if (!dropped.length || !this.canAttach()) return;
+      ev.preventDefault();
+      this.addFiles(dropped);
+    });
+    for (const [z, btn] of e.sizeButtons) {
+      on(btn, 'click', () => {
+        this.size = z;
+        writePref(SIZE_KEY, z);
+        this.paint();
+        // A parked card is placed by its painted size: re-place it at the new one.
+        if (this.parked) this.placeCard();
+      });
+    }
+    on(e.techBtn, 'click', () => {
+      this.techOpen = !this.techOpen;
+      this.paint();
+    });
     on(e.closeBtn, 'click', () => this.close());
     on(e.whoBtn, 'click', () => this.toggleMenu('account'));
     on(e.more, 'click', () => this.toggleMenu('more'));
@@ -813,15 +946,15 @@ export class ReportWidget {
     first?.focus();
   }
 
-  /** The host's signed token traded once for a reporter session; renewed only when it is about to lapse. */
-  private async refreshWho(): Promise<void> {
+  /** The host's signed token traded once for a reporter session; renewed only when it is about to lapse. Answers the session in force. */
+  private async refreshWho(): Promise<ReporterSession | null> {
     const who = this.who();
     if (!who || !('token' in who)) {
       this.session = null;
       this.sessionToken = '';
-      return;
+      return null;
     }
-    if (this.sessionToken === who.token && sessionLive(this.session)) return;
+    if (this.sessionToken === who.token && sessionLive(this.session)) return this.session;
     this.sessionToken = who.token;
     try {
       this.session = await openSession(this.target(), who.token);
@@ -830,6 +963,7 @@ export class ReportWidget {
       console.warn('vitrinka: the reporter session could not be opened — My reports shows this browser’s reports only', e);
     }
     this.paint();
+    return this.session;
   }
 
   private async refreshMember(): Promise<void> {
@@ -842,10 +976,15 @@ export class ReportWidget {
       return;
     }
     try {
-      const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string } }>('GET', '/api/v1/recorder/me', undefined, {
-        target: { url: this.opts.base, key: link.token },
-      });
+      const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
+        'GET',
+        '/api/v1/recorder/me',
+        undefined,
+        { target: { url: this.opts.base, key: link.token } },
+      );
       this.member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
+      // A dev-mode member starts on the pill next mount (face.ts startFace).
+      rememberDisplayMode(me.displayMode);
     } catch (e) {
       console.warn('vitrinka: the linked vitrinka account could not be read', e);
       this.member = { email: '', name: '', workspace: link.workspace };
@@ -855,8 +994,8 @@ export class ReportWidget {
 
   private async openReports(): Promise<void> {
     this.show('reports');
-    await this.refreshWho();
-    if (!this.session) {
+    const session = await this.refreshWho();
+    if (!session) {
       this.mine = { rows: [], state: 'ok' };
       this.paint();
       return;
@@ -864,12 +1003,26 @@ export class ReportWidget {
     this.mine = { rows: [], state: 'loading' };
     this.paint();
     try {
-      this.mine = { rows: (await listMine(this.target(), this.session.session)).reports, state: 'ok' };
+      this.mine = { rows: await this.listMineRenewing(session), state: 'ok' };
     } catch (e) {
       console.warn('vitrinka: My reports could not be loaded', e);
       this.mine = { rows: [], state: 'failed' };
     }
     this.paint();
+  }
+
+  /** My reports; a 401 means the reporter session lapsed or the host's key rotated: trade the token again, then ask once more. */
+  private async listMineRenewing(session: ReporterSession): Promise<MyReport[]> {
+    try {
+      return (await listMine(this.target(), session.session)).reports;
+    } catch (e) {
+      if (!(e instanceof VitrinkaApiError) || e.status !== 401) throw e;
+      this.session = null;
+      this.sessionToken = '';
+      const renewed = await this.refreshWho();
+      if (!renewed) throw e;
+      return (await listMine(this.target(), renewed.session)).reports;
+    }
   }
 
   /** The pill's member link (vt-8020 D3): a code approved in vitrinka mints this browser's own recorder key. */
@@ -891,7 +1044,8 @@ export class ReportWidget {
           workspace,
           signal: flow.abort.signal,
         });
-        storeLink(linked);
+        // The link names the vitrinka it belongs to: face.ts offers the pill only on that base.
+        storeLink({ ...linked, base });
         this.linkFlow = null;
         this.show('describe');
         await this.refreshMember();
@@ -968,6 +1122,147 @@ export class ReportWidget {
     this.paint();
   }
 
+  // -- the reporter's files (vt-8020 D9) ---------------------------------------
+
+  /** Files join while the report is being written — not while it is on its way (Retry sends it as it was). */
+  private canAttach(): boolean {
+    return this.isOpen && this.view === 'describe' && !this.sending && !this.job?.id;
+  }
+
+  private caps(): AttachmentCaps {
+    return this.config?.attachments ?? DEFAULT_ATTACHMENT_CAPS;
+  }
+
+  private addFiles(incoming: readonly File[]): void {
+    if (!incoming.length) return;
+    const { files, refusal } = admit(this.files, incoming, this.caps());
+    this.files = [...this.files, ...files];
+    this.fileRefusal = refusal;
+    this.renderFiles();
+    this.paint();
+  }
+
+  private removeFile(f: File): void {
+    this.files = this.files.filter((x) => x !== f);
+    this.fileRefusal = null;
+    this.renderFiles();
+    this.paint();
+    // Its ✕ is gone: the focus goes to 📎, never lost to <body>.
+    this.e.attach.focus();
+  }
+
+  /** One chip per file, built once; paint() writes their sizes and labels. */
+  private renderFiles(): void {
+    const live = new Set(this.files);
+    for (const [f, chip] of this.chips) {
+      if (live.has(f)) continue;
+      chip.el.remove();
+      this.chips.delete(f);
+    }
+    for (const f of this.files) {
+      if (this.chips.has(f)) continue;
+      const size = h('span', { class: 'file-size' });
+      const rm = h('button', { class: 'ln-x', type: 'button' }, icon(ICON.close));
+      const el = h('li', { class: 'file' }, h('span', { class: 'file-name' }, f.name), size, rm);
+      rm.addEventListener('click', () => this.removeFile(f));
+      this.e.files.append(el);
+      this.chips.set(f, { el, size, rm });
+    }
+  }
+
+  /** The one line a refused file gets: the cap it broke, by name. */
+  private refusalText(r: Refusal | null): string {
+    const s = this.s;
+    if (!r) return '';
+    if (r.kind === 'size') return s.fileTooBig(r.name, formatBytes(r.cap, this.locale));
+    if (r.kind === 'count') return s.tooManyFiles(r.cap);
+    return s.fileType(r.name, typesLabel(this.caps().types, s.typeNames, this.locale));
+  }
+
+  // -- the button's corner (vt-8020 D9) ---------------------------------------
+
+  private fabDown(ev: PointerEvent): void {
+    this.swallowClick = false;
+    if (ev.button !== 0 || !ev.isPrimary) return;
+    const r = this.e.fab.getBoundingClientRect();
+    this.fabDrag = { pointer: ev.pointerId, start: { x: ev.clientX, y: ev.clientY }, grab: { x: ev.clientX - r.left, y: ev.clientY - r.top }, moved: false };
+    try {
+      this.e.fab.setPointerCapture(ev.pointerId);
+    } catch {
+      // a synthetic pointer: no capture needed
+    }
+  }
+
+  /** Past the threshold the press is a drag: the button rides the pointer, inside the viewport. */
+  private fabMove(ev: PointerEvent): void {
+    const d = this.fabDrag;
+    if (!d || ev.pointerId !== d.pointer) return;
+    if (!d.moved && Math.hypot(ev.clientX - d.start.x, ev.clientY - d.start.y) < DRAG_THRESHOLD) return;
+    d.moved = true;
+    const fab = this.e.fab;
+    fab.classList.add('dragging');
+    const r = fab.getBoundingClientRect();
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    const s = fab.style;
+    s.left = `${Math.min(Math.max(0, ev.clientX - d.grab.x), vw - r.width)}px`;
+    s.top = `${Math.min(Math.max(0, ev.clientY - d.grab.y), vh - r.height)}px`;
+    s.right = 'auto';
+    s.bottom = 'auto';
+  }
+
+  /** A drop docks the button in the nearest corner (a cancelled drag goes home); a press that never travelled stays a click. */
+  private fabUp(ev: PointerEvent, drop: boolean): void {
+    const d = this.fabDrag;
+    if (!d || ev.pointerId !== d.pointer) return;
+    this.fabDrag = null;
+    if (!d.moved) return;
+    const fab = this.e.fab;
+    const at = fab.getBoundingClientRect();
+    fab.classList.remove('dragging');
+    for (const p of ['left', 'top', 'right', 'bottom']) fab.style.removeProperty(p);
+    // The click this pointerup is about to fire is the drop; a click that never comes must not eat the next one.
+    this.swallowClick = true;
+    setTimeout(() => {
+      this.swallowClick = false;
+    }, 0);
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    this.moveDock(drop ? nearestCorner({ x: at.left + at.width / 2, y: at.top + at.height / 2 }, vw, vh) : this.dock, at);
+  }
+
+  /** Docks the button in `c` and remembers it; it glides there from `from` (the drop point, else where it was). */
+  private moveDock(c: Corner, from?: DOMRect): void {
+    const fab = this.e.fab;
+    const before = from ?? fab.getBoundingClientRect();
+    this.dock = c;
+    saveDock(c);
+    this.paint();
+    if (fab.hidden || reducedMotion()) return;
+    const after = fab.getBoundingClientRect();
+    const dx = before.left - after.left;
+    const dy = before.top - after.top;
+    if (!dx && !dy) return;
+    // FLIP: start where it was, then let the placement transition carry it home.
+    this.glide?.abort();
+    const glide = new AbortController();
+    this.glide = glide;
+    fab.classList.remove('gliding');
+    fab.style.setProperty('translate', `${dx}px ${dy}px`);
+    void fab.offsetWidth;
+    fab.classList.add('gliding');
+    fab.style.setProperty('translate', '0px 0px');
+    // Only this glide's own end: the hover lift transitions too, and a newer glide replaces this one.
+    const done = (ev: TransitionEvent) => {
+      if (ev.propertyName !== 'translate') return;
+      glide.abort();
+      fab.classList.remove('gliding');
+      fab.style.removeProperty('translate');
+    };
+    fab.addEventListener('transitionend', done, { signal: glide.signal });
+    fab.addEventListener('transitioncancel', done, { signal: glide.signal });
+  }
+
   // -- marking --------------------------------------------------------------
 
   private startMarking(): void {
@@ -975,7 +1270,11 @@ export class ReportWidget {
     this.marking = true;
     this.confirming = false;
     this.passKeys = new Set(this.markers.map((m) => m.key));
-    this.parked ??= 'br';
+    // Marking parks the card from where it is (beside the button's dock, or a corner an earlier pass
+    // chose), with the insets it has there: starting never moves it — only a mark landing under it does.
+    const corner = this.parked ?? this.dock;
+    this.parkInsets = this.insetsAt(corner, this.e.card.getBoundingClientRect());
+    this.parked = corner;
     this.renderMarks();
     this.paint();
     this.placeCard();
@@ -1006,10 +1305,30 @@ export class ReportWidget {
     this.e.discard.focus();
   }
 
+  /**
+   * The card's live insets in `corner` (the nearer side, and the bottom or the top — never above the
+   * marking bar's band), the far side at the default: `cornerRect(corner)` is then exactly where it is.
+   */
+  private insetsAt(corner: Corner, r: DOMRect): Pick<Frame, 'top' | 'bottom' | 'edge'> {
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    const bar = BAR_CLEAR * SIZE_SCALE[this.size];
+    const atBottom = corner === 'br' || corner === 'bl';
+    return {
+      edge: Math.max(0, Math.min(r.left, vw - r.right)),
+      top: atBottom ? bar : Math.max(bar, r.top),
+      bottom: atBottom ? Math.max(0, vh - r.bottom) : PARK_EDGE,
+    };
+  }
+
+  /** The card's box as painted (the size setting scales it, styles: `--vr-scale`) and the insets marking parks it with. */
   private frame(): Frame {
     const vw = globalThis.innerWidth || 800;
     const vh = globalThis.innerHeight || 600;
-    return { vw, vh, w: Math.min(CARD.w, vw - 32), h: Math.min(CARD.h, vh - BAR_CLEAR - 16), top: BAR_CLEAR, edge: 16 };
+    const k = SIZE_SCALE[this.size];
+    const insets = this.parkInsets ?? { top: BAR_CLEAR * k, bottom: PARK_EDGE, edge: PARK_EDGE };
+    const r = this.e.card.getBoundingClientRect();
+    return { vw, vh, w: r.width || Math.min(CARD.w * k, vw - 32), h: r.height || Math.min(CARD.h * k, vh - insets.top - insets.bottom), ...insets };
   }
 
   /** Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`). */
@@ -1026,6 +1345,7 @@ export class ReportWidget {
 
   private unpark(): void {
     this.parked = null;
+    this.parkInsets = null;
     this.e.card.classList.remove('parked');
     this.e.card.style.removeProperty('left');
     this.e.card.style.removeProperty('top');
@@ -1033,11 +1353,7 @@ export class ReportWidget {
 
   /** The segmented control's indicator under the picked shape. */
   private placeSeg(): void {
-    const btn = this.e.toolButtons.get(this.tool);
-    if (!btn || !btn.offsetWidth) return;
-    this.e.segInd.style.width = `${btn.offsetWidth}px`;
-    this.e.segInd.style.transform = `translateX(${btn.offsetLeft}px)`;
-    this.e.seg.classList.add('measured');
+    placeIndicator(this.e.seg, this.e.segInd, this.e.toolButtons.get(this.tool));
   }
 
   private onChrome(t: EventTarget | null): boolean {
@@ -1287,7 +1603,7 @@ export class ReportWidget {
               return EMPTY_CAPTURE;
             })
           : EMPTY_CAPTURE;
-        this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key });
+        this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key }, this.files);
       }
       this.result = await this.job.run(this.envelope(description, this.job.capture));
       noteSent(this.opts.base, globalThis.location?.host ?? '', {
@@ -1307,11 +1623,14 @@ export class ReportWidget {
       this.notify = false;
       this.e.notifyBox.checked = false;
       this.includedOpen = false;
+      this.files = [];
+      this.fileRefusal = null;
       this.renderMarks();
+      this.renderFiles();
       this.engine?.clear();
     } catch (e) {
       console.warn('vitrinka: the report did not go through — Retry resumes it', e);
-      this.error = this.job?.id ? 'capture' : 'create';
+      this.error = !this.job?.id ? 'create' : this.job.filesPending ? 'files' : 'capture';
     } finally {
       this.sending = false;
       this.paint();
@@ -1333,6 +1652,7 @@ export class ReportWidget {
     items.push(s.incEnv);
     if (this.who()) items.push(s.incIdentity);
     if (this.markers.length) items.push(s.incMarks);
+    if (this.files.length) items.push(s.incFiles);
     return items;
   }
 
@@ -1432,15 +1752,57 @@ export class ReportWidget {
     e.linkRetry.textContent = s.retry;
   }
 
+  /** 📎, the picker's types, the tray of chips and the refusal line — the tray shows only while there is something in it. */
+  private paintFiles(): void {
+    const { e, s } = this;
+    const locked = this.sending || Boolean(this.job?.id);
+    e.attach.setAttribute('aria-label', s.attach);
+    e.attach.disabled = locked;
+    e.fileInput.setAttribute('accept', this.caps().types.join(','));
+    e.tray.hidden = this.view !== 'describe' || (this.files.length === 0 && !this.fileRefusal);
+    e.files.hidden = this.files.length === 0;
+    e.files.setAttribute('aria-label', s.incFiles);
+    e.fileNote.hidden = !this.fileRefusal;
+    e.fileNote.textContent = this.refusalText(this.fileRefusal);
+    for (const [f, chip] of this.chips) {
+      chip.size.textContent = formatBytes(f.size, this.locale);
+      chip.rm.setAttribute('aria-label', s.removeFile(f.name));
+      chip.rm.disabled = locked;
+    }
+  }
+
+  /** Size and technical details (vt-8020 D9); the size indicator is measured once the pane shows. */
+  private paintSettings(): void {
+    const { e, s } = this;
+    e.sizeLabel.textContent = s.size;
+    for (const [z, btn] of e.sizeButtons) {
+      btn.textContent = s.sizes[z];
+      btn.setAttribute('aria-checked', String(this.size === z));
+    }
+    e.techText.textContent = s.techDetails;
+    e.techBtn.setAttribute('aria-expanded', String(this.techOpen));
+    e.tech.hidden = !this.techOpen;
+    if (this.techOpen && this.view === 'settings') {
+      const rows = techDetails({ version: RECORDER_VERSION, base: this.opts.base, config: this.config, engine: this.engine !== null, locale: this.locale }, s);
+      e.tech.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+    }
+    if (this.view === 'settings') placeIndicator(e.sizeSeg, e.sizeInd, e.sizeButtons.get(this.size));
+  }
+
   private paint(): void {
     const { e, s } = this;
     const who = this.who();
     e.root.setAttribute('lang', this.locale);
     e.root.classList.toggle('nobutton', !this.button);
+    // The dock and the size (vt-8020 D9): the stylesheet places and scales everything from these two.
+    e.root.dataset.dock = this.dock;
+    e.root.style.setProperty('--vr-scale', String(SIZE_SCALE[this.size]));
 
     e.fab.hidden = !this.button || this.marking;
     e.fabLabel.textContent = s.button;
     e.fab.setAttribute('aria-expanded', String(this.isOpen));
+    e.fab.setAttribute('aria-description', s.moveHint);
+    e.fab.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight');
     e.fabKbd.hidden = !this.keybind;
     e.fabKbd.textContent = this.keybind ? keybindLabel(this.keybind) : '';
 
@@ -1460,6 +1822,7 @@ export class ReportWidget {
     if (this.view === 'recents') this.paintRecents();
     if (this.view === 'link') this.paintLink();
     e.foot.hidden = this.view !== 'describe';
+    this.paintFiles();
 
     e.kindsLabel.textContent = s.kindsLabel;
     for (const [kind, btn] of e.kindButtons) {
@@ -1487,7 +1850,7 @@ export class ReportWidget {
     e.notify.hidden = who === null;
     e.notifyText.textContent = s.notify;
     e.error.hidden = this.error === '';
-    e.error.textContent = this.error === 'create' ? s.errorCreate : this.error === 'capture' ? s.errorCapture : '';
+    e.error.textContent = { '': '', create: s.errorCreate, files: s.errorFiles, capture: s.errorCapture }[this.error];
     e.whereText.textContent = s.showWhere;
     e.where.setAttribute('aria-pressed', String(this.marking));
     e.where.disabled = this.sending || Boolean(this.job?.id);
@@ -1504,6 +1867,7 @@ export class ReportWidget {
     e.bindReason.hidden = !this.bindRefused;
     e.bindReason.textContent = this.bindRefused ? s.needModifier : '';
     e.back.textContent = s.back;
+    this.paintSettings();
 
     e.sentTitle.textContent = s.sentTitle;
     // Filed or waiting: an unsigned report is checked by the team before it is filed, and says so.
@@ -1539,8 +1903,9 @@ export class ReportWidget {
       for (const label of e.shapes.querySelectorAll('.veil-label')) {
         if (label.textContent) label.textContent = s.hidden;
       }
-      this.renderPins();
     }
+    // Always: the note lines live in the card, so their labels follow the locale outside marking too.
+    this.renderPins();
   }
 }
 

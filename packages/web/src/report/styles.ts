@@ -19,6 +19,12 @@ export const REPORT_CSS = `
   --dur-fast: 250ms;
   --dur-slow: 400ms;
   --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Size (vt-8020 D9, settings.ts): ONE factor, written by the widget, scales the button, the card and
+     the marking bar — fonts and boxes together — each from its anchored corner. */
+  --vr-scale: 1;
+  /* The dock: the gap to the viewport edge, and where the card rests — clear of the button above or below it. */
+  --edge: 24px;
+  --lift: calc(var(--edge) + 72px * var(--vr-scale));
   font: 400 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
@@ -35,7 +41,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 /* -- the floating button -------------------------------------------------- */
 .fab {
-  position: fixed; right: 24px; bottom: 24px;
+  position: fixed; right: var(--edge); bottom: var(--edge);
+  scale: var(--vr-scale); transform-origin: 100% 100%;
+  /* A press can become a drag to another corner: the page never scrolls under it. */
+  touch-action: none;
   display: inline-flex; align-items: center; gap: 12px;
   padding: 15px 22px; border: 0; border-radius: 999px;
   background: #131216; color: #fff;
@@ -54,19 +63,35 @@ kbd {
 
 /* -- the card: ONE size from drafting to thanks (vt-8020 D10) ---------------- */
 .card {
-  position: fixed; right: 24px; bottom: 96px;
+  position: fixed; right: var(--edge); bottom: var(--lift);
   display: flex; flex-direction: column;
-  width: min(380px, calc(100vw - 32px));
-  height: min(460px, calc(100vh - 120px));
+  /* The box is divided by the scale so the painted card (scale × box) still fits the viewport. */
+  width: min(380px, calc((100vw - 32px) / var(--vr-scale)));
+  height: min(460px, calc((100vh - var(--lift) - var(--edge)) / var(--vr-scale)));
+  scale: var(--vr-scale); transform-origin: 100% 100%;
   background: var(--bg); color: var(--ink);
   border: 1px solid rgba(255, 255, 255, .08); border-radius: 16px;
   box-shadow: 0 28px 70px rgba(0, 0, 0, .38), 0 2px 8px rgba(0, 0, 0, .2);
   pointer-events: auto;
   animation: vr-in .16s ease-out;
 }
-.vr.nobutton .card { bottom: 24px; }
-/* Parked by marking: placed by left/top, it glides once to a corner clear of the marks. */
-.card.parked { right: auto; bottom: auto; height: min(460px, calc(100vh - 88px)); transition: left var(--dur-slow) var(--ease-smooth-out), top var(--dur-slow) var(--ease-smooth-out); }
+.vr.nobutton .card { bottom: var(--edge); }
+/* The dock (vt-8020 D9, drag.ts): the button in any corner; the card rests beside it — above it at the
+   bottom, below it at the top — and both scale from that corner. */
+.vr[data-dock$="l"] .fab, .vr[data-dock$="l"] .card { right: auto; left: var(--edge); }
+.vr[data-dock^="t"] .fab { bottom: auto; top: var(--edge); }
+.vr[data-dock^="t"] .card { bottom: auto; top: var(--lift); }
+.vr.nobutton[data-dock^="t"] .card { top: var(--edge); }
+.vr[data-dock="bl"] .fab, .vr[data-dock="bl"] .card { transform-origin: 0 100%; }
+.vr[data-dock="tr"] .fab, .vr[data-dock="tr"] .card { transform-origin: 100% 0; }
+.vr[data-dock="tl"] .fab, .vr[data-dock="tl"] .card { transform-origin: 0 0; }
+/* Dragged, the button rides the pointer by its left/top; dropped, it glides into its corner (FLIP on translate). */
+.vr .fab.dragging { transform-origin: 0 0; transition: none; cursor: grabbing; }
+.fab.gliding { transition: translate var(--dur-slow) var(--ease-smooth-out), transform .14s ease, box-shadow .14s ease; }
+/* Parked by marking: placed by left/top where it already is (place.ts, from its painted box) — the same size,
+   so starting to mark never moves it; it glides once to a corner clear of the marks. */
+.card.parked { right: auto; bottom: auto; transition: left var(--dur-slow) var(--ease-smooth-out), top var(--dur-slow) var(--ease-smooth-out); }
+.vr .card.parked { transform-origin: 0 0; }
 @keyframes vr-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .head {
   position: relative; flex: none; display: flex; align-items: center; gap: 4px;
@@ -198,6 +223,18 @@ a.row:hover { background: var(--faint); }
 /* The bottom actions: attachments and Show us where on the left, Send on the right. */
 .foot { flex: none; display: flex; align-items: center; gap: 4px; padding: 10px 12px 12px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .foot .send { margin-left: auto; }
+.icon:disabled { opacity: .45; cursor: default; background: transparent; color: var(--dim); }
+/* Attached files (vt-8020 D9): chips in a tray above the foot — it scrolls, the card never grows. */
+.tray { flex: none; max-height: 84px; overflow: auto; padding: 9px 12px 0; border-top: 1px solid rgba(255, 255, 255, .07); }
+.tray:not([hidden]) + .foot { border-top: 0; }
+.file-note { margin: 0 0 7px; color: #ffc1ca; font-size: 12.5px; }
+.files { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.file { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; height: 28px; padding: 0 2px 0 10px; border-radius: 8px; background: rgba(242, 241, 239, .07); font-size: 12.5px; }
+.file-name { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.file-size { flex: none; color: var(--dim); }
+.file .ln-x { width: 22px; height: 22px; }
+/* A file dragged over the card: it will land here. */
+.card.dropping { outline: 2px dashed rgba(242, 241, 239, .5); outline-offset: -7px; }
 .where {
   display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, .2); background: transparent; color: var(--ink);
@@ -215,8 +252,15 @@ a.row:hover { background: var(--faint); }
 .send:disabled { opacity: .45; cursor: default; }
 
 /* -- settings --------------------------------------------------------------- */
-.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.row .label { font-weight: 600; }
+/* Scoped to the pane: a bare .row would restyle the lists' rows (their grid) above. */
+.settings .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings .label { font-weight: 600; }
+.size-row { margin-top: 18px; }
+.size-row .seg button { padding: 0 12px; font-size: 13px; }
+.tech-wrap { margin-top: 18px; }
+.tech { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-deep); font-size: 12.5px; }
+.tech dt { color: var(--dim); }
+.tech dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .bind {
   min-width: 120px; padding: 8px 12px; border-radius: 9px; text-align: center;
   border: 1px solid rgba(255, 255, 255, .2); background: var(--bg-deep);
@@ -267,7 +311,9 @@ a.row:hover { background: var(--faint); }
 
 /* The marking bar (vt-8020 D6): translucent glass at the top, the shape as a segmented control. */
 .tb {
-  position: fixed; left: 50%; top: 14px; transform: translateX(-50%);
+  /* translate (not transform): it applies after the scale, so the scaled bar stays centred. */
+  position: fixed; left: 50%; top: 14px; translate: -50% 0;
+  scale: var(--vr-scale); transform-origin: 50% 0;
   display: flex; align-items: center; gap: 4px; padding: 5px;
   border-radius: 14px; border: 1px solid rgba(255, 255, 255, .08);
   background: rgba(30, 29, 34, .68);
@@ -326,10 +372,9 @@ a.row:hover { background: var(--faint); }
 @keyframes vr-hold { 0%, 8% { opacity: 0; } 14%, 72% { opacity: .9; } 80%, 100% { opacity: 0; } }
 
 @media (max-width: 520px) {
-  .fab { right: 16px; bottom: 16px; padding: 13px 18px; font-size: 16px; }
-  .card { right: 16px; bottom: 84px; }
-  .vr.nobutton .card { bottom: 16px; }
-  .tb { max-width: calc(100vw - 16px); overflow-x: auto; }
+  .vr { --edge: 16px; --lift: calc(var(--edge) + 68px * var(--vr-scale)); }
+  .fab { padding: 13px 18px; font-size: 16px; }
+  .tb { max-width: calc((100vw - 16px) / var(--vr-scale)); overflow-x: auto; }
   .tb-lead { display: none; }
   .seg button { padding: 0 9px; }
   .coach { width: 260px; }
@@ -338,7 +383,7 @@ a.row:hover { background: var(--faint); }
   .card { animation: none; }
   .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm { transition: none; }
   .card.busy .head::after { animation: none; }
-  .fab { transition: none; }
+  .fab, .fab.gliding { transition: none; }
   .coach .loop { animation: none; stroke-dashoffset: 0; }
   .coach .hold { animation: none; opacity: .9; }
 }
