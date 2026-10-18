@@ -22,6 +22,21 @@ jobs:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'skip-ci'))
     runs-on: [self-hosted, vitrinka-kit-ci]
     steps:
+      # A bridge runner cannot reach the VM's loopback Actions cache, so
+      # setup-bun's cache talks to GitHub directly. The patched runner hands
+      # GitHub's results endpoint only to JavaScript actions, as
+      # ACTIONS_RESULTS_ORL; this step exports it before setup-bun needs it.
+      - name: Runner network
+        id: runner
+        run: echo "network=${CI_JIT_RUNNER_NETWORK:-host}" >> "$GITHUB_OUTPUT"
+      - name: GitHub results endpoint (bridge runner)
+        if: steps.runner.outputs.network == 'bridge'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const url = process.env.ACTIONS_RESULTS_ORL
+            if (!url) throw new Error('bridge runner: the patched runner exposed no ACTIONS_RESULTS_ORL')
+            core.exportVariable('ACTIONS_RESULTS_URL', url)
       - uses: actions/checkout@v4
       # The lane image bakes bun 1.3.14; with it present this only verifies.
       - uses: oven-sh/setup-bun@v2
@@ -48,6 +63,17 @@ jobs:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'skip-ci'))
     runs-on: [self-hosted, vitrinka-kit-ci]
     steps:
+      - name: Runner network
+        id: runner
+        run: echo "network=${CI_JIT_RUNNER_NETWORK:-host}" >> "$GITHUB_OUTPUT"
+      - name: GitHub results endpoint (bridge runner)
+        if: steps.runner.outputs.network == 'bridge'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const url = process.env.ACTIONS_RESULTS_ORL
+            if (!url) throw new Error('bridge runner: the patched runner exposed no ACTIONS_RESULTS_ORL')
+            core.exportVariable('ACTIONS_RESULTS_URL', url)
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -55,7 +81,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run --filter '@vitrinka/redact' build && bun run --filter '@vitrinka/link' build
       # The lane image bakes Chromium's system libraries, and --with-deps would
-      # apt-get them again on every job; the browser itself comes from the
-      # lane's cached PLAYWRIGHT_BROWSERS_PATH.
+      # apt-get them again on every job. The public lane keeps no cache, so
+      # the browser itself downloads per job.
       - run: bunx playwright install chromium
       - run: bun run test:e2e:web
