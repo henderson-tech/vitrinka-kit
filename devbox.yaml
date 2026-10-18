@@ -1,25 +1,53 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/henderson-tech/devbox-schema/main/v2/devbox.schema.json
+version: 2
 project: vitrinka-kit
-
 system_packages:
   apt:
     - zip
     - unzip
-
-apps:
+checkouts:
   kit:
-    cmd: "bun apps/extension/e2e/fixture.ts --port {port:web}"
-    ports: [web]
-    sync: .
-    sync_ignores: &ignores
+    from: .
+    sync_ignores:
       - .env
       - .env.*
       - "!.env.example"
       - test-results
       - playwright-report
       - .vitrinka
-    deps: &deps
-      key: [bun.lock, package.json, "packages/*/package.json"]
-      cmd: "bun install --frozen-lockfile"
+    deps:
+      - key: [bun.lock, package.json, "packages/*/package.json"]
+        cmd: "bun install --frozen-lockfile"
+  hud:
+    from: .
+    sync_ignores:
+      - .env
+      - .env.*
+      - "!.env.example"
+      - test-results
+      - playwright-report
+      - .vitrinka
+    deps:
+      - key: [bun.lock, package.json, "packages/*/package.json"]
+        cmd: "bun install --frozen-lockfile"
+  report:
+    from: .
+    home: true
+    sync_ignores:
+      - .env
+      - .env.*
+      - "!.env.example"
+      - test-results
+      - playwright-report
+      - .vitrinka
+    deps:
+      - key: [bun.lock, package.json, "packages/*/package.json"]
+        cmd: "bun install --frozen-lockfile"
+apps:
+  kit:
+    cmd: "bun apps/extension/e2e/fixture.ts --port {port:web}"
+    ports: [web]
+    ready: none
   # The web-recorder fixture the browser suite drives (packages/web/e2e), for
   # hand-testing the shared HUD: `devbox url` → open it, start a recording.
   # The fixture bundles against the workspace's built @vitrinka/redact and
@@ -27,29 +55,21 @@ apps:
   hud:
     cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun packages/web/e2e/fixture/serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:hud}"
     ports: [hud]
-    sync: .
-    sync_ignores: *ignores
-    deps: *deps
+    ready: none
   # Report a problem as vitrinka serves it (packages/web/e2e/fixture/
   # report-server.ts): `/`, `/?mount` (cs, mountReport), `/?nobutton`.
   report:
     cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun packages/web/e2e/fixture/report-serve.ts --host ${BIND_HOST:-127.0.0.1} --port {port:report}"
     ports: [report]
-    sync: .
-    sync_ignores: *ignores
-    deps: *deps
-
+    ready: none
 scripts:
   test:
-    cmd: "bun run build && bun run typecheck && bun run test"
-    up: false
-    profile: small
+    cmd: ["bun run build && bun run typecheck && bun run test"]
+    size: small
   # The web browser suite. Like ci.yml, the workspace's @vitrinka/redact and
   # @vitrinka/link build first: the HUD bundle resolves them through build/.
   e2e:
-    cmd: "bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun run test:e2e:web"
-    up: false
-
+    cmd: ["bun run --filter @vitrinka/redact build && bun run --filter @vitrinka/link build && bun run test:e2e:web"]
 resources:
   workspace: standard
   memory: 2G
