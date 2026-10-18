@@ -9,14 +9,17 @@ export async function withRecorderLock(name: string, run: () => void): Promise<v
   // Web Locks requires a secure context. IndexedDB readwrite transactions
   // also serialize across tabs, including ordinary HTTP development hosts.
   const db = await lockDatabase();
-  const deadline = Date.now() + HAND_OVER_MS;
-  while (!(await holdOnce(db, key, fence, run, Date.now() >= deadline))) await pause();
+  const unheard: Unheard = { fence: undefined, since: 0 };
+  while (!(await holdOnce(db, key, fence, run, unheard))) await pause();
 }
 
 /** The calling document's localStorage, and where the lock's fence lives in it. */
 interface Fence { area: Storage | null; key: string }
 
-/** A fence this tab never hears (its storage cleared, a write lost) holds it back this long; then it runs anyway. */
+/** The last holder's fence this tab has not heard yet, and since when it has known of it. */
+interface Unheard { fence: unknown; since: number }
+
+/** One fence this tab never hears (its storage cleared, a write lost) holds it back this long; then it runs anyway. */
 const HAND_OVER_MS = 1000;
 const HEAR_POLL_MS = 5;
 
@@ -48,6 +51,23 @@ function publishFence(fence: Fence): string | null {
   }
 }
 
+/**
+ * Has this tab waited out `last`? The clock starts when a transaction first
+ * shows that fence, and again for a newer one: time spent queued for the
+ * lock, or suspended, never counts as time spent hearing its holder.
+ */
+function waitedOut(unheard: Unheard, last: unknown): boolean {
+  const now = Date.now();
+  if (unheard.fence !== last) {
+    unheard.fence = last;
+    unheard.since = now;
+    return false;
+  }
+  if (now - unheard.since < HAND_OVER_MS) return false;
+  warnUnheard();
+  return true;
+}
+
 let unheardWarned = false;
 function warnUnheard(): void {
   if (unheardWarned) return;
@@ -65,9 +85,10 @@ function warnUnheard(): void {
  * after its own writes (they reach every tab in order), and in this
  * transaction's record, which every tab reads coherently. A tab whose
  * localStorage does not show the record's fence yet lets go and retries
- * (the transaction would commit across a timer); `late` runs it regardless.
+ * (the transaction would commit across a timer) until it hears it or waited
+ * it out.
  */
-function holdOnce(db: IDBDatabase, key: string, fence: Fence, run: () => void, late: boolean): Promise<boolean> {
+function holdOnce(db: IDBDatabase, key: string, fence: Fence, run: () => void, unheard: Unheard): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const tx = db.transaction('locks', 'readwrite');
     const store = tx.objectStore('locks');
@@ -76,10 +97,7 @@ function holdOnce(db: IDBDatabase, key: string, fence: Fence, run: () => void, l
     tx.onabort = () => reject(tx.error ?? new Error('vitrinka: recorder lock transaction aborted'));
     const request = store.get(key);
     request.onsuccess = () => {
-      if (!heard(fence, request.result)) {
-        if (!late) return;
-        warnUnheard();
-      }
+      if (!heard(fence, request.result) && !waitedOut(unheard, request.result)) return;
       try {
         run();
       } catch (error) {

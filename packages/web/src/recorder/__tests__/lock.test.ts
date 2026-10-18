@@ -39,20 +39,38 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, 'localStorage');
 });
 
+/**
+ * Number the way the seq allocator does, under `lock` (each case its own: a
+ * fake-indexeddb record outlives the case); `holdMs` keeps the lock busy.
+ */
+function allocator(lock: string, taken: number[]) {
+  return (tab: Storage, holdMs = 0) => {
+    // The lock reads the calling tab's localStorage as it is entered.
+    Object.defineProperty(globalThis, 'localStorage', { value: tab, configurable: true, writable: true });
+    return withRecorderLock(lock, () => {
+      for (const until = Date.now() + holdMs; Date.now() < until;);
+      const seq = Number(tab.getItem('vitrinka.recorder.n') ?? 0) + 1;
+      tab.setItem('vitrinka.recorder.n', String(seq));
+      taken.push(seq);
+    });
+  };
+}
+
 describe('withRecorderLock', () => {
   it('a tab that has not heard the last holder yet never takes its number', async () => {
     const [a, b] = twoTabs(20);
     const taken: number[] = [];
-    // The lock reads the calling tab's localStorage as it is entered.
-    const allocate = (tab: Storage) => {
-      Object.defineProperty(globalThis, 'localStorage', { value: tab, configurable: true, writable: true });
-      return withRecorderLock('seq', () => {
-        const seq = Number(tab.getItem('vitrinka.recorder.n') ?? 0) + 1;
-        tab.setItem('vitrinka.recorder.n', String(seq));
-        taken.push(seq);
-      });
-    };
+    const allocate = allocator('seq', taken);
     await Promise.all(Array.from({ length: 8 }, (_, i) => allocate(i % 2 ? b : a)));
     expect(taken).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('time spent waiting for the lock never counts as time spent hearing its holder', async () => {
+    const [a, b] = twoTabs(20);
+    const taken: number[] = [];
+    const allocate = allocator('seq-held', taken);
+    // b queues while a holds the lock past the hand-over budget.
+    await Promise.all([allocate(a, 1100), allocate(b)]);
+    expect(taken).toEqual([1, 2]);
   });
 });
