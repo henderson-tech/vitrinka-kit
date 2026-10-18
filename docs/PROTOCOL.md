@@ -45,13 +45,23 @@ with the project's publishable report key (`vkb_…`) as the bearer, also with
 `credentials: omit`:
 
 ```
-GET   /api/v1/report-config             → {project, captureProfile, portalUrl, profile, flightRecorder}
+GET   /api/v1/report-config             → {project, captureProfile (+ its attachments caps), portalUrl, profile, flightRecorder}
 POST  /api/v1/reports                   the report (below) → {id, custody: "direct" | "quarantined"}
 PATCH /api/v1/reports/:id               {title, description, markers, notify} — text changed before a retry
+POST  /api/v1/reports/:id/attachment?name=<file name>  one file the reporter attached, its raw bytes under its own Content-Type → {id, name, size, type}
 POST  /api/v1/reports/:id/chunk?seq=N   one rrweb chunk (a JSON array, ≤ 4 MiB, N from 1) → {blobKey}
 POST  /api/v1/reports/:id/events        {events: [{seq, ts, tabHost, kind: "rrweb", payload: {count, source: "replay", truncated}, blobKey}]}
 POST  /api/v1/reports/:id/submit        {} → {status: "filed" | "quarantined", reportUrl?} — the last leg
+POST  /api/v1/report/session            {token} → {reporter, session, expiresAt, portalUrl?} — My reports, a signed reporter only
+GET   /api/v1/report/mine?cursor=       X-Vitrinka-Reporter: <session> → {reports, nextCursor} — that reporter's own reports
 ```
+
+A browser that holds a vitrinka member's device link minted on the widget's
+own `base` (`vitrinka.recorder.link`, below) also reads `GET
+/api/v1/recorder/me` with that link's own `vkr_` token, never the `vkb_` key:
+who the member is and their display mode. A link minted on another vitrinka
+is never sent. Its **Record** (npm entry only) swaps the card for the
+recorder pill, which then records as the web recorder does, on that link.
 
 Its single-file build loads one more thing, and only when the project's
 profile records the page: rrweb's recorder, from the same vitrinka
@@ -198,7 +208,12 @@ optional marks drawn on the page.
   tab, a stricter masking, fewer classes) drops this tab's windows instead
   of restoring them. A report sends only its own tab's windows. A profile of
   `memory` deletes the database. What the reporter types — the description,
-  notes — is memory only, always.
+  notes — and the files they attach are memory only, with one exception: a
+  sent report leaves a line in this browser's own list
+  (`vitrinka.report.sent:<base>|<host>` in localStorage, the last 20) — its
+  title (the description's first line), when, filed or waiting for
+  approval, and its link when the server returned one — which My reports
+  shows when the server cannot list the reporter's reports.
 - **An idle page** keeps no more than the window: once the newest event of
   the window being recorded is older than `windowSec`, a fresh full snapshot
   replaces it (rrweb itself checks out only when the page changes).
@@ -237,16 +252,26 @@ optional marks drawn on the page.
      appVersion, locale (the browser's)}, console: [{level, ts, text}],
      network: [{method, path, status, ms}], identity?, markers: [{n, shape,
      rect: {x, y, w, h}, note?, head?}], locale (the widget's: cs | en),
-     notify?}` — at most 500 console and 500 network entries;
-  2. the frozen replay, hides applied, as chunks under 4 MiB
+     notify?, type?}` — at most 500 console and 500 network entries; `type`
+     is the reporter's own word (`bug` · `suggestion` · `question` ·
+     `other`), sent only when one is picked, and a server that refuses the
+     field gets the report again without it;
+  2. the files the reporter attached, one `/attachment?name=` leg each —
+     only files picked with 📎, pasted or dropped onto the card, each
+     checked first against the project's caps (by default 10 MiB per file,
+     5 per report, images, PDF and text); a file is never read or sent
+     otherwise;
+  3. the frozen replay, hides applied, as chunks under 4 MiB
      (`/chunk?seq=1…n`), then their `rrweb` rows (`/events`, `payload:
      {count, source: "replay", truncated}`) — a window holding a single
      event over 4 MiB (a huge full snapshot) is left out whole, never its
      snapshot alone, and the replay says `truncated`;
-  3. `POST /api/v1/reports/:id/submit {}`.
+  4. `POST /api/v1/reports/:id/submit {}`.
 
   A failed leg keeps the job: Retry resumes it — one report, never a
-  duplicate — and text edited meanwhile rides a `PATCH`. A capture leg the
+  duplicate — and text edited meanwhile rides a `PATCH`; Try again sends
+  only the files that did not land, and a file the server refuses for good
+  is left out while the report still files. A capture leg the
   server refuses for good is skipped, and the report files without its
   replay. `reportUrl`, when the server returns one, is shown as returned
   ("See your report"); the widget never composes a link.
@@ -258,10 +283,21 @@ optional marks drawn on the page.
   reporter (quarantined until approved); nothing at all is anonymous and
   quarantined. The widget never reads the token's claims. `notify` ("Email
   me when it's fixed") is offered only to an identified reporter.
+- **My reports** for a signed reporter: the widget trades the host's token
+  once for a short-lived reporter session (`POST /api/v1/report/session`),
+  held in memory and dropped when the host identifies someone else, and
+  lists that reporter's reports with it (`GET /api/v1/report/mine`); the
+  `vkb_` key alone reads nothing. Anyone else gets this browser's own list
+  (above).
 - **On the device**: the reporter's shortcut, when they record one, in
   `localStorage` (`vitrinka.recorder.report.keybind`: the key's code and its
-  modifiers); the tab id in `sessionStorage` (`vitrinka.tab`); and, under
-  `storage: browser`, the capture database above. Nothing else.
+  modifiers); the widget's settings, per origin, in `localStorage` — the
+  button's corner (`vitrinka.report.dock`), its size
+  (`vitrinka.report.size`), and for a linked member the picked face
+  (`vitrinka.report.face`) and display mode (`vitrinka.report.mode`); the
+  list of reports this browser sent (above); the tab id in
+  `sessionStorage` (`vitrinka.tab`); and, under `storage: browser`, the
+  capture database above. Nothing else.
 
 ### Attached images (web HUD)
 
