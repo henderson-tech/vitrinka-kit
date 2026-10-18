@@ -12,6 +12,25 @@
   hlášení", also its accessible description). The waiting item stays
   reachable with the menu's arrows, so a screen reader reads the reason,
   and pressing it does nothing; it now looks unavailable. Since 0.8.0.
+- **A report never sits on Sending….** No request of a report had a time
+  limit, so one nothing answered — a server stuck in a handler, a
+  connection or proxy holding it — left the card on **Sending…** for good:
+  a follow-up report with an attached PNG was created, then waited minutes
+  with its file, replay and submit unsent. Every leg now has a deadline,
+  30 s for a call and 30 s plus the bytes at 32 KiB/s for an upload (a
+  10 MiB file gets about six minutes), and preparing the capture gets 30 s
+  before the report goes without it. A leg past its deadline fails like a
+  dropped connection: the card shows the error and **Try again**, which
+  resumes at that leg. Since 0.7.0.
+- **Two tabs no longer lose a note to a shared seq.** On the IndexedDB
+  lane (hosts without Web Locks) a browser can deliver another tab's
+  `localStorage` writes after the lock has passed to the next tab, so two
+  tabs could number captures with the same seq; the server keeps the first
+  row per seq, and a note vanished from both. Each holder now leaves a
+  fence (`vitrinka.recorder.lock.seq`) that the next one waits to read, so
+  the previous holder's writes are visible first; after 1 s it numbers
+  anyway and warns once, so a cleared store never wedges it. The Web Locks
+  lane is unchanged. Since 0.3.4.
 
 ## 0.8.0
 

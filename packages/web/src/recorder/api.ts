@@ -87,6 +87,8 @@ export interface ApiOptions {
    * Its 401 never touches the recorder's device link.
    */
   target?: ApiTarget;
+  /** Cancels the request, its answer's body included — the report face's leg deadline (report/wire.ts). */
+  signal?: AbortSignal;
 }
 
 function resolveTarget(target: ApiTarget | undefined): ApiTarget {
@@ -105,6 +107,7 @@ export async function api<T = Record<string, unknown>>(
     mode: 'cors',
     credentials: 'omit',
     keepalive: opts.keepalive ?? false,
+    ...(opts.signal ? { signal: opts.signal } : {}),
     headers: {
       authorization: `Bearer ${key}`,
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -151,15 +154,22 @@ function upload(
 /**
  * POST raw bytes (an rrweb chunk, an image) to a blob leaf under the
  * configured bearer: the session doors above and the report face's
- * `/api/v1/reports/{id}/chunk?seq=N` (with its own `target`). Returns the
- * server's `blobKey`.
+ * `/api/v1/reports/{id}/chunk?seq=N` (with its own `target` and leg
+ * deadline `signal`). Returns the server's `blobKey`.
  */
-export async function uploadTo(path: string, contentType: string, body: string | Blob, target?: ApiTarget): Promise<{ blobKey?: string }> {
+export async function uploadTo(
+  path: string,
+  contentType: string,
+  body: string | Blob,
+  target?: ApiTarget,
+  signal?: AbortSignal,
+): Promise<{ blobKey?: string }> {
   const { url, key } = resolveTarget(target);
   const res = await fetch(url + path, {
     method: 'POST',
     mode: 'cors',
     credentials: 'omit',
+    ...(signal ? { signal } : {}),
     headers: { authorization: `Bearer ${key}`, 'content-type': contentType },
     body,
   });

@@ -501,7 +501,9 @@ happens next: a filed report says the team will take a look, with **See
 your report** when the server returns the report's page; one held for
 approval (an asserted or anonymous reporter) says the team checks it
 before it is filed. A failed send keeps every word; **Try again** resumes
-the same report.
+the same report. A request nothing answers counts as failed: each call
+gets 30 s, an upload 30 s plus its bytes at 32 KiB/s, so the card never
+stays on Sending.
 
 ## Attach images
 

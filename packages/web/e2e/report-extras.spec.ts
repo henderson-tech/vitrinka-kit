@@ -52,7 +52,8 @@ async function openCard(page: Page) {
   return card;
 }
 
-const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64');
+/** A valid 1×1 PNG (every chunk's CRC checks): a decoder on either side reads it. */
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
 const file = (name: string, mimeType: string, bytes = 16) => ({ name, mimeType, buffer: name.endsWith('.png') && bytes === 16 ? PNG : Buffer.alloc(bytes, 7) });
 
 function apiCalls(): string[] {
@@ -154,6 +155,45 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
   expect(calls.indexOf(legs[2]!)).toBeLessThan(calls.indexOf('POST /api/v1/reports/rep-1/submit'));
   expect(Object.fromEntries(types)).toEqual({ 'steps.txt': 'text/plain', 'pasted-1.png': 'image/png', 'spec.pdf': 'application/pdf' });
   expect(seen.filter((s) => s.path.includes('/attachment?')).every((s) => s.auth === 'Bearer vkb_e2e')).toBe(true);
+});
+
+test('a follow-up report carries a canvas-drawn PNG whole: every byte lands on the attachment leg before the submit', async ({ page }) => {
+  await page.goto(base);
+  await armed();
+  let card = await openCard(page);
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The export is empty');
+  await card.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await card.getByRole('button', { name: 'Close', exact: true }).last().click();
+  seen.length = 0;
+
+  card = await openCard(page);
+  const desc = card.getByRole('textbox', { name: 'What went wrong?' });
+  await desc.fill('And the chart under it is blank');
+  // What a reporter's screenshot tool hands over: a real, decodable 240×100 PNG.
+  const size = await desc.evaluate(async (el) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 240;
+    canvas.height = 100;
+    const g = canvas.getContext('2d')!;
+    for (let x = 0; x < 240; x += 4) for (let y = 0; y < 100; y += 4) {
+      g.fillStyle = `rgb(${(x * 7 + y * 13) % 256},${(x * y) % 256},${(x + y * 3) % 256})`;
+      g.fillRect(x, y, 4, 4);
+    }
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('no blob'))), 'image/png'));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], 'chart.png', { type: 'image/png' }));
+    el.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+    return blob.size;
+  });
+  await expect(card.getByRole('button', { name: 'Remove chart.png' })).toBeVisible();
+  await card.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const leg = seen.find((s) => s.path === '/api/v1/reports/rep-1/attachment?name=chart.png');
+  expect(leg?.bytes).toBe(size);
+  const calls = apiCalls();
+  expect(calls.indexOf('POST /api/v1/reports')).toBeLessThan(calls.indexOf('POST /api/v1/reports/rep-1/attachment?name=chart.png'));
+  expect(calls.indexOf('POST /api/v1/reports/rep-1/attachment?name=chart.png')).toBeLessThan(calls.indexOf('POST /api/v1/reports/rep-1/submit'));
 });
 
 test('a paste carrying text beside an image of it stays text', async ({ page }) => {

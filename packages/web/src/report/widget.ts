@@ -61,7 +61,7 @@ import { listMine, type MyReport, openSession, type ReporterSession, sessionLive
 import { noteSent, readSent } from './sent';
 import { readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
-import { ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
+import { deadline, LEG_LIMITS, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
 export interface WidgetOptions {
   base: string;
@@ -1670,8 +1670,11 @@ export class ReportWidget {
       if (!this.job) {
         const marked = new Set<number>();
         for (const m of this.markers) for (const id of this.hideIds.get(m.key) ?? []) marked.add(id);
-        const capture = this.engine
-          ? await this.engine.build(this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) }, this.markers, marked).catch((e: unknown) => {
+        const engine = this.engine;
+        const frozen = this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) };
+        // Under a deadline like every leg (wire.ts): a stored window's read that never settles must not hold Send.
+        const capture = engine
+          ? await deadline('preparing the capture', LEG_LIMITS.ms, () => engine.build(frozen, this.markers, marked)).catch((e: unknown) => {
               console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
               return EMPTY_CAPTURE;
             })
