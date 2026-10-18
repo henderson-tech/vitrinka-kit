@@ -384,9 +384,10 @@ a.row:hover { background: var(--faint); }
   .seg button { padding: 0 9px; }
   .coach { width: 260px; }
 }
+/* Every motion of the face stops here: the menu rises with the card's vr-in, the coach dims as you press, the chevron turns. */
 @media (prefers-reduced-motion: reduce) {
-  .card { animation: none; }
-  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm { transition: none; }
+  .card, .pop { animation: none; }
+  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm, .link svg, .coach { transition: none; }
   .card.busy .head::after { animation: none; }
   .fab, .fab.gliding { transition: none; }
   .coach .loop { animation: none; stroke-dashoffset: 0; }

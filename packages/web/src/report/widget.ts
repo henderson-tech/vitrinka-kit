@@ -196,12 +196,23 @@ function setLabel(el: HTMLElement, text: string): void {
   if (span) span.textContent = text;
 }
 
-/** A segmented control's sliding indicator under its picked segment (the marking bar's shapes, the settings' sizes); unmeasurable while hidden. */
-function placeIndicator(seg: HTMLElement, ind: HTMLElement, btn: HTMLElement | undefined): void {
+/**
+ * A segmented control's sliding indicator under its picked segment (the marking bar's shapes, the settings' sizes);
+ * unmeasurable while hidden. It slides only from one pick to the next: its first placement, and `land` (its bar just
+ * appeared), put it in place on the frame it shows — slid there, it would grow from width 0 at the control's edge
+ * (or from where a hidden bar last left it), with the picked segment bare until it arrived.
+ */
+function placeIndicator(seg: HTMLElement, ind: HTMLElement, btn: HTMLElement | undefined, land = false): void {
   if (!btn || !btn.offsetWidth) return;
+  const jump = land || !seg.classList.contains('measured');
+  if (jump) ind.style.transition = 'none';
   ind.style.width = `${btn.offsetWidth}px`;
   ind.style.transform = `translateX(${btn.offsetLeft}px)`;
   seg.classList.add('measured');
+  if (!jump) return;
+  // The read commits the placement as the style the slide starts from, so restoring the slide animates nothing.
+  void ind.offsetWidth;
+  ind.style.removeProperty('transition');
 }
 
 /** A text field has the focus — its own editing keys (⌘Z included) are its. */
@@ -727,8 +738,8 @@ export class ReportWidget {
         this.size = z;
         writePref(SIZE_KEY, z);
         this.paint();
-        // A parked card is placed by its painted size: re-place it at the new one.
-        if (this.parked) this.placeCard();
+        // A parked card is placed by its painted size: re-place it at the new one, in its corner at once.
+        if (this.parked) this.placeCard(true);
       });
     }
     on(e.techBtn, 'click', () => {
@@ -898,7 +909,7 @@ export class ReportWidget {
       }),
     );
     this.offs.push(listen(window, 'resize', () => {
-      if (this.parked) this.placeCard();
+      if (this.parked) this.placeCard(true);
       if (this.marking) this.placeSeg();
     }));
     this.offs.push(watchKeybind((b) => {
@@ -1336,7 +1347,7 @@ export class ReportWidget {
     this.renderMarks();
     this.paint();
     this.placeCard();
-    this.placeSeg();
+    this.placeSeg(true);
     const vw = globalThis.innerWidth || 800;
     this.placeCoach({ x: vw / 2 - 150, y: BAR_CLEAR + 12 }, false);
     this.e.mark.focus();
@@ -1389,16 +1400,28 @@ export class ReportWidget {
     return { vw, vh, w: r.width || Math.min(CARD.w * k, vw - 32), h: r.height || Math.min(CARD.h * k, vh - insets.top - insets.bottom), ...insets };
   }
 
-  /** Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`). */
-  private placeCard(): void {
+  /**
+   * Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`).
+   * `reanchor`: the corner itself changed (a new size, a resized viewport) — kept in the same corner, the card
+   * lands there on the frame it changes, as an anchored card does; slid there, a parked card (scaled from its
+   * top-left) would first overhang its corner by the size difference, then glide back.
+   */
+  private placeCard(reanchor = false): void {
     if (!this.parked) return;
     const f = this.frame();
+    const was = this.parked;
     this.parked = pickCorner(this.parked, this.markers.map((m) => m.rect), f);
     const r = cornerRect(this.parked, f);
-    const s = this.e.card.style;
-    this.e.card.classList.add('parked');
-    s.left = `${r.x}px`;
-    s.top = `${r.y}px`;
+    const card = this.e.card;
+    const land = reanchor && this.parked === was;
+    if (land) card.style.transition = 'none';
+    card.classList.add('parked');
+    card.style.left = `${r.x}px`;
+    card.style.top = `${r.y}px`;
+    if (!land) return;
+    // The read commits the new place as the style the glide starts from, so restoring the glide moves nothing.
+    void card.offsetWidth;
+    card.style.removeProperty('transition');
   }
 
   private unpark(): void {
@@ -1409,9 +1432,9 @@ export class ReportWidget {
     this.e.card.style.removeProperty('top');
   }
 
-  /** The segmented control's indicator under the picked shape. */
-  private placeSeg(): void {
-    placeIndicator(this.e.seg, this.e.segInd, this.e.toolButtons.get(this.tool));
+  /** The segmented control's indicator under the picked shape; `land`: the bar just appeared, so it does not slide. */
+  private placeSeg(land = false): void {
+    placeIndicator(this.e.seg, this.e.segInd, this.e.toolButtons.get(this.tool), land);
   }
 
   private onChrome(t: EventTarget | null): boolean {

@@ -468,6 +468,32 @@ test('the card moves to another corner instead of covering a box drawn under its
   expect(await card.boundingBox()).not.toEqual(resting);
 });
 
+test('the shape indicator is in place on the marking bar’s first frame and slides only from one pick to the next', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const indicator = page.locator('.tb .seg-ind');
+  await indicator.evaluate((el) => {
+    const w = window as unknown as { indicatorRuns: string[] };
+    w.indicatorRuns = [];
+    el.addEventListener('transitionrun', (e) => w.indicatorRuns.push((e as TransitionEvent).propertyName));
+  });
+  const runs = () => page.evaluate(() => [...(window as unknown as { indicatorRuns: string[] }).indicatorRuns].sort());
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
+  await expect(toolbar).toBeVisible();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Slid to its first place, it would grow from width 0 at the control's edge, Circle bare until it arrived.
+  expect(await runs()).toEqual([]);
+  const circle = (await toolbar.getByRole('radio', { name: 'Circle', exact: true }).boundingBox())!;
+  const placed = (await indicator.boundingBox())!;
+  expect(Math.abs(placed.x - circle.x)).toBeLessThan(1);
+  expect(Math.abs(placed.width - circle.width)).toBeLessThan(1);
+  await toolbar.getByRole('radio', { name: 'Box', exact: true }).click();
+  await expect.poll(runs).toEqual(['transform', 'width']);
+});
+
 for (const answer of ['Discard', 'Keep'] as const) {
   test(`Cancel asks before discarding two new marks; ${answer} ${answer === 'Discard' ? 'removes them and leaves marking' : 'keeps them'}`, async ({ page }) => {
     await page.goto(base);

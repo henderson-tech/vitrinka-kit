@@ -22,6 +22,11 @@
   before the report goes without it. A leg past its deadline fails like a
   dropped connection: the card shows the error and **Try again**, which
   resumes at that leg. Since 0.7.0.
+- **Report a problem: motion where it belongs.** The marking bar's shape
+  indicator is in place on its first frame instead of growing in; a parked
+  card rescales and follows a resized window in its corner instead of
+  overhanging and gliding back; reduced motion now also stops the menu's
+  rise, the coach's dim and the chevron's turn. Since 0.8.0.
 - **Two tabs no longer lose a note to a shared seq.** On the IndexedDB
   lane (hosts without Web Locks) a browser can deliver another tab's
   `localStorage` writes after the lock has passed to the next tab, so two
