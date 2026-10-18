@@ -1750,6 +1750,8 @@ export class ReportWidget {
     const rows = local
       ? readSent(this.opts.base, globalThis.location?.host ?? '').map((r) => this.row(r.title, r.status === 'quarantined' ? s.waiting : s.steps.received ?? '', r.at, r.url))
       : this.mine.rows.map((r) => this.row(r.title, s.steps[r.step] ?? r.step, Date.parse(r.updatedAt), r.url));
+    // The switch unmounts this card: never while a report is sending or waiting on Try again, which would be lost with it.
+    e.mRecord.disabled = this.sending || this.job !== null;
     e.repRows.replaceChildren(...rows);
     const state = local ? 'ok' : this.mine.state;
     e.repStatus.hidden = state === 'ok' && rows.length > 0;

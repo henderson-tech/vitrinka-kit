@@ -101,3 +101,19 @@ test('My reports read for a signed reporter leave with them: identify(null) show
   await expect(card.getByText('Ann’s chart is empty')).toHaveCount(0);
   await expect(card.getByText('No reports yet.')).toBeVisible();
 });
+
+test('Record stays unavailable while a report waits on Try again, which the switch would lose', async ({ page }) => {
+  await member(page);
+  await page.route((url) => url.pathname.endsWith('/attachment'), (route) => route.fulfill({ status: 503, body: 'storage unavailable' }));
+  await page.goto(`${server.url}/npm`);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem', exact: true });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The export is empty');
+  const chooser = page.waitForEvent('filechooser');
+  await card.getByRole('button', { name: 'Attach a file' }).click();
+  await (await chooser).setFiles([{ name: 'steps.txt', mimeType: 'text/plain', buffer: Buffer.from('1. open the export') }]);
+  await card.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(card.getByText('Your report arrived, a file not yet — try again to attach it')).toBeVisible();
+  await card.getByRole('button', { name: 'Menu', exact: true }).click();
+  await expect(card.getByRole('menuitem', { name: 'Record', exact: true })).toBeDisabled();
+});
