@@ -63,9 +63,19 @@ jobs:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'skip-ci'))
     runs-on: [self-hosted, vitrinka-kit-ci]
     steps:
-      - name: Runner network
+      # The suite is one serial Chromium worker, so its time follows the core
+      # it gets: print the CPU, the lane's quota and where /tmp lives (Chromium
+      # keeps its shared memory there under --disable-dev-shm-usage).
+      - name: Runner resources
         id: runner
-        run: echo "network=${CI_JIT_RUNNER_NETWORK:-host}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "network=${CI_JIT_RUNNER_NETWORK:-host}" >> "$GITHUB_OUTPUT"
+          grep -m1 'model name' /proc/cpuinfo || true
+          echo "nproc=$(nproc) nproc_all=$(nproc --all) loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+          for counter in cpu.max memory.max; do
+            if [ -r "/sys/fs/cgroup/$counter" ]; then echo "$counter=$(cat "/sys/fs/cgroup/$counter")"; fi
+          done
+          findmnt --target /tmp --noheadings --output TARGET,FSTYPE || true
       - name: GitHub results endpoint (bridge runner)
         if: steps.runner.outputs.network == 'bridge'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -85,3 +95,12 @@ jobs:
       # the browser itself downloads per job.
       - run: bunx playwright install chromium
       - run: bun run test:e2e:web
+      # What the suite cost the lane: cgroup CPU time and quota throttling,
+      # memory peak and the guest's load once it ran.
+      - name: Runner usage
+        if: always()
+        run: |
+          echo "loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+          for counter in cpu.stat memory.peak; do
+            if [ -r "/sys/fs/cgroup/$counter" ]; then echo "$counter:"; cat "/sys/fs/cgroup/$counter"; fi
+          done
