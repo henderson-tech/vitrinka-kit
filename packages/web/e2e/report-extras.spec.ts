@@ -156,6 +156,23 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
   expect(seen.filter((s) => s.path.includes('/attachment?')).every((s) => s.auth === 'Bearer vkb_e2e')).toBe(true);
 });
 
+test('a paste carrying text beside an image of it stays text', async ({ page }) => {
+  await page.goto(base);
+  await armed();
+  const card = await openCard(page);
+  const prevented = await card.getByRole('textbox', { name: 'What went wrong?' }).evaluate((el, png) => {
+    // What Office puts on the clipboard for copied cells: the text and a picture of it.
+    const data = new DataTransfer();
+    data.setData('text/plain', 'Q3 revenue\t1 200 Kč');
+    data.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], 'image.png', { type: 'image/png' }));
+    const ev = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  }, PNG.toString('base64'));
+  expect(prevented).toBe(false);
+  await expect(card.getByRole('button', { name: /^Remove pasted-/ })).toHaveCount(0);
+});
+
 test('a file past the project’s caps is refused at once, the line naming the cap', async ({ page }) => {
   await page.route('**/api/v1/report-config', async (route) => {
     const response = await route.fetch();
@@ -201,6 +218,7 @@ test('a file that did not land is the only one Try again sends', async ({ page }
   await expect(card.getByText('Your report arrived, a file not yet — try again to attach it')).toBeVisible();
   // The report is on its way: its files and its type are fixed until it lands.
   await expect(card.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
+  await expect(card.getByRole('radio', { name: 'Bug', exact: true })).toBeDisabled();
   await card.getByRole('button', { name: 'Try again' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
   const calls = apiCalls();
@@ -218,7 +236,6 @@ test('the button drags to another corner, the card opens beside it, and the corn
   const grip = { x: home.x + 30, y: home.y + home.height / 2 };
 
   // A press that barely travels is still a click.
-  await expect(card.getByRole('radio', { name: 'Bug', exact: true })).toBeDisabled();
   await page.mouse.move(grip.x, grip.y);
   await page.mouse.down();
   await page.mouse.move(grip.x + 2, grip.y + 1);
