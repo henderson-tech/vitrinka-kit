@@ -19,6 +19,9 @@ concurrency:
 
 jobs:
   publish:
+    # Named hosted exception (npm-publish): npm provenance and trusted
+    # publishing (OIDC) need a GitHub-hosted runner, so this job never moves
+    # to an own lane.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
