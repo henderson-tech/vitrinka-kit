@@ -102,6 +102,43 @@ test('My reports read for a signed reporter leave with them: identify(null) show
   await expect(card.getByText('No reports yet.')).toBeVisible();
 });
 
+test('Record waits while the card holds an unsent draft, names why, and returns once it is cleared', async ({ page }) => {
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem', exact: true });
+  const desc = card.getByRole('textbox', { name: 'What went wrong?' });
+  const menu = card.getByRole('button', { name: 'Menu', exact: true });
+  const record = card.getByRole('menuitem', { name: 'Record', exact: true });
+  await desc.fill('The export is empty');
+  await card.getByRole('radio', { name: 'Bug', exact: true }).click();
+  await menu.click();
+  await expect(record).toBeDisabled();
+  await expect(record).toHaveAccessibleDescription('Send or clear the report you started first');
+  await expect(card.getByText('Send or clear the report you started first')).toBeVisible();
+  // The arrows still reach it, so the reason is heard; pressing it keeps the card and the draft.
+  await expect(card.getByRole('menuitem', { name: 'My reports', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(record).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(record).toBeVisible();
+  await expect(desc).toHaveValue('The export is empty');
+  await menu.click();
+  // The words alone gone: the picked word is still the reporter's.
+  await desc.fill('');
+  await menu.click();
+  await expect(record).toBeDisabled();
+  await menu.click();
+  await card.getByRole('radio', { name: 'Bug', exact: true }).click();
+  await menu.click();
+  await expect(record).toBeEnabled();
+  await expect(record).toHaveAccessibleDescription('');
+  await expect(card.getByText('Send or clear the report you started first')).toBeHidden();
+  await record.click();
+  await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toBeVisible();
+});
+
 test('Record stays unavailable while a report waits on Try again, which the switch would lose', async ({ page }) => {
   await member(page);
   await page.route((url) => url.pathname.endsWith('/attachment'), (route) => route.fulfill({ status: 503, body: 'storage unavailable' }));

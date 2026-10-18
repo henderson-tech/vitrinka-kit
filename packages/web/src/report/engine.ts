@@ -407,6 +407,25 @@ export class CaptureEngine {
   }
 
   /**
+   * The card opened before the lazily loaded recorder ran (a slow network,
+   * device or runner): the frozen clip holds no screen of this page, and the
+   * report would go without its replay. When the recorder runs by Send, take
+   * its view now, as freeze() does for one that only just started. Earlier
+   * loads' windows and the console/network entries stay the frozen ones.
+   */
+  private withScreen(clip: FlightClip | null): FlightClip | null {
+    if (!this.capturing || !runningRecord() || (clip && clipHasSnapshot(clip))) return clip;
+    checkoutRRWeb();
+    const now = takeFlightClip();
+    if (!now) return clip;
+    return {
+      windows: [...(clip?.windows.filter((w) => w.stored) ?? []), ...now.windows.filter((w) => !w.stored)],
+      lanes: clip?.lanes ?? now.lanes,
+      truncated: clip?.truncated ?? now.truncated,
+    };
+  }
+
+  /**
    * The rrweb ids of the page nodes under a hide right now — taken when the
    * hide is drawn (the page sits frozen under the marking layer); null when
    * the running recorder has no mirror to say (then a hide withholds the replay).
@@ -432,12 +451,13 @@ export class CaptureEngine {
     const hiddenIds = new Set(markedIds);
     if (hides.length && mirror) for (const id of hiddenNodeIds(hides, mirror)) hiddenIds.add(id);
     const events: eventWithTime[] = [];
-    let truncated = frozen.clip?.truncated ?? false;
+    const clip = this.withScreen(frozen.clip);
+    let truncated = clip?.truncated ?? false;
     const pinned = await frozen.stored.catch((e: unknown) => {
       console.warn('vitrinka: the stored part of the capture could not be read — the replay starts later', e);
       return null;
     });
-    for (const w of frozen.clip?.windows ?? []) {
+    for (const w of clip?.windows ?? []) {
       if (!w.stored) {
         events.push(...w.events);
         continue;
@@ -448,7 +468,7 @@ export class CaptureEngine {
       else events.push(...read.events);
     }
     // The console and network entries, earlier loads' included (priorLanes).
-    const lanes: FlightLaneEvent[] = frozen.clip?.lanes ?? [];
+    const lanes: FlightLaneEvent[] = clip?.lanes ?? [];
     const whole = withheld ? { events: [], dropped: false } : wholeWindows(applyHides(events, hides, hiddenIds), CHUNK_HARD_BYTES);
     if (whole.dropped) truncated = true;
     const { parts, dropped } = splitRRWebEvents(whole.events, CHUNK_PACK_BYTES, CHUNK_HARD_BYTES);

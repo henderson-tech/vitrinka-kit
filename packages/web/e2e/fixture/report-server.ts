@@ -26,6 +26,8 @@ export interface ReportSeen {
   path: string;
   auth: string;
   body: string;
+  /** The body's exact byte count: `body` is lossy for a binary. */
+  bytes: number;
 }
 
 export interface ReportServer {
@@ -36,13 +38,13 @@ export interface ReportServer {
   close: () => Promise<void>;
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve) => {
-    let s = '';
+    const parts: Buffer[] = [];
     req.on('data', (c: Buffer) => {
-      s += c.toString();
+      parts.push(c);
     });
-    req.on('end', () => resolve(s));
+    req.on('end', () => resolve(Buffer.concat(parts)));
   });
 }
 
@@ -100,7 +102,8 @@ export async function startReportServer(options: { host?: string; port?: number 
 
   const server = createServer(async (req, res) => {
     const path = req.url ?? '/';
-    const body = await readBody(req);
+    const raw = await readBody(req);
+    const body = raw.toString();
     const js = (src: string) => {
       res.setHeader('content-type', 'text/javascript');
       res.end(src);
@@ -110,7 +113,7 @@ export async function startReportServer(options: { host?: string; port?: number 
       res.end(JSON.stringify(v));
     };
     if (path === '/__events') return json(seen);
-    seen.push({ method: req.method ?? 'GET', path, auth: String(req.headers.authorization ?? ''), body });
+    seen.push({ method: req.method ?? 'GET', path, auth: String(req.headers.authorization ?? ''), body, bytes: raw.length });
     if (path === '/vendor/report-widget-1.mjs') return js(widget);
     if (path === '/vendor/rrweb-record-1.min.js') return js(rrweb);
     if (path === '/claim-recorder.js') return js(claimRecorder);
@@ -150,7 +153,7 @@ export async function startReportServer(options: { host?: string; port?: number 
     const file = /^\/api\/v1\/reports\/rep-1\/attachment\?name=([^&]+)$/.exec(path);
     if (file && req.method === 'POST') {
       const name = decodeURIComponent(file[1] ?? '');
-      return json({ id: `att-${seen.length}`, name, size: Number(req.headers['content-length'] ?? 0), type: String(req.headers['content-type'] ?? '') }, 201);
+      return json({ id: `att-${seen.length}`, name, size: raw.length, type: String(req.headers['content-type'] ?? '') }, 201);
     }
     if (path === '/api/v1/reports/rep-1/events') return json({ inserted: 1 });
     if (path === '/api/v1/reports/rep-1/submit') return json({ status: 'quarantined', reportUrl: REPORT_URL });

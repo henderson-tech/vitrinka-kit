@@ -267,6 +267,35 @@ test('a hide added after a failed send is blanked in the retried capture', async
   expect(chunks).not.toContain('1920 0014 5399');
 });
 
+test('a card opened before the recorder started still sends the page as it is at Send', async ({ page }) => {
+  // The recorder loads lazily: hold its script until the card is open, as a slow network or runner does.
+  let asked: () => void = () => undefined;
+  const requested = new Promise<void>((resolve) => {
+    asked = resolve;
+  });
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/vendor/rrweb-record-1.min.js', async (route) => {
+    asked();
+    await held;
+    await route.continue();
+  });
+  await page.goto(base);
+  await requested;
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('August is listed twice');
+  release();
+  await page.waitForFunction(() => ((globalThis as { __rrwebStarted?: number }).__rrwebStarted ?? 0) > 0);
+  await card.getByRole('button', { name: 'Send' }).click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
+  // A full snapshot of the page (its text masked under the strict profile), not an empty replay.
+  expect(chunks).toContain('"tagName":"table"');
+});
+
 test('a widget told identify(null) reports anonymously, whatever the page-wide identity', async ({ page }) => {
   await page.goto(base);
   await armed(page);
@@ -471,6 +500,32 @@ test('the card moves to another corner instead of covering a box drawn under its
     return moved.x + moved.width <= box.x || box.x + box.width <= moved.x || moved.y + moved.height <= box.y || box.y + box.height <= moved.y;
   }).toBe(true);
   expect(await card.boundingBox()).not.toEqual(resting);
+});
+
+test('the shape indicator is in place on the marking bar’s first frame and slides only from one pick to the next', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const indicator = page.locator('.tb .seg-ind');
+  await indicator.evaluate((el) => {
+    const w = window as unknown as { indicatorRuns: string[] };
+    w.indicatorRuns = [];
+    el.addEventListener('transitionrun', (e) => w.indicatorRuns.push((e as TransitionEvent).propertyName));
+  });
+  const runs = () => page.evaluate(() => [...(window as unknown as { indicatorRuns: string[] }).indicatorRuns].sort());
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
+  await expect(toolbar).toBeVisible();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Slid to its first place, it would grow from width 0 at the control's edge, Circle bare until it arrived.
+  expect(await runs()).toEqual([]);
+  const circle = (await toolbar.getByRole('radio', { name: 'Circle', exact: true }).boundingBox())!;
+  const placed = (await indicator.boundingBox())!;
+  expect(Math.abs(placed.x - circle.x)).toBeLessThan(1);
+  expect(Math.abs(placed.width - circle.width)).toBeLessThan(1);
+  await toolbar.getByRole('radio', { name: 'Box', exact: true }).click();
+  await expect.poll(runs).toEqual(['transform', 'width']);
 });
 
 for (const answer of ['Discard', 'Keep'] as const) {

@@ -135,8 +135,13 @@ kbd {
   display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border: 0; border-radius: 8px;
   background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 550; text-decoration: none; text-align: left;
 }
-.pop-item:hover, .pop-item:focus-visible { background: var(--faint); }
+.pop-item:hover:not([aria-disabled="true"]), .pop-item:focus-visible { background: var(--faint); }
+/* A waiting item stays focusable (aria-disabled) so the arrows reach its reason; it only looks unavailable. */
+.pop-item[aria-disabled="true"] { color: var(--dim); cursor: default; }
 .pop-item svg { width: 15px; height: 15px; flex: none; color: var(--dim); }
+/* Why an item waits (Record over an unsent report): a second line under the label, aligned past the icon. */
+.pop-item:has(.pop-why:not([hidden])) { flex-wrap: wrap; row-gap: 2px; height: auto; min-height: 36px; padding: 8px 10px; }
+.pop-why { flex-basis: 100%; padding-left: 25px; font-size: 12px; font-weight: 450; line-height: 1.35; }
 .acc-who { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
 .acc-who strong { font-size: 14px; }
 .acc-mail, .acc-via { color: var(--dim); font-size: 12.5px; margin: 0; }
@@ -379,9 +384,10 @@ a.row:hover { background: var(--faint); }
   .seg button { padding: 0 9px; }
   .coach { width: 260px; }
 }
+/* Every motion of the face stops here: the menu rises with the card's vr-in, the coach dims as you press, the chevron turns. */
 @media (prefers-reduced-motion: reduce) {
-  .card { animation: none; }
-  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm { transition: none; }
+  .card, .pop { animation: none; }
+  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm, .link svg, .coach { transition: none; }
   .card.busy .head::after { animation: none; }
   .fab, .fab.gliding { transition: none; }
   .coach .loop { animation: none; stroke-dashoffset: 0; }

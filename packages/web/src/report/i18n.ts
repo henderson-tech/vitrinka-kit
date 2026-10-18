@@ -85,6 +85,8 @@ export interface Strings {
   myReports: string;
   recentRecordings: string;
   record: string;
+  /** Why Record waits: the switch to the pill would lose the unsent report. */
+  recordHasDraft: string;
   openVitrinka: string;
   openPortal: string;
   // -- the lists --
@@ -213,6 +215,7 @@ const en: Strings = {
   myReports: 'My reports',
   recentRecordings: 'Recent recordings',
   record: 'Record',
+  recordHasDraft: 'Send or clear the report you started first',
   openVitrinka: 'Open vitrinka',
   openPortal: 'Open the report portal',
   loading: 'Loading…',
@@ -333,6 +336,7 @@ const cs: Strings = {
   myReports: 'Moje hlášení',
   recentRecordings: 'Nedávné nahrávky',
   record: 'Nahrávat',
+  recordHasDraft: 'Odešlete nebo smažte rozepsané hlášení',
   openVitrinka: 'Otevřít vitrinku',
   openPortal: 'Otevřít portál hlášení',
   loading: 'Načítám…',

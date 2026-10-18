@@ -260,7 +260,7 @@ test('links the device from the pill, then records with the minted token', async
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.link'))).toBeNull();
 });
 
-const referenceImage = { name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64') };
+const referenceImage = { name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64') };
 async function openNote(page: Page) {
   await page.goto(`${pageUrl}/`);
   await page.getByRole('button', { name: 'Start recording' }).click();

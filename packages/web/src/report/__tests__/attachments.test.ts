@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { admit, DEFAULT_ATTACHMENT_CAPS, formatBytes, parseAttachmentCaps, pastedName, typesLabel } from '../attachments';
 import type { BuiltCapture } from '../engine';
-import { type ReportEnvelope, ReportJob } from '../wire';
+import { LegTimeout, type ReportEnvelope, ReportJob } from '../wire';
 
 const BASE = 'https://vitrinka.test';
 const file = (name: string, type: string, bytes = 10) => new File([new Uint8Array(bytes)], name, { type, lastModified: 1 });
@@ -99,6 +99,42 @@ describe('the attachment leg', () => {
       // Refused for good (415): skipped with a warning, the report still files.
       'POST /api/v1/reports/rep-1/attachment?name=notes%20(1).txt application/octet-stream',
       'POST /api/v1/reports/rep-1/submit application/json',
+    ]);
+  });
+
+  it('a leg nothing answers fails at its deadline instead of sending forever; Try again resumes it with the file’s bytes whole', async () => {
+    // A valid 1×1 PNG, as a reporter's File.
+    const png = new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0))], 'chart.png', { type: 'image/png' });
+    let stalled: AbortSignal | null = null;
+    const landed: number[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input).slice(BASE.length);
+      seen.push(`${init.method ?? 'GET'} ${path}`);
+      const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
+      if (path === '/api/v1/reports') return json({ id: 'rep-1', custody: 'direct' }, 201);
+      if (path.includes('/attachment') && !stalled) {
+        // The first attempt is never answered, and ignores its signal: only the deadline ends the wait.
+        stalled = init.signal ?? null;
+        return new Promise<Response>(() => undefined);
+      }
+      if (path.includes('/attachment')) {
+        landed.push((await new Response(init.body).arrayBuffer()).byteLength);
+        return json({ id: 'att', name: 'chart.png', size: png.size, type: 'image/png' }, 201);
+      }
+      if (path.endsWith('/submit')) return json({ status: 'filed' });
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    const job = new ReportJob(empty, 'app.test', { url: BASE, key: 'vkb_test' }, [png], { ms: 50, bytesPerMs: 1_000_000 });
+    await expect(job.run(envelope)).rejects.toBeInstanceOf(LegTimeout);
+    expect((stalled as AbortSignal | null)?.aborted).toBe(true);
+    expect(job.filesPending).toBe(true);
+    expect(await job.run(envelope)).toEqual({ status: 'filed' });
+    expect(landed).toEqual([png.size]);
+    expect(seen).toEqual([
+      'POST /api/v1/reports',
+      'POST /api/v1/reports/rep-1/attachment?name=chart.png',
+      'POST /api/v1/reports/rep-1/attachment?name=chart.png',
+      'POST /api/v1/reports/rep-1/submit',
     ]);
   });
 });

@@ -17,6 +17,14 @@
  * 4xx) is skipped with a warning: the report still files, without it. The
  * reporter's files go before the replay — they are what they chose to send.
  * `reportUrl` is the server's — shown as returned, never composed.
+ *
+ * EVERY LEG HAS A DEADLINE (`deadline`): a request nothing answers — a server
+ * stuck in a handler, a proxy or connection holding it — rejects like a
+ * dropped connection, so the card shows Try again instead of "Sending…"
+ * forever. An upload's allowance grows with its bytes at a slow uplink's
+ * pace, so only a stalled one runs out. A create whose answer was lost after
+ * the server stored it is created again by Try again: the same risk a dropped
+ * connection already carries.
  */
 import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
@@ -54,6 +62,61 @@ export interface SubmitReply {
   reportUrl?: string;
 }
 
+/** How long a leg may go unanswered: `ms` for any leg, plus one ms per `bytesPerMs` bytes an upload carries. */
+export interface LegLimits {
+  ms: number;
+  bytesPerMs: number;
+}
+
+/** 30 s for a JSON leg; an upload adds its bytes at 32 KiB/s (≈ 256 kbit/s), so a 10 MiB file gets about six minutes. */
+export const LEG_LIMITS: LegLimits = { ms: 30_000, bytesPerMs: 32 };
+
+/** A leg ran past its deadline: retryable, never a refusal for good. */
+export class LegTimeout extends Error {
+  constructor(what: string, ms: number) {
+    super(`vitrinka: ${what} got no answer in ${Math.round(ms / 1000)} s — Try again resumes it`);
+    this.name = 'LegTimeout';
+  }
+}
+
+/**
+ * Run `work` under a deadline: past `ms` its signal aborts (the fetch and its
+ * answer's body stop) and the returned promise rejects with LegTimeout —
+ * whether or not `work` honours the signal, so nothing waits on it forever.
+ */
+export async function deadline<T>(what: string, ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const ctl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new LegTimeout(what, ms);
+      ctl.abort(e);
+      reject(e);
+    }, ms);
+  });
+  try {
+    return await Promise.race([work(ctl.signal), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** What a report carries when its capture could not be prepared. */
+export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
+
+/**
+ * The capture a report sends, under its deadline like every leg (reading an
+ * earlier load's stored windows can hang): past it, or failed, the report
+ * goes without one. A build that finishes later is dropped — it never
+ * reaches the job this answer started.
+ */
+export function prepareCapture(build: () => Promise<BuiltCapture>, ms: number = LEG_LIMITS.ms): Promise<BuiltCapture> {
+  return deadline('preparing the capture', ms, build).catch((e: unknown) => {
+    console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
+    return EMPTY_CAPTURE;
+  });
+}
+
 export class ReportJob {
   id = '';
   custody: 'direct' | 'quarantined' | '' = '';
@@ -71,7 +134,21 @@ export class ReportJob {
     private readonly tabHost: string,
     private readonly target: ApiTarget,
     readonly files: readonly File[] = [],
+    private readonly limits: LegLimits = LEG_LIMITS,
   ) {}
+
+  /** One JSON call under its leg deadline. */
+  private call<T = Record<string, unknown>>(method: string, path: string, body: unknown): Promise<T> {
+    return deadline(`${method} ${path}`, this.limits.ms, (signal) => api<T>(method, path, body, { target: this.target, signal }));
+  }
+
+  /** One upload under a deadline that grows with its bytes. */
+  private upload(path: string, contentType: string, body: string | Blob): Promise<{ blobKey?: string }> {
+    // The bytes fetch sends: a JSON chunk's UTF-8, never its UTF-16 length (non-ASCII text runs up to 3× longer).
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body).byteLength : body.size;
+    const ms = this.limits.ms + Math.ceil(bytes / this.limits.bytesPerMs);
+    return deadline(`POST ${path}`, ms, (signal) => uploadTo(path, contentType, body, this.target, signal));
+  }
 
   /** A file has not landed yet: the attachment leg is what a retry resumes. */
   get filesPending(): boolean {
@@ -80,23 +157,22 @@ export class ReportJob {
 
   /** Run the legs from wherever the last run stopped; rejects with the failing leg's error. */
   async run(env: ReportEnvelope): Promise<SubmitReply> {
-    const to = { target: this.target };
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to).catch((e: unknown) => {
+      const res = await this.call<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env).catch((e: unknown) => {
         // A vitrinka older than the report type refuses the unknown field: the hint is optional, the report is not.
         if (env.type === undefined || !(e instanceof VitrinkaApiError) || e.status !== 400 || !/\btype\b/.test(e.message)) throw e;
         console.warn('vitrinka: this server takes no report type yet — sending the report without it');
         const { type: _dropped, ...rest } = env;
-        return api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', rest, to);
+        return this.call<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', rest);
       });
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
       this.sent = editsKey;
     } else if (this.sent !== editsKey) {
-      await api('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits, to);
+      await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
       this.sent = editsKey;
     }
     await this.sendFiles();
@@ -109,7 +185,7 @@ export class ReportJob {
         this.skipCapture = true;
       }
     }
-    const reply = await api<{ status?: unknown; reportUrl?: unknown }>('POST', `/api/v1/reports/${encodeURIComponent(this.id)}/submit`, {}, to);
+    const reply = await this.call<{ status?: unknown; reportUrl?: unknown }>('POST', `/api/v1/reports/${encodeURIComponent(this.id)}/submit`, {});
     return {
       status: reply.status === 'filed' ? 'filed' : 'quarantined',
       ...(typeof reply.reportUrl === 'string' && reply.reportUrl ? { reportUrl: reply.reportUrl } : {}),
@@ -121,7 +197,7 @@ export class ReportJob {
     for (const [i, f] of this.files.entries()) {
       if (this.filesDone.has(i)) continue;
       try {
-        await uploadTo(`/api/v1/reports/${id}/attachment?name=${encodeURIComponent(f.name)}`, f.type || 'application/octet-stream', f, this.target);
+        await this.upload(`/api/v1/reports/${id}/attachment?name=${encodeURIComponent(f.name)}`, f.type || 'application/octet-stream', f);
       } catch (e) {
         if (!(e instanceof VitrinkaApiError) || !permanentStatus(e.status)) throw e;
         console.warn(`vitrinka: the server refused ${f.name} — the report goes without it`, e);
@@ -135,7 +211,7 @@ export class ReportJob {
     const { chunks, truncated } = this.capture;
     for (const c of chunks) {
       if (this.blobKeys.has(c.seq)) continue;
-      const up = await uploadTo(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body, this.target);
+      const up = await this.upload(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body);
       if (!up.blobKey) throw new Error(`vitrinka: chunk ${c.seq} came back without a blob key`);
       this.blobKeys.set(c.seq, up.blobKey);
     }
@@ -149,7 +225,7 @@ export class ReportJob {
     }));
     while (this.rowsPosted < rows.length) {
       const batch = rows.slice(this.rowsPosted, this.rowsPosted + EVENTS_PER_POST);
-      await api('POST', `/api/v1/reports/${id}/events`, { events: batch }, { target: this.target });
+      await this.call('POST', `/api/v1/reports/${id}/events`, { events: batch });
       this.rowsPosted += batch.length;
     }
   }

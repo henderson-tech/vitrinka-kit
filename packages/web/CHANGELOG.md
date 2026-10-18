@@ -1,5 +1,48 @@
 # @vitrinka/web
 
+## 0.8.1
+
+- **Record keeps the report you started.** A linked member's **Record**
+  swaps Report a problem for the recorder pill by unmounting the card, so a
+  typed but unsent report — the description, a mark and its note, the
+  picked type, an attached file — went with it. Record now waits while the
+  card holds any of them, as it already did while a report was sending or
+  waiting on **Try again**, and says why under its label: "Send or clear
+  the report you started first" (cs "Odešlete nebo smažte rozepsané
+  hlášení", also its accessible description). The waiting item stays
+  reachable with the menu's arrows, so a screen reader reads the reason,
+  and pressing it does nothing; it now looks unavailable. Since 0.8.0.
+- **A report never sits on Sending….** No request of a report had a time
+  limit, so one nothing answered — a server stuck in a handler, a
+  connection or proxy holding it — left the card on **Sending…** for good:
+  a follow-up report with an attached PNG was created, then waited minutes
+  with its file, replay and submit unsent. Every leg now has a deadline,
+  30 s for a call and 30 s plus the bytes at 32 KiB/s for an upload (a
+  10 MiB file gets about six minutes), and preparing the capture gets 30 s
+  before the report goes without it. A leg past its deadline fails like a
+  dropped connection: the card shows the error and **Try again**, which
+  resumes at that leg. Since 0.7.0.
+- **A report opened early still shows the page.** The page recorder loads
+  lazily; a card opened before it ran (a slow network, device or CI
+  runner) froze a clip with no screen in it, and the report went without
+  its replay. When the recorder runs by Send, the report now takes its view
+  then, as it already did for a recorder that had only just started.
+  Since 0.7.0.
+- **Report a problem: motion where it belongs.** The marking bar's shape
+  indicator is in place on its first frame instead of growing in; a parked
+  card rescales and follows a resized window in its corner instead of
+  overhanging and gliding back; reduced motion now also stops the menu's
+  rise, the coach's dim and the chevron's turn. Since 0.8.0.
+- **Two tabs no longer lose a note to a shared seq.** On the IndexedDB
+  lane (hosts without Web Locks) a browser can deliver another tab's
+  `localStorage` writes after the lock has passed to the next tab, so two
+  tabs could number captures with the same seq; the server keeps the first
+  row per seq, and a note vanished from both. Each holder now leaves a
+  fence (`vitrinka.recorder.lock.seq`) that the next one waits to read, so
+  the previous holder's writes are visible first; after 1 s it numbers
+  anyway and warns once, so a cleared store never wedges it. The Web Locks
+  lane is unchanged. Since 0.3.4.
+
 ## 0.8.0
 
 **Report a problem grows back up.** The calm face now gives the people in

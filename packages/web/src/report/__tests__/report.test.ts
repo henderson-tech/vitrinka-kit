@@ -12,7 +12,7 @@ import { claimCapture, releaseCapture } from '../../recorder/state';
 import { acquireEngine, type BuiltCapture, releaseEngine } from '../engine';
 import { applyHides, HIDE_ATTR } from '../markers';
 import { narrowProfile, parseProfile } from '../profile';
-import { type ReportEnvelope, ReportJob } from '../wire';
+import { EMPTY_CAPTURE, prepareCapture, type ReportEnvelope, ReportJob } from '../wire';
 
 const BASE = 'https://vitrinka.test';
 const REPORT_URL = 'https://portal.vitrinka.test/acme/voke/reports/rep-1?from=widget';
@@ -116,6 +116,24 @@ describe('the report wire', () => {
       { seq: 1, ts: capture.chunks[0]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 2, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-1' },
       { seq: 2, ts: capture.chunks[1]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 1, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-2' },
     ]);
+  });
+});
+
+describe('the capture under its deadline', () => {
+  it('a capture still preparing at its deadline is dropped: the report files with its words, and the late build changes nothing', async () => {
+    let finish: (c: BuiltCapture) => void = () => undefined;
+    const late = new Promise<BuiltCapture>((resolve) => {
+      finish = resolve;
+    });
+    const prepared = await prepareCapture(() => late, 20);
+    expect(prepared).toEqual(EMPTY_CAPTURE);
+    const job = new ReportJob(prepared, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    expect(await job.run(envelope('August is listed twice'))).toEqual({ status: 'filed', reportUrl: REPORT_URL });
+    finish(capture);
+    await late;
+    expect(job.capture).toEqual(EMPTY_CAPTURE);
+    expect(seen.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /api/v1/reports', 'POST /api/v1/reports/rep-1/submit']);
+    expect(seen[0]!.body).toMatchObject({ description: 'August is listed twice', markers: [{ n: 1, note: 'here twice' }], identity: { email: 'jana@example.test' } });
   });
 });
 

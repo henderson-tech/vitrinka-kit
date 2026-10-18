@@ -61,7 +61,7 @@ import { listMine, type MyReport, openSession, type ReporterSession, sessionLive
 import { noteSent, readSent } from './sent';
 import { readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
-import { ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
+import { EMPTY_CAPTURE, prepareCapture, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
 export interface WidgetOptions {
   base: string;
@@ -86,7 +86,6 @@ type Drawn = Marker & { key: number };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TITLE_CAP = 100;
-const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
 const TOOLS: readonly MarkerShape[] = ['circle', 'box', 'arrow', 'hide'];
 /** A keyboard mark starts as this, centred; arrows move it 10 px, Shift+arrows resize it. */
 const KB_DRAFT = { w: 160, h: 80 } as const;
@@ -197,12 +196,23 @@ function setLabel(el: HTMLElement, text: string): void {
   if (span) span.textContent = text;
 }
 
-/** A segmented control's sliding indicator under its picked segment (the marking bar's shapes, the settings' sizes); unmeasurable while hidden. */
-function placeIndicator(seg: HTMLElement, ind: HTMLElement, btn: HTMLElement | undefined): void {
+/**
+ * A segmented control's sliding indicator under its picked segment (the marking bar's shapes, the settings' sizes);
+ * unmeasurable while hidden. It slides only from one pick to the next: its first placement, and `land` (its bar just
+ * appeared), put it in place on the frame it shows — slid there, it would grow from width 0 at the control's edge
+ * (or from where a hidden bar last left it), with the picked segment bare until it arrived.
+ */
+function placeIndicator(seg: HTMLElement, ind: HTMLElement, btn: HTMLElement | undefined, land = false): void {
   if (!btn || !btn.offsetWidth) return;
+  const jump = land || !seg.classList.contains('measured');
+  if (jump) ind.style.transition = 'none';
   ind.style.width = `${btn.offsetWidth}px`;
   ind.style.transform = `translateX(${btn.offsetLeft}px)`;
   seg.classList.add('measured');
+  if (!jump) return;
+  // The read commits the placement as the style the slide starts from, so restoring the slide animates nothing.
+  void ind.offsetWidth;
+  ind.style.removeProperty('transition');
 }
 
 /** A text field has the focus — its own editing keys (⌘Z included) are its. */
@@ -245,6 +255,9 @@ function buildDom(mount: HTMLElement) {
   const mReports = menuItem(ICON.list);
   const mRecents = menuItem(ICON.clock);
   const mRecord = menuItem(ICON.rec);
+  // Why Record waits, a second line under its label: its description, so aria-hidden keeps it out of the name.
+  const mRecordWhy = h('small', { class: 'pop-why', id: 'vr-record-why', 'aria-hidden': 'true' });
+  mRecord.append(mRecordWhy);
   const mSettings = menuItem(ICON.gear);
   const mOpen = h('a', { class: 'pop-item', role: 'menuitem', target: '_blank', rel: 'noopener noreferrer' }, icon(ICON.ext), h('span'));
   const morePop = h('div', { class: 'pop more', role: 'menu' }, mReports, mRecents, mRecord, mSettings, mOpen);
@@ -391,7 +404,7 @@ function buildDom(mount: HTMLElement) {
   return {
     root, fab, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
     accountPop, accName, accMail, accVia, accLinked, accUnlink, accLink, accPortal,
-    morePop, mReports, mRecents, mRecord, mSettings, mOpen,
+    morePop, mReports, mRecents, mRecord, mRecordWhy, mSettings, mOpen,
     reports, repBack, repStatus, repRows, repLocal, repPortal, recents, recBack, recStatus, recRows,
     linking, linkBack, linkLabel, linkCode, linkOpen, linkOpenText, linkQr, linkHint, linkWait, linkRetry,
     describe, kinds, kindsLabel, kindButtons, prompt, desc, lines, linesEmpty, attached, attachedText, disclose, discloseText, included,
@@ -725,8 +738,8 @@ export class ReportWidget {
         this.size = z;
         writePref(SIZE_KEY, z);
         this.paint();
-        // A parked card is placed by its painted size: re-place it at the new one.
-        if (this.parked) this.placeCard();
+        // A parked card is placed by its painted size: re-place it at the new one, in its corner at once.
+        if (this.parked) this.placeCard(true);
       });
     }
     on(e.techBtn, 'click', () => {
@@ -756,7 +769,11 @@ export class ReportWidget {
     });
     on(e.mReports, 'click', fromMenu(() => void this.openReports()));
     on(e.mRecents, 'click', fromMenu(() => this.show('recents')));
-    on(e.mRecord, 'click', fromMenu(() => this.recordSwitch?.()));
+    const switchFace = fromMenu(() => this.recordSwitch?.());
+    // A waiting Record stays focusable so it can say why (paintAccount), so its press must do nothing: the menu stays open.
+    on(e.mRecord, 'click', () => {
+      if (!this.recordWaits()) switchFace();
+    });
     on(e.mSettings, 'click', fromMenu(() => this.show('settings')));
     on(e.mOpen, 'click', fromMenu(() => undefined));
     on(e.accPortal, 'click', fromMenu(() => undefined));
@@ -892,7 +909,7 @@ export class ReportWidget {
       }),
     );
     this.offs.push(listen(window, 'resize', () => {
-      if (this.parked) this.placeCard();
+      if (this.parked) this.placeCard(true);
       if (this.marking) this.placeSeg();
     }));
     this.offs.push(watchKeybind((b) => {
@@ -1330,7 +1347,7 @@ export class ReportWidget {
     this.renderMarks();
     this.paint();
     this.placeCard();
-    this.placeSeg();
+    this.placeSeg(true);
     const vw = globalThis.innerWidth || 800;
     this.placeCoach({ x: vw / 2 - 150, y: BAR_CLEAR + 12 }, false);
     this.e.mark.focus();
@@ -1383,16 +1400,28 @@ export class ReportWidget {
     return { vw, vh, w: r.width || Math.min(CARD.w * k, vw - 32), h: r.height || Math.min(CARD.h * k, vh - insets.top - insets.bottom), ...insets };
   }
 
-  /** Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`). */
-  private placeCard(): void {
+  /**
+   * Parks the card in the corner that covers none of the marks; it glides there (styles: `.card.parked`).
+   * `reanchor`: the corner itself changed (a new size, a resized viewport) — kept in the same corner, the card
+   * lands there on the frame it changes, as an anchored card does; slid there, a parked card (scaled from its
+   * top-left) would first overhang its corner by the size difference, then glide back.
+   */
+  private placeCard(reanchor = false): void {
     if (!this.parked) return;
     const f = this.frame();
+    const was = this.parked;
     this.parked = pickCorner(this.parked, this.markers.map((m) => m.rect), f);
     const r = cornerRect(this.parked, f);
-    const s = this.e.card.style;
-    this.e.card.classList.add('parked');
-    s.left = `${r.x}px`;
-    s.top = `${r.y}px`;
+    const card = this.e.card;
+    const land = reanchor && this.parked === was;
+    if (land) card.style.transition = 'none';
+    card.classList.add('parked');
+    card.style.left = `${r.x}px`;
+    card.style.top = `${r.y}px`;
+    if (!land) return;
+    // The read commits the new place as the style the glide starts from, so restoring the glide moves nothing.
+    void card.offsetWidth;
+    card.style.removeProperty('transition');
   }
 
   private unpark(): void {
@@ -1403,9 +1432,9 @@ export class ReportWidget {
     this.e.card.style.removeProperty('top');
   }
 
-  /** The segmented control's indicator under the picked shape. */
-  private placeSeg(): void {
-    placeIndicator(this.e.seg, this.e.segInd, this.e.toolButtons.get(this.tool));
+  /** The segmented control's indicator under the picked shape; `land`: the bar just appeared, so it does not slide. */
+  private placeSeg(land = false): void {
+    placeIndicator(this.e.seg, this.e.segInd, this.e.toolButtons.get(this.tool), land);
   }
 
   private onChrome(t: EventTarget | null): boolean {
@@ -1636,6 +1665,20 @@ export class ReportWidget {
     return this.e.desc.value.trim() || (this.markers.find((m) => m.note.trim())?.note.trim() ?? '');
   }
 
+  /**
+   * The card holds something the reporter made and has not sent: words in the
+   * description or a mark's note (a note lives on its mark), a mark, the
+   * picked word for it, a file.
+   */
+  private hasDraft(): boolean {
+    return this.e.desc.value.trim() !== '' || this.markers.length > 0 || this.kind !== null || this.files.length > 0;
+  }
+
+  /** Record unmounts this card for the pill (vt-8020 D8), so it waits while the card holds a draft or a report sending or waiting on Try again — the switch would lose it. */
+  private recordWaits(): boolean {
+    return this.sending || this.job !== null || this.hasDraft();
+  }
+
   private async send(): Promise<void> {
     const description = this.words();
     if (this.sending || !description) return;
@@ -1649,12 +1692,9 @@ export class ReportWidget {
       if (!this.job) {
         const marked = new Set<number>();
         for (const m of this.markers) for (const id of this.hideIds.get(m.key) ?? []) marked.add(id);
-        const capture = this.engine
-          ? await this.engine.build(this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) }, this.markers, marked).catch((e: unknown) => {
-              console.warn('vitrinka: the capture could not be prepared — the report goes without it', e);
-              return EMPTY_CAPTURE;
-            })
-          : EMPTY_CAPTURE;
+        const engine = this.engine;
+        const frozen = this.frozen ?? { clip: null, stored: Promise.resolve(new Map()) };
+        const capture = engine ? await prepareCapture(() => engine.build(frozen, this.markers, marked)) : EMPTY_CAPTURE;
         this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key }, this.files);
       }
       this.result = await this.job.run(this.envelope(description, this.job.capture));
@@ -1750,8 +1790,15 @@ export class ReportWidget {
     // Recording lives where the pill does: only a linked member gets it, its recents and the way to vitrinka.
     e.mRecents.hidden = !this.recordSwitch;
     e.mRecord.hidden = !this.recordSwitch;
-    // The switch unmounts this card: never while a report is sending or waiting on Try again, which would be lost with it.
-    e.mRecord.disabled = this.sending || this.job !== null;
+    // A waiting Record says why (recordWaits). aria-disabled, never `disabled`: the menu's arrows still reach it,
+    // so a keyboard and screen-reader user hears the reason too; its click is guarded in bind().
+    const waits = this.recordWaits();
+    if (waits) e.mRecord.setAttribute('aria-disabled', 'true');
+    else e.mRecord.removeAttribute('aria-disabled');
+    e.mRecordWhy.hidden = !waits;
+    e.mRecordWhy.textContent = s.recordHasDraft;
+    if (waits) e.mRecord.setAttribute('aria-describedby', e.mRecordWhy.id);
+    else e.mRecord.removeAttribute('aria-describedby');
     const open = member ? this.opts.base : portal;
     e.mOpen.hidden = !open;
     if (open) e.mOpen.setAttribute('href', open);

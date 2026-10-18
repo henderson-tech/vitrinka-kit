@@ -446,7 +446,9 @@ Reporters never need it: your token vouches for them.
 the widget's `base` gets **Record** and **Recent recordings** in the ⋯
 menu. **Record** swaps Report a problem for the recorder pill in place,
 recording on the member's link, never your `vkb_` key; the idle pill's ⋯
-menu then offers **Report a problem**, which swaps back. The pick is
+menu then offers **Report a problem**, which swaps back. **Record** waits,
+and says so, while the card holds a report not sent yet — words, a mark,
+a picked type, a file — since the swap would lose it. The pick is
 remembered per browser and origin (`vitrinka.report.face`); a member who
 never picked starts on the pill when their vitrinka display mode is dev
 (`displayMode` from `/api/v1/recorder/me`, learned when the card opens).
@@ -499,7 +501,9 @@ happens next: a filed report says the team will take a look, with **See
 your report** when the server returns the report's page; one held for
 approval (an asserted or anonymous reporter) says the team checks it
 before it is filed. A failed send keeps every word; **Try again** resumes
-the same report.
+the same report. A request nothing answers counts as failed: each call
+gets 30 s, an upload 30 s plus its bytes at 32 KiB/s, so the card never
+stays on Sending.
 
 ## Attach images
 
