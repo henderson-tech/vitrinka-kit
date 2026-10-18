@@ -54,7 +54,8 @@ test('the large button opens the card, and a shortcut the reporter records opens
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toBeFocused();
 
   // No default chord: the reporter records one by pressing it.
-  await card.getByRole('button', { name: 'Settings' }).click();
+  await card.getByRole('button', { name: 'Menu', exact: true }).click();
+  await card.getByRole('menuitem', { name: 'Settings', exact: true }).click();
   const shortcut = card.getByRole('button', { name: /^Keyboard shortcut: Not set/ });
   await shortcut.click();
   await expect(shortcut).toHaveText('Press keys · Esc cancels');
@@ -117,6 +118,7 @@ test('describe and send without marking', async ({ page }) => {
     env: { url: `${base}/`, viewport: { w: 1280, h: 720, dpr: 1 } },
   });
   expect(body).not.toHaveProperty('identity');
+  expect(body).not.toHaveProperty('type');
   expect(Array.isArray(body.console) && Array.isArray(body.network)).toBe(true);
   const calls = seen.filter((s) => s.path.startsWith('/api/')).map((s) => `${s.method} ${s.path.replace(/seq=\d+/, 'seq=N')}`);
   expect(calls[0]).toBe('GET /api/v1/report-config');
@@ -134,7 +136,8 @@ test('markers 1..n with notes; the coach says click, hold and move and leaves af
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('August is listed twice');
   await card.getByRole('button', { name: 'Show us where' }).click();
-  await expect(card).toBeHidden();
+  await expect(card).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Show us where' })).toHaveAttribute('aria-pressed', 'true');
 
   const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
   await expect(toolbar).toBeVisible();
@@ -150,17 +153,17 @@ test('markers 1..n with notes; the coach says click, hold and move and leaves af
   await expect(coach).toBeHidden();
   await page.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' }).fill('August is here twice');
 
-  await toolbar.getByRole('button', { name: 'Box' }).click();
+  await toolbar.getByRole('radio', { name: 'Box' }).click();
   await draw(page, [560, 200], [700, 260]);
-  await toolbar.getByRole('button', { name: 'Arrow' }).click();
+  await toolbar.getByRole('radio', { name: 'Arrow' }).click();
   await draw(page, [900, 120], [820, 190]);
-  await toolbar.getByRole('button', { name: 'Hide' }).click();
+  await toolbar.getByRole('radio', { name: 'Hide' }).click();
   await draw(page, [30, 360], [520, 420]);
   for (const n of [2, 3, 4]) await expect(page.getByRole('button', { name: `Mark ${n}`, exact: true })).toBeVisible();
 
-  await toolbar.getByRole('button', { name: 'Done' }).click();
+  await page.keyboard.press('Escape');
   await expect(card).toBeVisible();
-  await expect(card.getByText('4 places marked')).toBeVisible();
+  await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(4);
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('August is listed twice');
   await card.getByRole('button', { name: 'Send' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
@@ -193,23 +196,23 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
   await expect(page.getByText('Klikněte, podržte a veďte kolem problému.')).toBeVisible();
   await draw(page, [80, 150], [420, 230]);
   await page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' }).fill('tady');
-  await page.getByRole('toolbar').getByRole('button', { name: 'Hotovo' }).click();
-  await expect(czech.getByText('1 označené místo')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(czech.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
 
   // The attribute, live.
   await page.evaluate(() => document.querySelector('vitrinka-report')!.setAttribute('locale', 'en'));
   const english = page.getByRole('dialog', { name: 'Report a problem' });
   await expect(english.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('Srpen je ve vyúčtování dvakrát');
-  await expect(english.getByText('1 place marked')).toBeVisible();
+  await expect(english.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' })).toHaveValue('tady');
   await expect(english.getByRole('button', { name: 'Send' })).toBeVisible();
 
   // setLocale('cs') from the handle, live — the marks and their notes too.
   await page.evaluate(() => (window as unknown as { report: { setLocale(l: string): void } }).report.setLocale('cs'));
   await expect(czech.getByRole('textbox', { name: 'Co se pokazilo?' })).toHaveValue('Srpen je ve vyúčtování dvakrát');
-  await expect(czech.getByText('1 označené místo')).toBeVisible();
+  await expect(czech.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
   await czech.getByRole('button', { name: 'Ukažte nám kde' }).click();
   await expect(page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
-  await expect(page.getByRole('toolbar').getByRole('button', { name: 'Zpět' })).toBeEnabled();
+  await expect(page.getByRole('toolbar').getByRole('radio', { name: 'Kruh', exact: true })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('a hide blanks what was under it when it was drawn, even when the page changes before Send', async ({ page }) => {
@@ -219,10 +222,10 @@ test('a hide blanks what was under it when it was drawn, even when the page chan
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
   await card.getByRole('button', { name: 'Show us where' }).click();
-  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Hide' }).click();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Hide' }).click();
   const iban = (await page.getByText(/^IBAN/).boundingBox())!;
   await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
-  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Done' }).click();
+  await page.keyboard.press('Escape');
   // The app re-renders that line before the reporter sends.
   await page.evaluate(() => {
     const p = [...document.querySelectorAll('p')].find((el) => el.textContent?.startsWith('IBAN'))!;
@@ -246,10 +249,10 @@ test('a hide added after a failed send is blanked in the retried capture', async
   await expect(card.getByText('Couldn’t send — your text is safe, try again')).toBeVisible();
   await card.getByRole('button', { name: 'Show us where' }).click();
   const tools = page.getByRole('toolbar', { name: 'Marking tools' });
-  await tools.getByRole('button', { name: 'Hide' }).click();
+  await tools.getByRole('radio', { name: 'Hide' }).click();
   const iban = (await page.getByText(/^IBAN/).boundingBox())!;
   await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
-  await tools.getByRole('button', { name: 'Done' }).click();
+  await page.keyboard.press('Escape');
   await card.getByRole('button', { name: 'Try again' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
   const creates = seen.filter((s) => s.method === 'POST' && s.path === '/api/v1/reports');
@@ -394,7 +397,7 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(canvas).toBeFocused();
 
-  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('button', { name: 'Hide' }).focus();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Hide' }).focus();
   await page.keyboard.press('Enter');
   await expect(canvas).toBeFocused();
   await page.keyboard.press('Enter');
@@ -402,7 +405,7 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Mark 2', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 
-  await expect(card.getByText('2 places marked')).toBeVisible();
+  await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(2);
   await card.getByRole('button', { name: 'Send' }).click();
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
   const markers = created().markers as { n: number; shape: string; note?: string }[];
@@ -410,4 +413,154 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
     [1, 'circle', 'the total'],
     [2, 'hide', undefined],
   ]);
+});
+
+for (const viewport of [{ width: 1440, height: 810 }, { width: 390, height: 844 }]) {
+  test(`the card keeps its bounding box through drafting, two marks, sending and thanks at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(base);
+    await armed();
+    await page.getByRole('button', { name: /^Report a problem/ }).click();
+    const card = page.getByRole('dialog', { name: 'Report a problem' });
+    await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The card stays put');
+    const drafting = await card.boundingBox();
+    await card.getByRole('button', { name: 'Show us where' }).click();
+    await draw(page, [40, 100], [140, 140]);
+    await draw(page, [180, 170], [280, 210]);
+    await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(2);
+    const marking = await card.boundingBox();
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/api/v1/reports', async (route) => {
+      await pending;
+      await route.continue();
+    });
+    await card.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+    const sending = await card.boundingBox();
+    release();
+    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    const thanks = await card.boundingBox();
+    expect(created().description).toBe('The card stays put');
+    expect(drafting).not.toBeNull();
+    expect({ marking, sending, thanks }).toEqual({ marking: drafting, sending: drafting, thanks: drafting });
+  });
+}
+
+test('the card moves to another corner instead of covering a box drawn under its resting corner', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Box', exact: true }).click();
+  const resting = (await card.boundingBox())!;
+  // Start beside the card: pointer capture lets the box extend beneath it.
+  const box = { x: resting.x - 30, y: resting.y + 40, width: 150, height: 80 };
+  await draw(page, [box.x, box.y], [box.x + box.width, box.y + box.height]);
+  await expect(card.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' })).toBeFocused();
+  await expect.poll(async () => {
+    const moved = (await card.boundingBox())!;
+    return moved.x + moved.width <= box.x || box.x + box.width <= moved.x || moved.y + moved.height <= box.y || box.y + box.height <= moved.y;
+  }).toBe(true);
+  expect(await card.boundingBox()).not.toEqual(resting);
+});
+
+for (const answer of ['Discard', 'Keep'] as const) {
+  test(`Cancel asks before discarding two new marks; ${answer} ${answer === 'Discard' ? 'removes them and leaves marking' : 'keeps them'}`, async ({ page }) => {
+    await page.goto(base);
+    await page.getByRole('button', { name: /^Report a problem/ }).click();
+    const card = page.getByRole('dialog', { name: 'Report a problem' });
+    await card.getByRole('button', { name: 'Show us where' }).click();
+    await draw(page, [80, 120], [200, 160]);
+    await draw(page, [300, 180], [420, 220]);
+    const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
+    await toolbar.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(toolbar.getByText('Discard 2 marks?', { exact: true })).toBeVisible();
+    await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(2);
+    await toolbar.getByRole('button', { name: answer, exact: true }).click();
+    await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(answer === 'Discard' ? 0 : 2);
+    if (answer === 'Discard') {
+      await expect(toolbar).toBeHidden();
+      await expect(card.getByRole('button', { name: 'Show us where' })).toHaveAttribute('aria-pressed', 'false');
+    } else {
+      await expect(toolbar).toBeVisible();
+      await expect(toolbar.getByText('Discard 2 marks?', { exact: true })).toBeHidden();
+      await expect(card.getByRole('button', { name: 'Show us where' })).toHaveAttribute('aria-pressed', 'true');
+    }
+  });
+}
+
+for (const shortcut of ['Meta+z', 'Control+z']) {
+  test(`${shortcut} removes the newest mark when no field is focused`, async ({ page }) => {
+    await page.goto(base);
+    await armed();
+    await page.getByRole('button', { name: /^Report a problem/ }).click();
+    const card = page.getByRole('dialog', { name: 'Report a problem' });
+    await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Keep the first mark');
+    await card.getByRole('button', { name: 'Show us where' }).click();
+    await draw(page, [80, 120], [200, 160]);
+    await draw(page, [300, 180], [420, 220]);
+    const canvas = page.getByRole('application', { name: 'Marking', exact: true });
+    await canvas.focus();
+    await page.keyboard.press(shortcut);
+    await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Mark 2', exact: true })).toHaveCount(0);
+    await card.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    expect(created().markers).toMatchObject([{ n: 1, rect: { x: 80, y: 120, w: 120, h: 40 } }]);
+    expect(created().markers).toHaveLength(1);
+  });
+}
+
+for (const [label, type] of [['Bug', 'bug'], ['Suggestion', 'suggestion'], ['Question', 'question'], ['Other', 'other']] as const) {
+  test(`the ${label} chip reaches the report envelope as type ${type}`, async ({ page }) => {
+    await page.goto(base);
+    await armed();
+    await page.getByRole('button', { name: /^Report a problem/ }).click();
+    const card = page.getByRole('dialog', { name: 'Report a problem' });
+    const chip = card.getByRole('radiogroup', { name: 'What is it?' }).getByRole('radio', { name: label, exact: true });
+    await chip.click();
+    await expect(chip).toHaveAttribute('aria-checked', 'true');
+    await card.getByRole('textbox', { name: 'What went wrong?' }).fill('About this page');
+    await card.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    expect(created().type).toBe(type);
+  });
+}
+
+test('a mark note alone enables Send and reaches the report with an empty description field', async ({ page }) => {
+  await page.goto(base);
+  await armed();
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const send = card.getByRole('button', { name: 'Send', exact: true });
+  await expect(send).toBeDisabled();
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  await draw(page, [80, 120], [200, 160]);
+  const note = card.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' });
+  await expect(note).toBeFocused();
+  await expect(send).toBeDisabled();
+  await note.fill('This total is wrong');
+  await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  expect(created()).toMatchObject({ description: 'This total is wrong', markers: [{ n: 1, note: 'This total is wrong' }] });
+});
+
+test('Menu opens the report menu; Escape closes it and returns focus to Menu', async ({ page }) => {
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const trigger = card.getByRole('button', { name: 'Menu', exact: true });
+  await trigger.click();
+  await expect(card.getByRole('menu')).toBeVisible();
+  await expect(card.getByRole('menuitem', { name: 'Settings', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(card.getByRole('menu')).toBeHidden();
+  await expect(card).toBeVisible();
+  await expect(trigger).toBeFocused();
 });
