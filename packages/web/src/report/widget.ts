@@ -336,6 +336,8 @@ export class ReportWidget {
   private confirming = false;
   /** The corner the card is parked in once marking has moved it; null = its anchored place. */
   private parked: Corner | null = null;
+  /** Swaps this widget for the recorder pill; set only for a linked member (setRecordSwitch). */
+  private recordSwitch: (() => void) | null = null;
   private drawing: { start: Point; shape: MarkerShape; pointer: number } | null = null;
   private readonly offs: (() => void)[] = [];
   private readonly pins = new Map<number, Pin>();
@@ -466,6 +468,16 @@ export class ReportWidget {
 
   setOpenSelector(sel: string | null): void {
     this.openSelector = sel || null;
+  }
+
+  /**
+   * The way to the recorder pill (vt-8020 D8): element.ts sets it only for a
+   * linked vitrinka member — the menu then offers "Record" — and clears it
+   * with null; reporters never get one.
+   */
+  setRecordSwitch(fn: (() => void) | null): void {
+    this.recordSwitch = fn;
+    this.paint();
   }
 
   identify(input: IdentifyInput): void {
