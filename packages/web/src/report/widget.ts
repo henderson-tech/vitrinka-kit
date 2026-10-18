@@ -1677,7 +1677,8 @@ export class ReportWidget {
     e.accName.textContent = who ? person?.name || person?.email || '' : s.anonymous;
     e.accMail.textContent = person?.name ? person.email : '';
     e.accMail.hidden = !e.accMail.textContent;
-    e.accVia.textContent = who ? s.signedInByApp : s.anonymousHint;
+    // Only a token the host signed is a sign-in; an asserted email waits for the team like an anonymous report.
+    e.accVia.textContent = who && 'token' in who ? s.signedInByApp : s.anonymousHint;
     const member = this.member;
     e.accLinked.hidden = !member;
     e.accUnlink.hidden = !member;
@@ -1758,6 +1759,8 @@ export class ReportWidget {
     const locked = this.sending || Boolean(this.job?.id);
     e.attach.setAttribute('aria-label', s.attach);
     e.attach.disabled = locked;
+    // maxCount 0: the project switched attaching off — no 📎 to press.
+    e.attach.hidden = this.caps().maxCount === 0;
     e.fileInput.setAttribute('accept', this.caps().types.join(','));
     e.tray.hidden = this.view !== 'describe' || (this.files.length === 0 && !this.fileRefusal);
     e.files.hidden = this.files.length === 0;

@@ -109,13 +109,15 @@ export async function startReportServer(options: { host?: string; port?: number 
     if (path === '/api/v1/report-config') {
       return json({
         project: 'voke',
-        captureProfile: { storage: 'memory', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'] },
+        captureProfile: {
+          storage: 'memory', windowSec: 300, maxBytes: 12 * 1024 * 1024, classes: ['interactions', 'console', 'network', 'errors'],
+          // The capture profile's attachment caps (vt-8020 D9), where vitrinka serves them; a spec narrows them with page.route.
+          attachments: { maxBytes: 10 * 1024 * 1024, maxCount: 5, types: ['image/*', 'application/pdf', 'text/*'] },
+        },
         // A page opened with `?balanced` gets the profile that keeps page text.
         profile: String(req.headers.referer ?? '').includes('balanced') ? 'balanced' : 'strict',
         portalUrl: 'https://portal.vitrinka.test/voke',
         flightRecorder: true,
-        // The capture profile's attachment caps (vt-8020 D9); a spec narrows them with page.route.
-        attachments: { maxBytes: 10 * 1024 * 1024, maxCount: 5, types: ['image/*', 'application/pdf', 'text/*'] },
       });
     }
     if (path === '/api/v1/reports' && req.method === 'POST') {

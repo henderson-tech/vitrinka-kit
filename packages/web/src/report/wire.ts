@@ -84,7 +84,13 @@ export class ReportJob {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to);
+      const res = await api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env, to).catch((e: unknown) => {
+        // A vitrinka older than the report type refuses the unknown field: the hint is optional, the report is not.
+        if (env.type === undefined || !(e instanceof VitrinkaApiError) || e.status !== 400 || !/\btype\b/.test(e.message)) throw e;
+        console.warn('vitrinka: this server takes no report type yet — sending the report without it');
+        const { type: _dropped, ...rest } = env;
+        return api<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', rest, to);
+      });
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';

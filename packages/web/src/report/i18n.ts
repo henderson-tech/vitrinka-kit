@@ -110,7 +110,7 @@ export interface Strings {
   tooManyFiles: (n: number) => string;
   fileType: (name: string, types: string) => string;
   /** The default caps' types as a person reads them (the rest show as configured). */
-  typeNames: { image: string; pdf: string; text: string };
+  typeNames: { image: string; pdf: string; text: string; office: string };
   incFiles: string;
   errorFiles: string;
   // -- moving the button, size and technical details (vt-8020 D9) --
@@ -233,10 +233,10 @@ const en: Strings = {
   fileTooBig: (name, cap) => `${name} is over the ${cap} limit`,
   tooManyFiles: (n) => (n === 1 ? 'Up to 1 file per report' : `Up to ${n} files per report`),
   fileType: (name, types) => `${name} can’t be attached — ${types} only`,
-  typeNames: { image: 'images', pdf: 'PDF', text: 'text files' },
+  typeNames: { image: 'images', pdf: 'PDF', text: 'text files', office: 'office documents' },
   incFiles: 'The files you attached',
   errorFiles: 'Your report arrived, a file not yet — try again to attach it',
-  moveHint: 'Drag it, or press Alt and an arrow key, to move it to another corner.',
+  moveHint: 'Click, hold and move it to another corner, or press Alt and an arrow key.',
   size: 'Size',
   sizes: { sm: 'Small', md: 'Medium', lg: 'Large' },
   techDetails: 'Technical details',
@@ -353,10 +353,10 @@ const cs: Strings = {
   fileTooBig: (name, cap) => `${name} přesahuje limit ${cap}`,
   tooManyFiles: (n) => csPlural(n, 'Nejvýš 1 soubor na hlášení', `Nejvýš ${n} soubory na hlášení`, `Nejvýš ${n} souborů na hlášení`),
   fileType: (name, types) => `${name} nelze přiložit — jen ${types}`,
-  typeNames: { image: 'obrázky', pdf: 'PDF', text: 'textové soubory' },
+  typeNames: { image: 'obrázky', pdf: 'PDF', text: 'textové soubory', office: 'kancelářské dokumenty' },
   incFiles: 'Soubory, které jste přiložili',
   errorFiles: 'Hlášení dorazilo, soubor zatím ne — zkuste to znovu a přiložíme ho',
-  moveHint: 'Přetáhněte ho, nebo stiskněte Alt a šipku, a přesune se do jiného rohu.',
+  moveHint: 'Klikněte, podržte a veďte ho do jiného rohu, nebo stiskněte Alt a šipku.',
   size: 'Velikost',
   sizes: { sm: 'Malá', md: 'Střední', lg: 'Velká' },
   techDetails: 'Technické údaje',

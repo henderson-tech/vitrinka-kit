@@ -42,7 +42,8 @@ export function parseAttachmentCaps(raw: unknown): AttachmentCaps {
   const types = Array.isArray(caps.types) ? caps.types.filter((t): t is string => typeof t === 'string' && t.trim() !== '').map((t) => t.trim().toLowerCase()) : [];
   return {
     maxBytes: positiveInt(caps.maxBytes, DEFAULT_ATTACHMENT_CAPS.maxBytes),
-    maxCount: positiveInt(caps.maxCount, DEFAULT_ATTACHMENT_CAPS.maxCount),
+    // 0 is a real answer: the project switched attaching off.
+    maxCount: typeof caps.maxCount === 'number' && Number.isInteger(caps.maxCount) && caps.maxCount >= 0 ? caps.maxCount : DEFAULT_ATTACHMENT_CAPS.maxCount,
     types: types.length ? types : DEFAULT_ATTACHMENT_CAPS.types,
   };
 }
@@ -90,8 +91,16 @@ export function formatBytes(n: number, locale: string): string {
 }
 
 /** The caps' types as a person reads them: "images, PDF and text files". */
-export function typesLabel(types: readonly string[], names: { image: string; pdf: string; text: string }, locale: string): string {
-  const named = types.map((t) => (t === 'image/*' ? names.image : t === 'application/pdf' ? names.pdf : t === 'text/*' ? names.text : t));
+export function typesLabel(types: readonly string[], names: { image: string; pdf: string; text: string; office: string }, locale: string): string {
+  // The server lists exact types (image/png, the office formats): a person reads them as a few groups.
+  const group = (t: string): string => {
+    if (t.startsWith('image/')) return names.image;
+    if (t === 'application/pdf' || t === '.pdf') return names.pdf;
+    if (t.startsWith('text/')) return names.text;
+    if (/officedocument|msword|ms-excel|ms-powerpoint|opendocument/.test(t)) return names.office;
+    return t.startsWith('.') ? t : (t.split('/')[1] ?? t);
+  };
+  const named = types.map(group);
   return new Intl.ListFormat(locale, { type: 'conjunction' }).format([...new Set(named)]);
 }
 

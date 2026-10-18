@@ -219,7 +219,12 @@ async function fetchConfig(
       profile: res.captureProfile == null ? legacyProfile(flight) : parseProfile(res.captureProfile, flight),
       masking: maskingOf(res.profile),
       reachable: true,
-      attachments: parseAttachmentCaps(res.attachments),
+      // vitrinka serves the caps inside the capture profile; a top-level `attachments` is read as a fallback.
+      attachments: parseAttachmentCaps(
+        typeof res.captureProfile === 'object' && res.captureProfile !== null && 'attachments' in res.captureProfile
+          ? (res.captureProfile as { attachments?: unknown }).attachments
+          : res.attachments,
+      ),
     };
   } catch (e) {
     console.warn('vitrinka: report config unavailable — capturing the last minute, strictly masked', e);

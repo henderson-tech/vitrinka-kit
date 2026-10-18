@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { admit, DEFAULT_ATTACHMENT_CAPS, formatBytes, parseAttachmentCaps, pastedName } from '../attachments';
+import { admit, DEFAULT_ATTACHMENT_CAPS, formatBytes, parseAttachmentCaps, pastedName, typesLabel } from '../attachments';
 import type { BuiltCapture } from '../engine';
 import { type ReportEnvelope, ReportJob } from '../wire';
 
@@ -20,6 +20,16 @@ describe('caps', () => {
       maxCount: DEFAULT_ATTACHMENT_CAPS.maxCount,
       types: ['image/png'],
     });
+  });
+
+  it('keeps maxCount 0 — the project switched attaching off', () => {
+    expect(parseAttachmentCaps({ maxCount: 0 }).maxCount).toBe(0);
+  });
+
+  it('names the server’s exact types as the few groups a person reads', () => {
+    const names = { image: 'images', pdf: 'PDF', text: 'text files', office: 'office documents' };
+    const types = ['image/png', 'image/jpeg', 'application/pdf', 'text/csv', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
+    expect(typesLabel(types, names, 'en')).toBe('images, PDF, text files, and office documents');
   });
 
   it('refuses a wrong type, an over-size file and one past the count — the first reason names its cap', () => {

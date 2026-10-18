@@ -160,7 +160,7 @@ test('a file past the project’s caps is refused at once, the line naming the c
   await page.route('**/api/v1/report-config', async (route) => {
     const response = await route.fetch();
     const json: Record<string, unknown> = await response.json();
-    await route.fulfill({ response, json: { ...json, attachments: { maxBytes: 2048, maxCount: 2, types: ['image/*', 'application/pdf'] } } });
+    await route.fulfill({ response, json: { ...json, captureProfile: { ...(json.captureProfile as Record<string, unknown>), attachments: { maxBytes: 2048, maxCount: 2, types: ['image/*', 'application/pdf'] } } } });
   });
   await page.goto(base);
   await armed();
