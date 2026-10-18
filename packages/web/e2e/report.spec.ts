@@ -564,3 +564,18 @@ test('Menu opens the report menu; Escape closes it and returns focus to Menu', a
   await expect(card).toBeVisible();
   await expect(trigger).toBeFocused();
 });
+
+test('the report menu moves its focus with the arrows, Home and End', async ({ page }) => {
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('button', { name: 'Menu', exact: true }).click();
+  // A reporter's items: My reports and Settings (no portal session, no member link).
+  const reports = card.getByRole('menuitem', { name: 'My reports', exact: true });
+  const settings = card.getByRole('menuitem', { name: 'Settings', exact: true });
+  await expect(reports).toBeFocused();
+  for (const [key, focused] of [['ArrowDown', settings], ['ArrowDown', reports], ['ArrowUp', settings], ['Home', reports], ['End', settings]] as const) {
+    await page.keyboard.press(key);
+    await expect(focused).toBeFocused();
+  }
+});

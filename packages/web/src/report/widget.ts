@@ -741,6 +741,19 @@ export class ReportWidget {
       fn();
       this.paint();
     };
+    // A role=menu moves its focus with the arrows, Home and End over the items on show (the pill's Menu.tsx onKey).
+    on(e.morePop, 'keydown', (ev) => {
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
+      const items = [...e.morePop.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) => !el.hidden && !(el instanceof HTMLButtonElement && el.disabled));
+      if (!items.length) return;
+      ev.preventDefault();
+      const root = e.morePop.getRootNode() as ShadowRoot | Document;
+      const at = items.indexOf(root.activeElement as HTMLElement);
+      const last = items.length - 1;
+      const down = ev.key === 'ArrowDown';
+      const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? last : at < 0 ? (down ? 0 : last) : (at + (down ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    });
     on(e.mReports, 'click', fromMenu(() => void this.openReports()));
     on(e.mRecents, 'click', fromMenu(() => this.show('recents')));
     on(e.mRecord, 'click', fromMenu(() => this.recordSwitch?.()));
@@ -959,33 +972,19 @@ export class ReportWidget {
     }
     if (this.sessionToken === who.token && sessionLive(this.session)) return this.session;
     this.sessionToken = who.token;
+    let opened: ReporterSession | null = null;
     try {
       opened = await openSession(this.target(), who.token);
     } catch (e) {
       console.warn('vitrinka: the reporter session could not be opened — My reports shows this browser’s reports only', e);
     }
+    // The person changed while the trade was in flight (whoChanged): this session is someone else's now.
+    if (this.sessionToken !== who.token) return null;
+    this.session = opened;
     this.paint();
     return this.session;
   }
 
-  private async refreshMember(): Promise<void> {
-    // The browser-wide link goes only to the vitrinka it was minted on: its token never reaches another widget's base.
-    const link = memberLinked(this.opts.base) ? readLink() : null;
-    if (!link) {
-    let opened: ReporterSession | null = null;
-      if (this.member) {
-        this.member = null;
-        this.paint();
-      }
-      return;
-    }
-    // The person changed while the trade was in flight (whoChanged): this session is someone else's now.
-    if (this.sessionToken !== who.token) return null;
-    this.session = opened;
-    try {
-      const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
-        'GET',
-        '/api/v1/recorder/me',
   /**
    * identify() or the page-wide identity moved: a session and a list read for
    * the previous person never stay on screen for the next one, and an open My
@@ -1001,6 +1000,20 @@ export class ReportWidget {
     this.paint();
   }
 
+  private async refreshMember(): Promise<void> {
+    // The browser-wide link goes only to the vitrinka it was minted on: its token never reaches another widget's base.
+    const link = memberLinked(this.opts.base) ? readLink() : null;
+    if (!link) {
+      if (this.member) {
+        this.member = null;
+        this.paint();
+      }
+      return;
+    }
+    try {
+      const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
+        'GET',
+        '/api/v1/recorder/me',
         undefined,
         { target: { url: this.opts.base, key: link.token } },
       );
@@ -1016,7 +1029,14 @@ export class ReportWidget {
 
   private async openReports(): Promise<void> {
     this.show('reports');
+    await this.loadReports();
+  }
+
+  private async loadReports(): Promise<void> {
+    const asked = this.whoToken();
     const session = await this.refreshWho();
+    // The person changed meanwhile: whoChanged already reloads for the next one.
+    if (this.whoToken() !== asked) return;
     if (!session) {
       this.mine = { rows: [], state: 'ok' };
       this.paint();
@@ -1024,19 +1044,16 @@ export class ReportWidget {
     }
     this.mine = { rows: [], state: 'loading' };
     this.paint();
+    let mine: typeof this.mine;
     try {
       mine = { rows: await this.listMineRenewing(session), state: 'ok' };
     } catch (e) {
       console.warn('vitrinka: My reports could not be loaded', e);
       mine = { rows: [], state: 'failed' };
-    await this.loadReports();
-  }
-
-  private async loadReports(): Promise<void> {
-    const asked = this.whoToken();
     }
-    // The person changed meanwhile: whoChanged already reloads for the next one.
+    // A list read for the previous person is dropped; whoChanged already reloads for the next one.
     if (this.whoToken() !== asked) return;
+    this.mine = mine;
     this.paint();
   }
 
@@ -1044,16 +1061,12 @@ export class ReportWidget {
   private async listMineRenewing(session: ReporterSession): Promise<MyReport[]> {
     try {
       return (await listMine(this.target(), session.session)).reports;
-    let mine: typeof this.mine;
     } catch (e) {
       if (!(e instanceof VitrinkaApiError) || e.status !== 401) throw e;
       this.session = null;
       this.sessionToken = '';
       const renewed = await this.refreshWho();
       if (!renewed) throw e;
-    // A list read for the previous person is dropped; whoChanged already reloads for the next one.
-    if (this.whoToken() !== asked) return;
-    this.mine = mine;
       return (await listMine(this.target(), renewed.session)).reports;
     }
   }
@@ -1115,6 +1128,12 @@ export class ReportWidget {
     return this.identity !== undefined ? this.identity : sharedIdentity();
   }
 
+  /** The signed token of the person here now; '' for an asserted or anonymous reporter. */
+  private whoToken(): string {
+    const who = this.who();
+    return who && 'token' in who ? who.token : '';
+  }
+
   // -- the shortcut recorder ----------------------------------------------
 
   private stopBindListener: (() => void) | null = null;
@@ -1128,12 +1147,6 @@ export class ReportWidget {
       (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-  /** The signed token of the person here now; '' for an asserted or anonymous reporter. */
-  private whoToken(): string {
-    const who = this.who();
-    return who && 'token' in who ? who.token : '';
-  }
-
         const verdict = readKeybindPress(ev);
         if (verdict.kind === 'wait') return;
         if (verdict.kind === 'bare') {
@@ -1737,6 +1750,8 @@ export class ReportWidget {
     // Recording lives where the pill does: only a linked member gets it, its recents and the way to vitrinka.
     e.mRecents.hidden = !this.recordSwitch;
     e.mRecord.hidden = !this.recordSwitch;
+    // The switch unmounts this card: never while a report is sending or waiting on Try again, which would be lost with it.
+    e.mRecord.disabled = this.sending || this.job !== null;
     const open = member ? this.opts.base : portal;
     e.mOpen.hidden = !open;
     if (open) e.mOpen.setAttribute('href', open);
@@ -1750,8 +1765,6 @@ export class ReportWidget {
     const rows = local
       ? readSent(this.opts.base, globalThis.location?.host ?? '').map((r) => this.row(r.title, r.status === 'quarantined' ? s.waiting : s.steps.received ?? '', r.at, r.url))
       : this.mine.rows.map((r) => this.row(r.title, s.steps[r.step] ?? r.step, Date.parse(r.updatedAt), r.url));
-    // The switch unmounts this card: never while a report is sending or waiting on Try again, which would be lost with it.
-    e.mRecord.disabled = this.sending || this.job !== null;
     e.repRows.replaceChildren(...rows);
     const state = local ? 'ok' : this.mine.state;
     e.repStatus.hidden = state === 'ok' && rows.length > 0;
