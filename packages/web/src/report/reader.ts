@@ -3,12 +3,16 @@
  * publishable key: the host's signed token is traded once for a short-lived
  * reporter session, which then lists the reporter's reports and their news.
  * A `vkb_` key alone reads nothing — every list call carries the session.
+ * A browser linked to a vitrinka member on the widget's base proves the link
+ * in the trade too (`memberToken`, vt-8020): the session then lists the
+ * reporter's reports and the member's, as the server joins them.
  *
- *   POST /api/v1/report/session   {token} → {reporter, session, expiresAt, portalUrl?}
+ *   POST /api/v1/report/session   {token, memberToken?} → {reporter, session, expiresAt, portalUrl?, memberError?}
  *   GET  /api/v1/report/mine?cursor=     X-Vitrinka-Reporter → {reports, nextCursor}
  *   GET  /api/v1/report/updates?cursor=  X-Vitrinka-Reporter → {updates, nextCursor}
  */
 import { type ApiTarget, VitrinkaApiError } from '../recorder/api';
+import { refusedField } from './wire';
 
 export interface Reporter {
   id: string;
@@ -23,6 +27,8 @@ export interface ReporterSession {
   expiresAt: string;
   /** The project's reporter portal, when one is bound. */
   portalUrl?: string;
+  /** The server did not take the member link the trade carried (revoked, another workspace, no longer a member); the session is the reporter's alone. */
+  memberError?: string;
 }
 
 /** One of the reporter's reports, as the portal projects it. */
@@ -58,8 +64,31 @@ async function call<T>(method: string, path: string, target: ApiTarget, body?: u
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-export function openSession(target: ApiTarget, token: string): Promise<ReporterSession> {
-  return call<ReporterSession>('POST', '/api/v1/report/session', target, { token });
+/**
+ * Trade the host's token for a reporter session, proving `memberToken` beside
+ * it when there is one. A vitrinka older than the field refuses it by name:
+ * the session is the reporter's alone then, never lost — the trade goes again
+ * without it, once.
+ */
+export async function openSession(target: ApiTarget, token: string, memberToken = ''): Promise<ReporterSession> {
+  const path = '/api/v1/report/session';
+  if (!memberToken) return call<ReporterSession>('POST', path, target, { token });
+  try {
+    return await call<ReporterSession>('POST', path, target, { token, memberToken });
+  } catch (e) {
+    if (refusedField(e) !== 'memberToken') throw e;
+    console.warn('vitrinka: this server takes no member link yet — the reporter session opens without it');
+    return call<ReporterSession>('POST', path, target, { token });
+  }
+}
+
+/**
+ * Whose session a widget holds: the host's signed token and the member link
+ * the trade proved — '' without a host token, which opens none. Linking,
+ * unlinking or relinking is another key, so another session and list.
+ */
+export function sessionKey(hostToken: string, memberToken: string): string {
+  return hostToken ? JSON.stringify([hostToken, memberToken]) : '';
 }
 
 /** Still good for at least a minute more. */

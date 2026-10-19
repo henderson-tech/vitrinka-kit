@@ -8,7 +8,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { clearLink, configureRecorder, storeLink, type StoredLink } from '../../recorder/config';
 import { setState } from '../../recorder/queue';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../../recorder/storage';
-import { FACE_KEY, memberLinked, pillRecording, rememberDisplayMode, rememberedFace, rememberFace, startFace, watchMemberLink } from '../face';
+import {
+  FACE_KEY,
+  memberLinked,
+  memberLinkGone,
+  memberTokenFor,
+  pillRecording,
+  rememberDisplayMode,
+  rememberedFace,
+  rememberFace,
+  startFace,
+  watchMemberLink,
+} from '../face';
 
 const BASE = 'https://vitrinka.test';
 const link = (over: Partial<StoredLink> = {}): StoredLink => ({ token: 'vkr_member', workspace: 'acme', label: 'Chrome', expires_in: 3600, ...over });
@@ -60,6 +71,23 @@ describe('memberLinked', () => {
     storeLink(link({ base: BASE }));
     expect(heard).toBe(2);
     expect(memberLinked(BASE)).toBe(true);
+  });
+});
+
+describe('the member link a report proves', () => {
+  it('is the link minted on this base, never one minted elsewhere nor the host’s recorder key', () => {
+    configureRecorder({ url: BASE, key: 'vkr_host_build' });
+    expect(memberTokenFor(BASE)).toBe('');
+    storeLink(link({ base: 'https://other.test' }));
+    expect(memberTokenFor(BASE)).toBe('');
+    storeLink(link({ base: BASE }));
+    expect(memberTokenFor(BASE)).toBe('vkr_member');
+    expect(memberTokenFor('https://other.test')).toBe('');
+  });
+
+  it('is forgotten only when vitrinka says it was revoked or its person is no longer a member', () => {
+    for (const gone of ['revoked', 'not_member', 'the link was revoked', 'no longer a member of this workspace']) expect(memberLinkGone(gone)).toBe(true);
+    for (const kept of ['other_workspace', 'the link belongs to another workspace']) expect(memberLinkGone(kept)).toBe(false);
   });
 });
 

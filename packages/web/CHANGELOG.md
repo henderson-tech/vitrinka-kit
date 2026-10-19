@@ -1,5 +1,41 @@
 # @vitrinka/web
 
+## 0.9.2
+
+- **A linked member co-owns what they report.** When this browser holds a
+  vitrinka member link for the widget's `base`, Report a problem proves it
+  to the server: the link's token rides in the body of the report
+  (`memberToken` on `POST /api/v1/reports`) and of the reporter session
+  (`POST /api/v1/report/session {token, memberToken}`), so the member owns
+  the report beside the reporter and finds it in **My reports**. Your
+  `vkb_` key stays the bearer. A link minted on another vitrinka is never
+  sent, and neither is a `vkr_` key your build passes. With a reporter your
+  server signed and a linked member, My reports lists what vitrinka returns
+  for the two: the reporter's reports and the member's. Without a signed
+  reporter there is still no session, and My reports stays this browser's
+  list.
+- **A link vitrinka refuses never costs the report.** Either call may come
+  back with `memberError`: the link was revoked, belongs to another
+  workspace, or its person is no longer a member. The report files anyway,
+  and the console says why once. A revoked link, or one whose person left,
+  is forgotten, as a link a session door answers 401 is. A link for another
+  workspace stays.
+- **Linking, unlinking or relinking opens a fresh session.** The reporter
+  session and the My reports list it read were held for your token alone.
+  They are now held for your token and the member link together, so
+  **Unlink** (cs **Odpojit**), a new link, or a change in another tab drops
+  both, a list still loading included, and an open My reports reloads.
+
+Upgrading:
+
+- **The server side ships in vitrinka first.** An older vitrinka refuses
+  the unknown `memberToken` by name; the widget then sends the report, or
+  opens the session, again without it, once, as 0.8.0 does for `type`. The
+  link is ignored: the report files as the reporter's alone and My reports
+  reads as before. The widget now reads that refusal for the field it
+  names, never for a field the server lists as accepted, so the reporter's
+  `type` stays.
+
 ## 0.9.1
 
 - **The button keeps its name with a shortcut set.** 0.9.0's default

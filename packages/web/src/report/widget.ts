@@ -34,10 +34,11 @@ import { clearLink, defaultLinkLabel, readLink, storeLink } from '../recorder/co
 import { readRecents } from '../recorder/recents';
 import { createHudHost, createSheetHost, type HudHost, insideHud, sheetTarget } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
+import { forgetLink } from '../recorder/link';
 import { RECORDER_VERSION } from '../recorder/version';
 import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
 import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
-import { memberLinked, rememberDisplayMode } from './face';
+import { memberLinked, memberLinkGone, memberTokenFor, rememberDisplayMode, watchMemberLink } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
@@ -57,7 +58,7 @@ import {
 } from './markers';
 import { coachSide, type Corner, cornerRect, type Frame, pickCorner } from './place';
 import type { CaptureNarrowing } from './profile';
-import { listMine, type MyReport, openSession, type ReporterSession, sessionLive } from './reader';
+import { listMine, type MyReport, openSession, type ReporterSession, sessionKey, sessionLive } from './reader';
 import { noteSent, readSent } from './sent';
 import { COACH_KEY, readCoach, readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
@@ -578,9 +579,11 @@ export class ReportWidget {
   /** Swaps this widget for the recorder pill; set only for a linked member (setRecordSwitch). */
   private recordSwitch: (() => void) | null = null;
   private menu: Popover | null = null;
-  /** The reporter session the host's signed token was traded for (vt-8020 D4), and that token. */
+  /** The reporter session the host's signed token was traded for (vt-8020 D4), and whose it is: that token and the member link it proved (reader.ts sessionKey). */
   private session: ReporterSession | null = null;
-  private sessionToken = '';
+  private sessionKey = '';
+  /** The member link this widget last saw for its base ('' none): a change is another person's session (linkChanged). */
+  private linkSeen = '';
   /** The vitrinka member this browser is linked to (vt-8020 D3), read with the link's own token. */
   private member: { name: string; email: string; workspace: string } | null = null;
   private mine: { rows: MyReport[]; state: 'loading' | 'failed' | 'ok' } = { rows: [], state: 'ok' };
@@ -867,6 +870,7 @@ export class ReportWidget {
     on(e.accPortal, 'click', fromMenu(() => undefined));
     on(e.accLink, 'click', fromMenu(() => this.startLinkFlow()));
     on(e.accUnlink, 'click', () => {
+      // clearLink notifies: linkChanged drops the session and the list read with the link, a response in flight included.
       clearLink();
       this.member = null;
       this.paint();
@@ -996,6 +1000,9 @@ export class ReportWidget {
       this.paint();
     }));
     this.offs.push(onSharedIdentity(() => this.whoChanged()));
+    // Linked, unlinked or relinked — here, in the link flow, or in another tab: the session belongs to the pairing it proved.
+    this.linkSeen = memberTokenFor(this.opts.base);
+    this.offs.push(watchMemberLink(() => this.linkChanged()));
     // The recorder took the page's capture over: stop saying minutes are attached.
     if (this.engine) this.offs.push(this.engine.onChange(() => this.paint()));
     // Dialogs open and close anywhere: follow them, at most once a frame.
@@ -1058,42 +1065,83 @@ export class ReportWidget {
     first?.focus();
   }
 
-  /** The host's signed token traded once for a reporter session; renewed only when it is about to lapse. Answers the session in force. */
+  /**
+   * The host's signed token traded once for a reporter session, with the
+   * member link beside it when this browser holds one for the base; renewed
+   * only when it is about to lapse. Answers the session in force.
+   */
   private async refreshWho(): Promise<ReporterSession | null> {
-    const who = this.who();
-    if (!who || !('token' in who)) {
+    const token = this.whoToken();
+    if (!token) {
       this.session = null;
-      this.sessionToken = '';
+      this.sessionKey = '';
       return null;
     }
-    if (this.sessionToken === who.token && sessionLive(this.session)) return this.session;
-    this.sessionToken = who.token;
+    const member = memberTokenFor(this.opts.base);
+    const key = sessionKey(token, member);
+    if (this.sessionKey === key && sessionLive(this.session)) return this.session;
+    this.sessionKey = key;
     let opened: ReporterSession | null = null;
     try {
-      opened = await openSession(this.target(), who.token);
+      opened = await openSession(this.target(), token, member);
     } catch (e) {
       console.warn('vitrinka: the reporter session could not be opened — My reports shows this browser’s reports only', e);
     }
-    // The person changed while the trade was in flight (whoChanged): this session is someone else's now.
-    if (this.sessionToken !== who.token) return null;
+    // The person or the member link changed while the trade was in flight (whoChanged): this session is someone else's now.
+    if (this.sessionKey !== key) return null;
     this.session = opened;
     this.paint();
-    return this.session;
+    // A link forgotten here moves the key (linkChanged), and the session for the reporter alone is opened instead.
+    if (opened?.memberError) this.memberRefused(opened.memberError, member);
+    return this.sessionKey === key ? this.session : null;
+  }
+
+  /** Whose session the widget should hold now (reader.ts sessionKey). */
+  private whoKey(): string {
+    return sessionKey(this.whoToken(), memberTokenFor(this.opts.base));
   }
 
   /**
-   * identify() or the page-wide identity moved: a session and a list read for
-   * the previous person never stay on screen for the next one, and an open My
-   * reports reloads for whoever is here now.
+   * identify(), the page-wide identity or the member link moved: a session
+   * and a list read for the previous person never stay on screen for the
+   * next one, and an open My reports reloads for whoever is here now.
    */
   private whoChanged(): void {
-    if (this.whoToken() !== this.sessionToken) {
+    if (this.whoKey() !== this.sessionKey) {
       this.session = null;
-      this.sessionToken = '';
+      this.sessionKey = '';
       this.mine = { rows: [], state: 'ok' };
       if (this.isOpen) void (this.view === 'reports' ? this.loadReports() : this.refreshWho());
     }
     this.paint();
+  }
+
+  /**
+   * The stored link moved (watchMemberLink: Unlink, the link flow, another
+   * tab, a refused link forgotten). Only a change of this base's link counts;
+   * the recorder's other notifications pass. The member the popover named was
+   * the previous link's: an open card reads the new link's (refreshMember).
+   */
+  private linkChanged(): void {
+    const now = memberTokenFor(this.opts.base);
+    if (now === this.linkSeen) return;
+    this.linkSeen = now;
+    this.member = null;
+    if (now && this.isOpen) void this.refreshMember();
+    this.whoChanged();
+  }
+
+  /**
+   * vitrinka did not take the member link a report or a session proved
+   * (`memberError`): they stand as the reporter's alone. A link revoked, or
+   * whose person is no longer a member, is forgotten as a 401 on a session
+   * door forgets it (recorder/link.ts) — only the one that was sent, never a
+   * link made since. Any other answer keeps it.
+   */
+  private memberRefused(err: string, sent: string): void {
+    const gone = memberLinkGone(err);
+    console.warn(`vitrinka: vitrinka did not take this browser’s member link (${err}) — ${gone ? 'it is forgotten; link the account again' : 'it stays linked, and the reporter alone owns what goes with it'}`);
+    if (gone && sent && readLink()?.token === sent) forgetLink();
   }
 
   private async refreshMember(): Promise<void> {
@@ -1106,6 +1154,8 @@ export class ReportWidget {
       }
       return;
     }
+    let member: { name: string; email: string; workspace: string };
+    let mode: string | undefined;
     try {
       const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
         'GET',
@@ -1113,13 +1163,17 @@ export class ReportWidget {
         undefined,
         { target: { url: this.opts.base, key: link.token } },
       );
-      this.member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
-      // A dev-mode member starts on the pill next mount (face.ts startFace).
-      rememberDisplayMode(me.displayMode);
+      member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
+      mode = me.displayMode;
     } catch (e) {
       console.warn('vitrinka: the linked vitrinka account could not be read', e);
-      this.member = { email: '', name: '', workspace: link.workspace };
+      member = { email: '', name: '', workspace: link.workspace };
     }
+    // The link moved while vitrinka answered (linkChanged): this member, and their mode, are the previous link's.
+    if (memberTokenFor(this.opts.base) !== link.token) return;
+    this.member = member;
+    // A dev-mode member starts on the pill next mount (face.ts startFace).
+    rememberDisplayMode(mode);
     this.paint();
   }
 
@@ -1129,10 +1183,10 @@ export class ReportWidget {
   }
 
   private async loadReports(): Promise<void> {
-    const asked = this.whoToken();
+    const asked = this.whoKey();
     const session = await this.refreshWho();
-    // The person changed meanwhile: whoChanged already reloads for the next one.
-    if (this.whoToken() !== asked) return;
+    // The person or the member link changed meanwhile: whoChanged already reloads for the next one.
+    if (this.whoKey() !== asked) return;
     if (!session) {
       this.mine = { rows: [], state: 'ok' };
       this.paint();
@@ -1147,8 +1201,8 @@ export class ReportWidget {
       console.warn('vitrinka: My reports could not be loaded', e);
       mine = { rows: [], state: 'failed' };
     }
-    // A list read for the previous person is dropped; whoChanged already reloads for the next one.
-    if (this.whoToken() !== asked) return;
+    // A list read for the previous person or link is dropped; whoChanged already reloads for the next one.
+    if (this.whoKey() !== asked) return;
     this.mine = mine;
     this.paint();
   }
@@ -1160,7 +1214,7 @@ export class ReportWidget {
     } catch (e) {
       if (!(e instanceof VitrinkaApiError) || e.status !== 401) throw e;
       this.session = null;
-      this.sessionToken = '';
+      this.sessionKey = '';
       const renewed = await this.refreshWho();
       if (!renewed) throw e;
       return (await listMine(this.target(), renewed.session)).reports;
@@ -1187,10 +1241,10 @@ export class ReportWidget {
           signal: flow.abort.signal,
         });
         // The link names the vitrinka it belongs to: face.ts offers the pill only on that base.
+        // Storing it notifies: linkChanged reads the new member for an open card.
         storeLink({ ...linked, base });
         this.linkFlow = null;
         this.show('describe');
-        await this.refreshMember();
       } catch (e) {
         if (flow.abort.signal.aborted) return;
         flow.state = e instanceof LinkExpired ? 'expired' : 'failed';
@@ -1715,6 +1769,7 @@ export class ReportWidget {
 
   private envelope(description: string, capture: BuiltCapture): ReportEnvelope {
     const who = this.who();
+    const member = memberTokenFor(this.opts.base);
     const loc = globalThis.location;
     return {
       title: titleOf(description),
@@ -1732,6 +1787,8 @@ export class ReportWidget {
       markers: toWire(this.markers),
       locale: this.locale,
       ...(this.kind ? { type: this.kind } : {}),
+      // A member linked on this base co-owns the report; the `vkb_` key stays the bearer.
+      ...(member ? { memberToken: member } : {}),
     };
   }
 
@@ -1772,7 +1829,8 @@ export class ReportWidget {
         const capture = engine ? await prepareCapture(() => engine.build(frozen, this.markers, marked)) : EMPTY_CAPTURE;
         this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key }, this.files);
       }
-      this.result = await this.job.run(this.envelope(description, this.job.capture));
+      // A refused member link is handled when the create answers, even if a later leg then fails.
+      this.result = await this.job.run(this.envelope(description, this.job.capture), (err, sent) => this.memberRefused(err, sent));
       noteSent(this.opts.base, globalThis.location?.host ?? '', {
         title: titleOf(description),
         at: Date.now(),
