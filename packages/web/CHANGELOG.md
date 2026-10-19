@@ -1,5 +1,20 @@
 # @vitrinka/web
 
+## 0.8.2
+
+- **Your own opener reaches Report a problem from the pill.** While a
+  linked member's recorder pill was on screen — after **Record**, a reload
+  onto a remembered pick, or a dev-mode member's first mount — every opener
+  the host owns did nothing: the element's and the handle's `open()`, and
+  the `open-selector` control, all spoke to the report face the pill had
+  replaced. A user menu's "Report a problem" item closed its menu and left
+  nothing open. An idle pill now swaps back, remembering Report a problem
+  as the pick exactly as the pill's own menu row does, and opens the card.
+  A pill that is recording, or still starting a recording, stays on
+  screen, since leaving would strand the session, and the console says why
+  once. `close()` on the pill still does
+  nothing. Since 0.8.0.
+
 ## 0.8.1
 
 - **Record keeps the report you started.** A linked member's **Record**

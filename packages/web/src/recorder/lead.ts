@@ -409,6 +409,11 @@ export function settleStart(created: boolean): void {
   refresh();
 }
 
+/** A Start claimed this document and waits on its session: no session record yet, but one is on its way. */
+export function startInFlight(): boolean {
+  return starting;
+}
+
 /** This document's Stop is draining `sessionId` (null: it settled). */
 export function setLeadStopping(sessionId: string | null): void {
   stopping = sessionId;

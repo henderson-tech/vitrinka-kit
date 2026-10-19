@@ -154,3 +154,94 @@ test('Record stays unavailable while a report waits on Try again, which the swit
   await card.getByRole('button', { name: 'Menu', exact: true }).click();
   await expect(card.getByRole('menuitem', { name: 'Record', exact: true })).toBeDisabled();
 });
+
+test('a host’s open() reaches the card from the idle pill and keeps Report a problem as the pick', async ({ page }) => {
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await pickRecord(page);
+  await page.evaluate(() => document.querySelector('vitrinka-report')!.open());
+  await expect(page.getByRole('dialog', { name: 'Report a problem', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => [document.querySelector('vitrinka-report')!.face, localStorage.getItem('vitrinka.report.face')])).toEqual(['report', 'report']);
+});
+
+test('an open() still pending when the host remounts the element with a new key goes with the old mount', async ({ page }) => {
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await pickRecord(page);
+  const after = await page.evaluate(async () => {
+    const el = document.querySelector('vitrinka-report')!;
+    el.open();
+    el.setAttribute('key', 'vkb_e2e_remounted');
+    // Past the deferred switch the old mount's pill would have taken.
+    await new Promise((r) => setTimeout(r, 100));
+    return [el.face, localStorage.getItem('vitrinka.report.face')];
+  });
+  expect(after).toEqual(['recorder', 'recorder']);
+  await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Report a problem', exact: true })).toHaveCount(0);
+});
+
+test('the host’s open-selector control opens the card from a pill the page reloaded onto', async ({ page }) => {
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await pickRecord(page);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const help = document.createElement('button');
+    help.id = 'help';
+    help.textContent = 'Help';
+    document.body.prepend(help);
+    document.querySelector('vitrinka-report')!.setAttribute('open-selector', '#help');
+  });
+  await page.getByRole('button', { name: 'Help', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Report a problem', exact: true })).toBeVisible();
+});
+
+test('open() leaves the pill on screen while a recording starts or runs, and says why once', async ({ page }) => {
+  // The recorder's session legs, which this fixture does not stub; the create waits until the spec lets it go.
+  let releaseCreate = () => {};
+  const created = new Promise<void>((r) => {
+    releaseCreate = r;
+  });
+  await page.route((url) => url.pathname.startsWith('/api/v1/sessions'), async (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === '/api/v1/sessions') {
+      await created;
+      return route.fulfill({ status: 201, json: { id: 'sess-face', project: 'voke', environment: 'development', title: '', workspace: 'voke' } });
+    }
+    if (pathname.endsWith('/chunk')) return route.fulfill({ json: { blobKey: 'blob-face' } });
+    return route.fulfill({ json: { maxSeq: 0, status: 'recording' } });
+  });
+  const warned: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'warning') warned.push(m.text());
+  });
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await pickRecord(page);
+  // Past the deferred switch an idle pill would take.
+  const openAndWait = () =>
+    page.evaluate(async () => {
+      const el = document.querySelector('vitrinka-report')!;
+      el.open();
+      await new Promise((r) => setTimeout(r, 100));
+      return el.face;
+    });
+  // open() lands on an idle pill and Start is pressed before its deferred switch runs: the switch asks again and stays.
+  await page.getByRole('button', { name: 'Start recording', exact: true }).evaluate((start) => {
+    document.querySelector('vitrinka-report')!.open();
+    (start as HTMLButtonElement).click();
+  });
+  await expect(page.getByRole('button', { name: 'Starting…', exact: true })).toBeVisible();
+  expect(await openAndWait()).toBe('recorder');
+  releaseCreate();
+  const pill = page.locator('[data-e2e="recorder-pill"]');
+  await expect(pill).toHaveAttribute('data-face', 'rec');
+  expect(await openAndWait()).toBe('recorder');
+  await expect(pill).toHaveAttribute('data-face', 'rec');
+  await expect(page.getByRole('dialog', { name: 'Report a problem', exact: true })).toHaveCount(0);
+  expect(warned.filter((w) => w.includes('stays closed while the recorder pill records'))).toHaveLength(1);
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.report.face'))).toBe('recorder');
+});
