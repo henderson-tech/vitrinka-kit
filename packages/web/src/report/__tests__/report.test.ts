@@ -141,15 +141,19 @@ describe('a member link on the report wire (vt-8020)', () => {
     const creates = seen.filter((c) => c.path === '/api/v1/reports');
     expect(creates.map((c) => carriesLink(c.body))).toEqual([true, false]);
     expect(creates[1]!.body).toMatchObject({ type: 'bug', description: 'August is listed twice' });
-    expect(job.memberSent).toBe('');
   });
 
-  it('a link the server did not take comes back on the reply, and the report files', async () => {
+  it('a link the server did not take is heard when the create answers, once, even when a later leg fails; the report files', async () => {
     answer = (method, path) =>
       method === 'POST' && path === '/api/v1/reports' ? new Response(JSON.stringify({ id: 'rep-1', custody: 'direct', memberError: 'revoked' }), { status: 201 }) : undefined;
-    const job = new ReportJob(EMPTY_CAPTURE, 'app.example.test', { url: BASE, key: 'vkb_test' });
-    expect(await job.run({ ...envelope('August is listed twice'), memberToken: 'vkr_member' })).toEqual({ status: 'filed', reportUrl: REPORT_URL, memberError: 'revoked' });
-    expect(job.memberSent).toBe('vkr_member');
+    failChunk2 = 1;
+    const heard: [string, string][] = [];
+    const job = new ReportJob(capture, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    const env = { ...envelope('August is listed twice'), memberToken: 'vkr_member' };
+    await expect(job.run(env, (err, sent) => heard.push([err, sent]))).rejects.toThrow('503');
+    expect(heard).toEqual([['revoked', 'vkr_member']]);
+    expect(await job.run(env, (err, sent) => heard.push([err, sent]))).toEqual({ status: 'filed', reportUrl: REPORT_URL });
+    expect(heard).toHaveLength(1);
     expect(seen.every((c) => c.auth === 'Bearer vkb_test')).toBe(true);
   });
 

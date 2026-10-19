@@ -69,9 +69,14 @@ export interface ReportEnvelope {
 export interface SubmitReply {
   status: 'filed' | 'quarantined';
   reportUrl?: string;
-  /** The server did not take the member link the create carried (revoked, another workspace, no longer a member); the report filed regardless. */
-  memberError?: string;
 }
+
+/**
+ * Hears the create's `memberError` — the server did not take the member link
+ * it carried (revoked, another workspace, no longer a member) — with that
+ * link's token, once, as soon as the create answers.
+ */
+export type MemberRefusal = (error: string, sent: string) => void;
 
 /**
  * The top-level field a vitrinka refused as unknown — a 400 whose body names
@@ -149,9 +154,6 @@ export class ReportJob {
   private skipCapture = false;
   /** The files (by index) the server has — landed or refused for good. */
   private readonly filesDone = new Set<number>();
-  /** The member link the create carried, '' for none: the link a `memberError` is about. */
-  memberSent = '';
-  private memberError = '';
 
   /** `target`: the widget's own base and key — never whatever another widget configured. `files`: the reporter's attachments, fixed for the job. */
   constructor(
@@ -180,17 +182,21 @@ export class ReportJob {
     return this.filesDone.size < this.files.length;
   }
 
-  /** Run the legs from wherever the last run stopped; rejects with the failing leg's error. */
-  async run(env: ReportEnvelope): Promise<SubmitReply> {
+  /**
+   * Run the legs from wherever the last run stopped; rejects with the failing
+   * leg's error. `onMemberRefusal` hears the create's `memberError` the moment
+   * the create answers, so a later leg failing never holds it back.
+   */
+  async run(env: ReportEnvelope, onMemberRefusal?: MemberRefusal): Promise<SubmitReply> {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await this.create(env);
+      const { res, memberSent } = await this.create(env);
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
-      this.memberError = typeof res.memberError === 'string' ? res.memberError : '';
       this.sent = editsKey;
+      if (typeof res.memberError === 'string' && res.memberError) onMemberRefusal?.(res.memberError, memberSent);
     } else if (this.sent !== editsKey) {
       await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
       this.sent = editsKey;
@@ -209,23 +215,22 @@ export class ReportJob {
     return {
       status: reply.status === 'filed' ? 'filed' : 'quarantined',
       ...(typeof reply.reportUrl === 'string' && reply.reportUrl ? { reportUrl: reply.reportUrl } : {}),
-      ...(this.memberError ? { memberError: this.memberError } : {}),
     };
   }
 
   /**
-   * The create leg. A vitrinka older than an optional field refuses it by
-   * name; the reporter's word (`type`) and the member link (`memberToken`)
-   * are optional, the report is not, so it goes again without each field
-   * named, once. A refusal naming nothing still in the body fails the leg.
+   * The create leg, answering with the member link the accepted body carried
+   * ('' none). A vitrinka older than an optional field refuses it by name;
+   * the reporter's word (`type`) and the member link (`memberToken`) are
+   * optional, the report is not, so it goes again without each field named,
+   * once. A refusal naming nothing still in the body fails the leg.
    */
-  private async create(env: ReportEnvelope): Promise<{ id?: unknown; custody?: unknown; memberError?: unknown }> {
+  private async create(env: ReportEnvelope): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown }; memberSent: string }> {
     let body = env;
     for (;;) {
       try {
         const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown }>('POST', '/api/v1/reports', body);
-        this.memberSent = body.memberToken ?? '';
-        return res;
+        return { res, memberSent: body.memberToken ?? '' };
       } catch (e) {
         const field = refusedField(e);
         if (field === 'type' && body.type !== undefined) {

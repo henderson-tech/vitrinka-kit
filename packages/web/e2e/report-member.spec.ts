@@ -110,6 +110,25 @@ test('a memberError saying the link was revoked forgets it, warns once, and the 
   expect(server.seen.some((s) => s.path === '/api/v1/reports/rep-1/submit')).toBe(true);
 });
 
+test('a link replaced in another tab names its own member and opens a fresh session for it', async ({ page, context }) => {
+  await linked(page, server.url);
+  const trades = await sessionDoor(page);
+  await page.route('**/api/v1/recorder/me', (route) => {
+    const other = route.request().headers().authorization === 'Bearer vkr_other';
+    return route.fulfill({ json: { kind: 'linked', workspace: { slug: 'voke' }, user: { email: other ? 'bea@example.test' : 'member@example.test' }, prefs: null, displayMode: 'regular' } });
+  });
+  const card = await openSigned(page);
+  await card.getByRole('button', { name: /^Your account/ }).click();
+  await expect(card.getByText('Linked to vitrinka as member@example.test')).toBeVisible();
+  const tab = await context.newPage();
+  await tab.goto(`${server.url}/__events`);
+  await tab.evaluate((b) => {
+    localStorage.setItem('vitrinka.recorder.link', JSON.stringify({ token: 'vkr_other', workspace: 'voke', label: 'Other tab', expires_in: 2592000, base: b }));
+  }, server.url);
+  await expect(card.getByText('Linked to vitrinka as bea@example.test')).toBeVisible();
+  await expect.poll(() => trades).toEqual([{ token: HOST_TOKEN, memberToken: 'vkr_member' }, { token: HOST_TOKEN, memberToken: 'vkr_other' }]);
+});
+
 test('Unlink drops the session and a list still loading for the linked pairing; My reports reloads for the reporter alone', async ({ page }) => {
   await linked(page, server.url);
   const trades = await sessionDoor(page);

@@ -1119,13 +1119,15 @@ export class ReportWidget {
   /**
    * The stored link moved (watchMemberLink: Unlink, the link flow, another
    * tab, a refused link forgotten). Only a change of this base's link counts;
-   * the recorder's other notifications pass.
+   * the recorder's other notifications pass. The member the popover named was
+   * the previous link's: an open card reads the new link's (refreshMember).
    */
   private linkChanged(): void {
     const now = memberTokenFor(this.opts.base);
     if (now === this.linkSeen) return;
     this.linkSeen = now;
-    if (!now) this.member = null;
+    this.member = null;
+    if (now && this.isOpen) void this.refreshMember();
     this.whoChanged();
   }
 
@@ -1152,6 +1154,8 @@ export class ReportWidget {
       }
       return;
     }
+    let member: { name: string; email: string; workspace: string };
+    let mode: string | undefined;
     try {
       const me = await api<{ user?: { email?: string; name?: string } | null; workspace?: { slug?: string }; displayMode?: string }>(
         'GET',
@@ -1159,13 +1163,17 @@ export class ReportWidget {
         undefined,
         { target: { url: this.opts.base, key: link.token } },
       );
-      this.member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
-      // A dev-mode member starts on the pill next mount (face.ts startFace).
-      rememberDisplayMode(me.displayMode);
+      member = { email: me.user?.email ?? '', name: me.user?.name ?? '', workspace: me.workspace?.slug ?? link.workspace };
+      mode = me.displayMode;
     } catch (e) {
       console.warn('vitrinka: the linked vitrinka account could not be read', e);
-      this.member = { email: '', name: '', workspace: link.workspace };
+      member = { email: '', name: '', workspace: link.workspace };
     }
+    // The link moved while vitrinka answered (linkChanged): this member, and their mode, are the previous link's.
+    if (memberTokenFor(this.opts.base) !== link.token) return;
+    this.member = member;
+    // A dev-mode member starts on the pill next mount (face.ts startFace).
+    rememberDisplayMode(mode);
     this.paint();
   }
 
@@ -1233,10 +1241,10 @@ export class ReportWidget {
           signal: flow.abort.signal,
         });
         // The link names the vitrinka it belongs to: face.ts offers the pill only on that base.
+        // Storing it notifies: linkChanged reads the new member for an open card.
         storeLink({ ...linked, base });
         this.linkFlow = null;
         this.show('describe');
-        await this.refreshMember();
       } catch (e) {
         if (flow.abort.signal.aborted) return;
         flow.state = e instanceof LinkExpired ? 'expired' : 'failed';
@@ -1821,9 +1829,8 @@ export class ReportWidget {
         const capture = engine ? await prepareCapture(() => engine.build(frozen, this.markers, marked)) : EMPTY_CAPTURE;
         this.job = new ReportJob(capture, globalThis.location?.host ?? '', { url: this.opts.base, key: this.opts.key }, this.files);
       }
-      const job = this.job;
-      this.result = await job.run(this.envelope(description, job.capture));
-      if (this.result.memberError) this.memberRefused(this.result.memberError, job.memberSent);
+      // A refused member link is handled when the create answers, even if a later leg then fails.
+      this.result = await this.job.run(this.envelope(description, this.job.capture), (err, sent) => this.memberRefused(err, sent));
       noteSent(this.opts.base, globalThis.location?.host ?? '', {
         title: titleOf(description),
         at: Date.now(),
