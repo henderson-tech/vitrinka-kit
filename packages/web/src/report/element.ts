@@ -17,7 +17,7 @@
  * on the device link, the pill's "Report a problem" swaps back, and the pick
  * survives a reload (npm entry only, like `face: 'recorder'`). The host's
  * openers — `open()` and `open-selector` — swap back too and open the card,
- * except while the pill records.
+ * except while the pill records or starts to.
  */
 import { listen } from '../recorder/hud/listen';
 import type { RecordLoader } from './engine';
@@ -62,7 +62,7 @@ export interface ReportOptions extends ReportScriptOptions {
 export interface ReportHandle {
   /** The face on screen — a linked member's Record switch turns a `report` mount into `recorder`. */
   readonly face: ReportFace;
-  /** Opens the card; on a member's switched pill it swaps back first (never while the pill records). */
+  /** Opens the card; on a member's switched pill it swaps back first (never while the pill records or starts to). */
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
@@ -76,7 +76,7 @@ export interface VitrinkaReportElement extends HTMLElement {
   options: ReportScriptOptions;
   /** The face on screen: `recorder` while a linked member has switched to the pill. */
   readonly face: ReportFace;
-  /** Opens the card; on the pill it swaps back first (never while the pill records). */
+  /** Opens the card; on the pill it swaps back first (never while the pill records or starts to). */
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
@@ -284,32 +284,39 @@ export function defineReportElement(faces: Faces): void {
 
     /**
      * A host opener on the pill: back to Report a problem — remembered as the
-     * pill's own row does — and the card opens there. Never while the pill
-     * records: it hides its own way back then, as leaving strands the session.
+     * pill's own row does — and the card opens there. Deferred like switchTo,
+     * then decided on the face as it is by then, asked again right before the
+     * pill comes down: never while it records or a Start waits on its
+     * session, as leaving strands it.
      */
     private openFromPill(): void {
-      if (pillRecording()) {
-        if (!this.warnedRecording) {
-          console.warn('vitrinka: Report a problem stays closed while the recorder pill records — leaving would strand the session; stop the recording first');
+      if (this.keepsPill()) return;
+      setTimeout(() => {
+        if (this.shown === 'recorder') {
+          if (this.keepsPill()) return;
+          rememberFace('report');
+          this.show('report');
         }
-        this.warnedRecording = true;
-        return;
-      }
-      this.switchTo('report', () => this.widget?.open());
+        this.widget?.open();
+      }, 0);
     }
 
-    /**
-     * The member's pick, remembered for this browser; applied once the menu
-     * that asked has let go of its click, then `then` runs on the new face —
-     * unless the face changed meanwhile.
-     */
-    private switchTo(face: ReportFace, then?: () => void): void {
+    /** The pill is recording (or starting to): it stays, and the first refusal says why. */
+    private keepsPill(): boolean {
+      if (!pillRecording()) return false;
+      if (!this.warnedRecording) {
+        console.warn('vitrinka: Report a problem stays closed while the recorder pill records — leaving would strand the session; stop the recording first');
+      }
+      this.warnedRecording = true;
+      return true;
+    }
+
+    /** The member's pick, remembered for this browser; applied once the menu that asked has let go of its click. */
+    private switchTo(face: ReportFace): void {
       rememberFace(face);
       const gen = this.gen;
       setTimeout(() => {
-        if (gen !== this.gen) return;
-        if (this.shown !== face) this.show(face);
-        then?.();
+        if (gen === this.gen && this.shown !== face) this.show(face);
       }, 0);
     }
   }

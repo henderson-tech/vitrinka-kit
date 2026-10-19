@@ -10,8 +10,9 @@
   replaced. A user menu's "Report a problem" item closed its menu and left
   nothing open. An idle pill now swaps back, remembering Report a problem
   as the pick exactly as the pill's own menu row does, and opens the card.
-  A pill that is recording stays on screen, since leaving would strand the
-  session, and the console says why once. `close()` on the pill still does
+  A pill that is recording, or still starting a recording, stays on
+  screen, since leaving would strand the session, and the console says why
+  once. `close()` on the pill still does
   nothing. Since 0.8.0.
 
 ## 0.8.1

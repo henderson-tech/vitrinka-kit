@@ -13,6 +13,7 @@
 import { linkWorkspace } from '@vitrinka/link';
 
 import { LINK_KEY, readLink } from '../recorder/config';
+import { startInFlight } from '../recorder/lead';
 import { getState } from '../recorder/queue';
 import { subscribe } from '../recorder/state';
 import { getRecorderStorage } from '../recorder/storage';
@@ -82,12 +83,13 @@ export function startFace(base: string): ReportFace {
 }
 
 /**
- * The pill holds a recording: the session record its ⋯ menu reads, which
- * offers "Report a problem" only while there is none (Menu.tsx) — leaving
- * the pill mid-recording would strand the session, so nothing switches away.
+ * The pill holds a recording — the session record its ⋯ menu reads, which
+ * offers "Report a problem" only while there is none (Menu.tsx) — or a Start
+ * still waiting on its session. Leaving the pill then would strand the
+ * session, so a host opener never switches away.
  */
 export function pillRecording(): boolean {
-  return getState() !== null;
+  return getState() !== null || startInFlight();
 }
 
 /**

@@ -91,7 +91,7 @@ describe('the remembered face', () => {
 });
 
 describe('pillRecording', () => {
-  it('holds exactly while the session record the pill’s menu reads exists', () => {
+  it('holds while the session record the pill’s menu reads exists', () => {
     setState(null);
     expect(pillRecording()).toBe(false);
     setState({ sessionId: 'sess-1', project: 'voke', environment: 'development', title: '', seq: 0, paused: false, activeMs: 0, resumeAt: null });
