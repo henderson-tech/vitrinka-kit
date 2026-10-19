@@ -81,6 +81,11 @@ export function keybindLabel(b: Keybind, mac = isMacPlatform()): string {
   return [b.ctrl && 'Ctrl', b.alt && 'Alt', b.shift && 'Shift', b.meta && 'Meta', key].filter(Boolean).join('+');
 }
 
+/** The chord in `aria-keyshortcuts` words (Control, Alt, Shift, Meta): what assistive technology announces. */
+export function keybindAria(b: Keybind): string {
+  return [b.ctrl && 'Control', b.alt && 'Alt', b.shift && 'Shift', b.meta && 'Meta', keyLabel(b.code)].filter(Boolean).join('+');
+}
+
 function parseKeybind(raw: string | null | undefined): Keybind | null {
   if (!raw) return null;
   try {

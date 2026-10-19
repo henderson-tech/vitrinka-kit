@@ -58,9 +58,11 @@ test('the large button opens the card, and a shortcut the reporter records opens
   await expect(card).toBeVisible();
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toBeFocused();
 
-  // The default chord is ⌥⇧A (Alt+Shift+A off a Mac), with nothing recorded.
+  // The default chord is ⌥⇧A (Alt+Shift+A off a Mac), with nothing recorded. The button keeps its name:
+  // the chord painted on it is announced through aria-keyshortcuts.
   await card.getByRole('button', { name: 'Close' }).click();
   await expect(card).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Report a problem', exact: true })).toHaveAttribute('aria-keyshortcuts', /^Alt\+Shift\+A /);
   await page.keyboard.press('Alt+Shift+KeyA');
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: 'Menu', exact: true }).click();

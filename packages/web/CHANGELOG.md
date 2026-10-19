@@ -1,5 +1,16 @@
 # @vitrinka/web
 
+## 0.9.1
+
+- **The button keeps its name with a shortcut set.** 0.9.0's default
+  shortcut put its chord on the button, and the chord became part of the
+  button's accessible name: "Report a problem Alt+Shift+A" (cs "Nahlásit
+  problém Alt+Shift+A"). A screen reader read the glyphs as the name, and a
+  host test that found the button by name — Voke's did — found nothing. The
+  chord is now painted for the eye only, and assistive technology hears it
+  from `aria-keyshortcuts` (`Alt+Shift+A` beside the button's Alt+arrow
+  moves). Since 0.9.0.
+
 ## 0.9.0
 
 - **Box first, and the default.** The marking bar reads **Box · Circle ·
