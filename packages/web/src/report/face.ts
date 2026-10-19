@@ -49,6 +49,26 @@ export function memberLinked(base: string): boolean {
   }
 }
 
+/**
+ * The member link a report and a reporter session prove to `base` (vt-8020):
+ * the stored link's own token wherever `memberLinked` holds, else ''. Never a
+ * link minted on another vitrinka, and never a `vkr_` key the host configured
+ * — that is a build's, kept in the recorder's config, not in the link.
+ */
+export function memberTokenFor(base: string): string {
+  return memberLinked(base) ? (readLink()?.token ?? '') : '';
+}
+
+/**
+ * vitrinka's `memberError` says the link is gone for good — revoked, or its
+ * person no longer a member — rather than only not good here (another
+ * workspace). A gone link is forgotten as a 401 on a session door forgets it;
+ * any other answer keeps it.
+ */
+export function memberLinkGone(err: string): boolean {
+  return /revoked|not[\s_-]?(?:a[\s_-])?member|no longer a member/i.test(err);
+}
+
 /** The face this browser last picked here; null when it never picked (or storage is blocked). */
 export function rememberedFace(): ReportFace | null {
   const v = store()?.getItem(FACE_KEY);

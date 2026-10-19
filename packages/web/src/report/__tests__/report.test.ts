@@ -12,6 +12,7 @@ import { claimCapture, releaseCapture } from '../../recorder/state';
 import { acquireEngine, type BuiltCapture, releaseEngine } from '../engine';
 import { applyHides, HIDE_ATTR } from '../markers';
 import { narrowProfile, parseProfile } from '../profile';
+import { openSession, sessionKey } from '../reader';
 import { EMPTY_CAPTURE, prepareCapture, type ReportEnvelope, ReportJob } from '../wire';
 
 const BASE = 'https://vitrinka.test';
@@ -26,11 +27,14 @@ interface Seen {
 
 let seen: Seen[] = [];
 let failChunk2 = 0;
+/** A test's own answer for a call, ahead of the stub's. */
+let answer: (method: string, path: string, body: unknown) => Response | undefined = () => undefined;
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   seen = [];
   failChunk2 = 0;
+  answer = () => undefined;
   configureRecorder({ url: BASE, key: 'vkb_test' });
   globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -43,6 +47,8 @@ beforeEach(() => {
       // a raw chunk that is not JSON
     }
     seen.push({ method, path, auth: new Headers(init.headers).get('authorization') ?? '', body });
+    const own = answer(method, path, body);
+    if (own) return own;
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
     if (method === 'POST' && path === '/api/v1/reports') return json({ id: 'rep-1', custody: 'quarantined' }, 201);
     const chunk = /\/chunk\?seq=(\d+)$/.exec(path);
@@ -116,6 +122,51 @@ describe('the report wire', () => {
       { seq: 1, ts: capture.chunks[0]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 2, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-1' },
       { seq: 2, ts: capture.chunks[1]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 1, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-2' },
     ]);
+  });
+});
+
+/** An older vitrinka's strict decoder refusing `name`: its error lists the fields it takes, `type` among them. */
+const unknownField = (name: string): Response =>
+  new Response(
+    JSON.stringify({ error: `invalid JSON body: json: unknown field "${name}"; accepted top-level fields: title, description, env, console, network, identity, markers, locale, notify, type` }),
+    { status: 400 },
+  );
+const carriesLink = (body: unknown): boolean => typeof body === 'object' && body !== null && 'memberToken' in body;
+
+describe('a member link on the report wire (vt-8020)', () => {
+  it('a vitrinka that takes no member link yet gets the report again without it, once, keeping the reporter’s word', async () => {
+    answer = (method, path, body) => (method === 'POST' && path === '/api/v1/reports' && carriesLink(body) ? unknownField('memberToken') : undefined);
+    const job = new ReportJob(EMPTY_CAPTURE, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    expect(await job.run({ ...envelope('August is listed twice'), type: 'bug', memberToken: 'vkr_member' })).toEqual({ status: 'filed', reportUrl: REPORT_URL });
+    const creates = seen.filter((c) => c.path === '/api/v1/reports');
+    expect(creates.map((c) => carriesLink(c.body))).toEqual([true, false]);
+    expect(creates[1]!.body).toMatchObject({ type: 'bug', description: 'August is listed twice' });
+    expect(job.memberSent).toBe('');
+  });
+
+  it('a link the server did not take comes back on the reply, and the report files', async () => {
+    answer = (method, path) =>
+      method === 'POST' && path === '/api/v1/reports' ? new Response(JSON.stringify({ id: 'rep-1', custody: 'direct', memberError: 'revoked' }), { status: 201 }) : undefined;
+    const job = new ReportJob(EMPTY_CAPTURE, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    expect(await job.run({ ...envelope('August is listed twice'), memberToken: 'vkr_member' })).toEqual({ status: 'filed', reportUrl: REPORT_URL, memberError: 'revoked' });
+    expect(job.memberSent).toBe('vkr_member');
+    expect(seen.every((c) => c.auth === 'Bearer vkb_test')).toBe(true);
+  });
+
+  it('the reporter session proves the link beside the token; a vitrinka that takes none yet opens it without', async () => {
+    answer = (_method, path, body) => {
+      if (path !== '/api/v1/report/session') return undefined;
+      if (carriesLink(body)) return unknownField('memberToken');
+      return new Response(JSON.stringify({ reporter: { id: 'r-ann', email: 'ann@example.test' }, session: 'rs_ann', expiresAt: '2026-10-19T12:00:00Z' }));
+    };
+    expect((await openSession({ url: BASE, key: 'vkb_test' }, 'host.jws', 'vkr_member')).session).toBe('rs_ann');
+    expect(seen.map((c) => c.body)).toEqual([{ token: 'host.jws', memberToken: 'vkr_member' }, { token: 'host.jws' }]);
+  });
+
+  it('a session belongs to the host token and the link it proved; there is none without a host token', () => {
+    expect(sessionKey('host.jws', 'vkr_member')).not.toBe(sessionKey('host.jws', ''));
+    expect(sessionKey('host.jws', 'vkr_member')).not.toBe(sessionKey('host.jws', 'vkr_relinked'));
+    expect(sessionKey('', 'vkr_member')).toBe('');
   });
 });
 

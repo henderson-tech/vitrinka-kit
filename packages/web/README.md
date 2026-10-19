@@ -432,7 +432,10 @@ portal**. A list opens inside the card with ← back.
   /api/v1/report/session`, renewed when it lapses) and reads `GET
   /api/v1/report/mine` with it (header `X-Vitrinka-Reporter`): each report
   with its step — Received, Planned, In progress, Fixed, Done — linked to
-  its page. The `vkb_` key alone reads nothing.
+  its page. The `vkb_` key alone reads nothing. When the browser also holds
+  a member link for the widget's `base` (below), the trade proves it too,
+  and the list is what vitrinka returns for the two: the reporter's
+  reports and the member's.
 - **An asserted email, or anonymous**: this browser's own sends — the last
   20 for this vitrinka and this site, filed or "Waiting for approval",
   marked "Sent from this browser" (`localStorage`). A signed reporter gets
@@ -444,7 +447,11 @@ account from the account popover with the pill's flow: a short code,
 browser's own `vkr_` token, kept where the pill keeps its link
 (`vitrinka.recorder.link`, with the `base` it was minted on), so linking
 here links the pill on this site and **Unlink** forgets it for both.
-Reporters never need it: your token vouches for them.
+Reporters never need it: your token vouches for them. Every report sent
+from a linked browser proves the link (`memberToken` in the body, your
+`vkb_` key still the bearer), so the member co-owns it and finds it in My
+reports. A link vitrinka refuses never stops the report: one revoked, or
+whose person is no longer a member, is forgotten.
 
 **The face switch** (npm entry only). A browser holding a member link for
 the widget's `base` gets **Record** and **Recent recordings** in the ⋯

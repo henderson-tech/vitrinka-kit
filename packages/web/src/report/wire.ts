@@ -2,7 +2,7 @@
  * The report wire (vitrinka `docs/architecture/qa-studio.md` § "The report
  * wire"), under `Authorization: Bearer <vkb_ key>`:
  *
- *   POST  /api/v1/reports                  envelope → {id, custody}
+ *   POST  /api/v1/reports                  envelope → {id, custody, memberError?}
  *   PATCH /api/v1/reports/{id}             {title?, description?, markers?, notify?}
  *   POST  /api/v1/reports/{id}/attachment?name=<name>
  *                                          one file, raw body under its own Content-Type → {id, name, size, type}
@@ -25,6 +25,13 @@
  * pace, so only a stalled one runs out. A create whose answer was lost after
  * the server stored it is created again by Try again: the same risk a dropped
  * connection already carries.
+ *
+ * OPTIONAL FIELDS NEVER COST THE REPORT: a vitrinka older than a field refuses
+ * it by name (400, `unknown field "<name>"`), and the create goes again without
+ * each optional field it names — `type`, `memberToken` — once. `memberToken`
+ * proves this browser's vitrinka member link (vt-8020), so the member co-owns
+ * the report; `memberError` says the server did not take it, and the report
+ * files regardless.
  */
 import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
@@ -55,11 +62,26 @@ export interface ReportEnvelope {
   notify?: boolean;
   /** The reporter's own word for it (vt-8020 D11), absent when they picked none. */
   type?: ReportKind;
+  /** The vitrinka member link this browser holds for the widget's base (face.ts memberTokenFor), absent without one: the member co-owns the report. */
+  memberToken?: string;
 }
 
 export interface SubmitReply {
   status: 'filed' | 'quarantined';
   reportUrl?: string;
+  /** The server did not take the member link the create carried (revoked, another workspace, no longer a member); the report filed regardless. */
+  memberError?: string;
+}
+
+/**
+ * The top-level field a vitrinka refused as unknown — a 400 whose body names
+ * it (`json: unknown field "<name>"`, its quotes escaped once more inside the
+ * JSON error) — else ''. A field merely listed among the accepted ones is
+ * never it.
+ */
+export function refusedField(e: unknown): string {
+  if (!(e instanceof VitrinkaApiError) || e.status !== 400) return '';
+  return /unknown field \\?"(\w+)\\?"/.exec(e.message)?.[1] ?? '';
 }
 
 /** How long a leg may go unanswered: `ms` for any leg, plus one ms per `bytesPerMs` bytes an upload carries. */
@@ -127,6 +149,9 @@ export class ReportJob {
   private skipCapture = false;
   /** The files (by index) the server has — landed or refused for good. */
   private readonly filesDone = new Set<number>();
+  /** The member link the create carried, '' for none: the link a `memberError` is about. */
+  memberSent = '';
+  private memberError = '';
 
   /** `target`: the widget's own base and key — never whatever another widget configured. `files`: the reporter's attachments, fixed for the job. */
   constructor(
@@ -160,16 +185,11 @@ export class ReportJob {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const res = await this.call<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', env).catch((e: unknown) => {
-        // A vitrinka older than the report type refuses the unknown field: the hint is optional, the report is not.
-        if (env.type === undefined || !(e instanceof VitrinkaApiError) || e.status !== 400 || !/\btype\b/.test(e.message)) throw e;
-        console.warn('vitrinka: this server takes no report type yet — sending the report without it');
-        const { type: _dropped, ...rest } = env;
-        return this.call<{ id?: unknown; custody?: unknown }>('POST', '/api/v1/reports', rest);
-      });
+      const res = await this.create(env);
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
+      this.memberError = typeof res.memberError === 'string' ? res.memberError : '';
       this.sent = editsKey;
     } else if (this.sent !== editsKey) {
       await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
@@ -189,7 +209,38 @@ export class ReportJob {
     return {
       status: reply.status === 'filed' ? 'filed' : 'quarantined',
       ...(typeof reply.reportUrl === 'string' && reply.reportUrl ? { reportUrl: reply.reportUrl } : {}),
+      ...(this.memberError ? { memberError: this.memberError } : {}),
     };
+  }
+
+  /**
+   * The create leg. A vitrinka older than an optional field refuses it by
+   * name; the reporter's word (`type`) and the member link (`memberToken`)
+   * are optional, the report is not, so it goes again without each field
+   * named, once. A refusal naming nothing still in the body fails the leg.
+   */
+  private async create(env: ReportEnvelope): Promise<{ id?: unknown; custody?: unknown; memberError?: unknown }> {
+    let body = env;
+    for (;;) {
+      try {
+        const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown }>('POST', '/api/v1/reports', body);
+        this.memberSent = body.memberToken ?? '';
+        return res;
+      } catch (e) {
+        const field = refusedField(e);
+        if (field === 'type' && body.type !== undefined) {
+          console.warn('vitrinka: this server takes no report type yet — sending the report without it');
+          const { type: _dropped, ...rest } = body;
+          body = rest;
+        } else if (field === 'memberToken' && body.memberToken !== undefined) {
+          console.warn('vitrinka: this server takes no member link yet — sending the report without it');
+          const { memberToken: _dropped, ...rest } = body;
+          body = rest;
+        } else {
+          throw e;
+        }
+      }
+    }
   }
 
   private async sendFiles(): Promise<void> {

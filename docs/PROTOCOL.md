@@ -46,21 +46,24 @@ with the project's publishable report key (`vkb_…`) as the bearer, also with
 
 ```
 GET   /api/v1/report-config             → {project, captureProfile (+ its attachments caps), portalUrl, profile, flightRecorder}
-POST  /api/v1/reports                   the report (below) → {id, custody: "direct" | "quarantined"}
+POST  /api/v1/reports                   the report (below) → {id, custody: "direct" | "quarantined", memberError?}
 PATCH /api/v1/reports/:id               {title, description, markers, notify} — text changed before a retry
 POST  /api/v1/reports/:id/attachment?name=<file name>  one file the reporter attached, its raw bytes under its own Content-Type → {id, name, size, type}
 POST  /api/v1/reports/:id/chunk?seq=N   one rrweb chunk (a JSON array, ≤ 4 MiB, N from 1) → {blobKey}
 POST  /api/v1/reports/:id/events        {events: [{seq, ts, tabHost, kind: "rrweb", payload: {count, source: "replay", truncated}, blobKey}]}
 POST  /api/v1/reports/:id/submit        {} → {status: "filed" | "quarantined", reportUrl?} — the last leg
-POST  /api/v1/report/session            {token} → {reporter, session, expiresAt, portalUrl?} — My reports, a signed reporter only
+POST  /api/v1/report/session            {token, memberToken?} → {reporter, session, expiresAt, portalUrl?, memberError?} — My reports, a signed reporter only
 GET   /api/v1/report/mine?cursor=       X-Vitrinka-Reporter: <session> → {reports, nextCursor} — that reporter's own reports
 ```
 
 A browser that holds a vitrinka member's device link minted on the widget's
 own `base` (`vitrinka.recorder.link`, below) also reads `GET
 /api/v1/recorder/me` with that link's own `vkr_` token, never the `vkb_` key:
-who the member is and their display mode. A link minted on another vitrinka
-is never sent. Its **Record** (npm entry only) swaps the card for the
+who the member is and their display mode. The same token rides in the body
+of the report and of the reporter session (`memberToken`, web 0.9.2), the
+`vkb_` key still the bearer, so the member co-owns what they report and
+finds it in My reports. A link minted on another vitrinka is never sent,
+nor a `vkr_` key the host's build passes. Its **Record** (npm entry only) swaps the card for the
 recorder pill, which then records as the web recorder does, on that link.
 
 Its single-file build loads one more thing, and only when the project's
@@ -252,10 +255,14 @@ optional marks drawn on the page.
      appVersion, locale (the browser's)}, console: [{level, ts, text}],
      network: [{method, path, status, ms}], identity?, markers: [{n, shape,
      rect: {x, y, w, h}, note?, head?}], locale (the widget's: cs | en),
-     notify?, type?}` — at most 500 console and 500 network entries; `type`
-     is the reporter's own word (`bug` · `suggestion` · `question` ·
-     `other`), sent only when one is picked, and a server that refuses the
-     field gets the report again without it;
+     notify?, type?, memberToken?}` — at most 500 console and 500 network
+     entries; `type` is the reporter's own word (`bug` · `suggestion` ·
+     `question` · `other`), sent only when one is picked; `memberToken` is
+     the browser's member link for this `base` (above), sent only when it
+     holds one. A server that refuses either field by name gets the report
+     again without it; a `memberError` in the answer (the link revoked,
+     another workspace's, its person no longer a member) still files the
+     report, and a revoked link, or one whose person left, is forgotten;
   2. the files the reporter attached, one `/attachment?name=` leg each —
      only files picked with 📎, pasted or dropped onto the card, each
      checked first against the project's caps (by default 10 MiB per file,
@@ -287,8 +294,11 @@ optional marks drawn on the page.
   once for a short-lived reporter session (`POST /api/v1/report/session`),
   held in memory and dropped when the host identifies someone else, and
   lists that reporter's reports with it (`GET /api/v1/report/mine`); the
-  `vkb_` key alone reads nothing. Anyone else gets this browser's own list
-  (above).
+  `vkb_` key alone reads nothing. A browser holding a member link for the
+  `base` proves it in the same trade (`memberToken`), and the list is the
+  reporter's reports and the member's; linking, unlinking or relinking
+  drops the session and opens a new one. Anyone else gets this browser's
+  own list (above).
 - **On the device**: the reporter's shortcut, when they record one, in
   `localStorage` (`vitrinka.recorder.report.keybind`: the key's code and its
   modifiers); the widget's settings, per origin, in `localStorage` — the
