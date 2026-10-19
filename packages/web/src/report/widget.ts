@@ -9,12 +9,12 @@
  *   one numbered note line per mark, and Send — the capture frozen when the
  *   card opens (the buffer rolls on).
  * - "Show us where" marks the frozen page under a top bar (vt-8020 D6 A): a segmented
- *   circle · box · arrow · hide, and Cancel, which leaves marking and drops
+ *   box · circle · arrow · cover, and Cancel, which leaves marking and drops
  *   this pass's marks (vt-8020 D12). The card stays on screen while marking, parked
  *   in the corner that covers none of the marks (place.ts). No element
- *   selector. Until the first mark exists a coach card rides beside the
- *   pointer with a tiny loop of the gesture and the words "click, hold and
- *   move".
+ *   selector. While marking, a coach rides on the card's top edge, never over
+ *   the page: a tiny run of the picked shape's gesture and the words "click,
+ *   hold and move", until the person presses "Got it, don't show again".
  * - The reporter's files (vt-8020 D9, attachments.ts): 📎 in the card's foot,
  *   paste or drop onto the card; chips above the foot, refused at once past
  *   the project's caps, sent on the wire's attachment leg.
@@ -55,11 +55,11 @@ import {
   renumber,
   toWire,
 } from './markers';
-import { type Corner, cornerRect, type Frame, pickCorner } from './place';
+import { coachSide, type Corner, cornerRect, type Frame, pickCorner } from './place';
 import type { CaptureNarrowing } from './profile';
 import { listMine, type MyReport, openSession, type ReporterSession, sessionLive } from './reader';
 import { noteSent, readSent } from './sent';
-import { readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
+import { COACH_KEY, readCoach, readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
 import { EMPTY_CAPTURE, prepareCapture, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
@@ -86,13 +86,16 @@ type Drawn = Marker & { key: number };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TITLE_CAP = 100;
-const TOOLS: readonly MarkerShape[] = ['circle', 'box', 'arrow', 'hide'];
+/** The box leads and is the default: most problems are a region, and a box is the one gesture nobody has to learn. */
+const TOOLS: readonly MarkerShape[] = ['box', 'circle', 'arrow', 'hide'];
 /** A keyboard mark starts as this, centred; arrows move it 10 px, Shift+arrows resize it. */
 const KB_DRAFT = { w: 160, h: 80 } as const;
 const MIN_KB_SIZE = 16;
 /** The one card's size (vt-8020 D10: it never changes between states) and the clear band the marking bar keeps at the top. */
 const CARD = { w: 380, h: 460 } as const;
 const BAR_CLEAR = 72;
+/** The coach's box beside the card (styles: `.coach`), before the size setting scales it, and its gap to the card. */
+const COACH = { w: 300, h: 160, gap: 10 } as const;
 /** The gap a parked card keeps on a side it did not rest against. */
 const PARK_EDGE = 16;
 const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
@@ -124,20 +127,69 @@ const ICON = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 } as const;
 
-/** The coach's loop (D21): a pointer presses, holds and goes round the problem. */
+/**
+ * The coach's run of the picked shape (D21): a pointer presses, holds and moves, and the shape grows under it.
+ * ONE clock: every moving part is SMIL in the same SVG with the same keyTimes and linear timing, so the pointer
+ * and the stroke stay locked frame for frame (a CSS-eased stroke beside a linear SMIL pointer drew ahead of it).
+ */
+const COACH_TIMES = '0;0.18;0.72;1';
+const COACH_DUR = '2.8s';
 const LOOP_PATH = 'M 134 14 C 200 14, 214 50, 134 50 C 54 50, 68 14, 134 14';
-function coachArt(reduced: boolean): string {
+const POINTER_SHAPE = '<path d="M0 0 L0 15 L4 11 L7 18 L10 16.6 L7 10 L12.5 10 Z" fill="#fff" stroke="#151417" stroke-width="1"/>';
+
+/** One value run on the coach clock: still at `from`, moving to `to`, still at `to`. */
+function coachAnim(attr: string, from: number, to: number): string {
+  return `<animate attributeName="${attr}" values="${from};${from};${to};${to}" keyTimes="${COACH_TIMES}" calcMode="linear" dur="${COACH_DUR}" repeatCount="indefinite"/>`;
+}
+
+function coachArt(shape: MarkerShape, reduced: boolean): string {
+  const still = (from: number, to: number) => (reduced ? to : from);
+  const anim = (attr: string, from: number, to: number) => (reduced ? '' : coachAnim(attr, from, to));
+  // The finished shape fades as the loop turns over; the press ring shows while the button is held.
+  const fade = reduced ? '' : `<animate attributeName="opacity" values="1;1;0" keyTimes="0;0.9;1" dur="${COACH_DUR}" repeatCount="indefinite"/>`;
+  const hold = reduced
+    ? ''
+    : `<animate attributeName="opacity" values="0;0;.9;.9;0;0" keyTimes="0;0.08;0.14;0.72;0.8;1" dur="${COACH_DUR}" repeatCount="indefinite"/>`;
+  let scene: string;
+  let path: string;
+  let end: Point;
+  if (shape === 'circle') {
+    path = LOOP_PATH;
+    end = { x: 134, y: 14 };
+    scene =
+      '<rect class="bar" x="84" y="27" width="100" height="10" rx="5"/>' +
+      `<path class="loop" d="${LOOP_PATH}" pathLength="200" stroke-dasharray="200" stroke-dashoffset="${still(200, 0)}">${anim('stroke-dashoffset', 200, 0)}${fade}</path>`;
+  } else if (shape === 'arrow') {
+    path = 'M 74 54 L 128 33';
+    end = { x: 128, y: 33 };
+    // A zero-length line still paints its head, pointing nowhere: the arrow shows only once it moves.
+    const show = reduced ? '' : `<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.18;0.19;0.9;1" dur="${COACH_DUR}" repeatCount="indefinite"/>`;
+    scene =
+      '<defs><marker id="vr-coach-head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#e6455f"/></marker></defs>' +
+      '<rect class="bar" x="136" y="27" width="70" height="10" rx="5"/>' +
+      `<line class="loop" x1="74" y1="54" x2="${still(74, 128)}" y2="${still(54, 33)}" marker-end="url(#vr-coach-head)"${reduced ? '' : ' opacity="0"'}>${anim('x2', 74, 128)}${anim('y2', 54, 33)}${show}</line>`;
+  } else {
+    // box and cover share the drag; a cover fills, so what is under it reads as gone.
+    const cover = shape === 'hide';
+    path = cover ? 'M 90 10 L 178 54' : 'M 96 12 L 172 52';
+    end = cover ? { x: 178, y: 54 } : { x: 172, y: 52 };
+    const x = cover ? 90 : 96;
+    const y = cover ? 10 : 12;
+    const w = end.x - x;
+    const hgt = end.y - y;
+    scene =
+      (cover
+        ? '<rect class="bar" x="102" y="20" width="64" height="8" rx="4"/><rect class="bar" x="102" y="35" width="44" height="8" rx="4"/>'
+        : '<rect class="bar" x="110" y="27" width="48" height="10" rx="5"/>') +
+      `<rect class="${cover ? 'veil' : 'loop'}" x="${x}" y="${y}" width="${still(0, w)}" height="${still(0, hgt)}" rx="${cover ? 4 : 6}">${anim('width', 0, w)}${anim('height', 0, hgt)}${fade}</rect>`;
+  }
   const motion = reduced
     ? ''
-    : `<animateMotion dur="2.8s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.18;0.72;1" calcMode="linear" path="${LOOP_PATH}"/>`;
+    : `<animateMotion dur="${COACH_DUR}" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="${COACH_TIMES}" calcMode="linear" path="${path}"/>`;
   return (
-    '<svg viewBox="0 0 268 64" aria-hidden="true">' +
-    '<rect class="bar" x="84" y="27" width="100" height="10" rx="5"/>' +
-    `<path class="loop" d="${LOOP_PATH}" pathLength="200"/>` +
-    `<g class="pointer"${reduced ? ' transform="translate(134 14)"' : ''}>` +
-    '<circle class="hold" r="9"/>' +
-    '<path d="M0 0 L0 15 L4 11 L7 18 L10 16.6 L7 10 L12.5 10 Z" fill="#fff" stroke="#151417" stroke-width="1"/>' +
-    `${motion}</g></svg>`
+    `<svg viewBox="0 0 268 64" aria-hidden="true" data-shape="${shape}">${scene}` +
+    `<g class="pointer"${reduced ? ` transform="translate(${end.x} ${end.y})"` : ''}>` +
+    `<circle class="hold" r="9"${reduced ? ' opacity=".9"' : ' opacity="0"'}>${hold}</circle>${POINTER_SHAPE}${motion}</g></svg>`
   );
 }
 
@@ -316,6 +368,9 @@ function buildDom(mount: HTMLElement) {
   for (const z of SIZES) sizeButtons.set(z, h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', 'data-size': z }));
   const sizeInd = h('span', { class: 'seg-ind', 'aria-hidden': 'true' });
   const sizeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': 'vr-size-label' }, sizeInd, ...sizeButtons.values());
+  // The marking tips: the way back after "Got it, don't show again".
+  const coachLabel = h('span', { class: 'label', id: 'vr-coach-label' });
+  const coachSwitch = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': 'true', 'aria-labelledby': 'vr-coach-label' }, h('span', { class: 'knob', 'aria-hidden': 'true' }));
   // Technical details: read-only, for support conversations.
   const techText = h('span');
   const techBtn = h('button', { class: 'link', type: 'button', 'aria-expanded': 'false', 'aria-controls': 'vr-tech' }, techText, icon(ICON.chevron));
@@ -327,6 +382,7 @@ function buildDom(mount: HTMLElement) {
     bindReason,
     bindHint,
     h('div', { class: 'row size-row' }, sizeLabel, sizeSeg),
+    h('div', { class: 'row tips-row' }, coachLabel, coachSwitch),
     h('div', { class: 'tech-wrap' }, techBtn, tech),
     h('div', { class: 'settings-foot' }, back, unbind),
   );
@@ -367,8 +423,17 @@ function buildDom(mount: HTMLElement) {
   const linkRetry = h('button', { class: 'link', type: 'button' });
   const linking = h('div', { class: 'pane linking' }, linkBack, linkLabel, linkCode, h('div', { class: 'link-go' }, linkOpen, linkQr), linkHint, linkWait, linkRetry);
 
+  // The coach (vt-8020) rides on the card's top edge while marking, never over the page it teaches about;
+  // its art follows the picked shape (paint), and one button turns it off for good.
+  const coachArtSlot = h('div', { class: 'coach-art' });
+  const coachText = h('p');
+  const coachMore = h('p');
+  const coachDismiss = h('button', { class: 'coach-ok', type: 'button' });
+  const coach = h('div', { class: 'coach', role: 'status' }, coachArtSlot, coachText, coachMore, coachDismiss);
+  // How to mark from the keyboard: the marking layer's description, for assistive technology only.
+  const coachKeys = h('p', { class: 'sr-only', id: 'vr-keys' });
   const body = h('div', { class: 'body' }, describe, settings, sent, reports, recents, linking);
-  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, accountPop, morePop, body, tray, foot);
+  const card = h('section', { class: 'card', role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'vr-title' }, head, accountPop, morePop, body, tray, foot, coach);
 
   const ink = svgEl('svg', { class: 'ink', 'aria-hidden': 'true' });
   const defs = svgEl('defs', {});
@@ -379,11 +444,6 @@ function buildDom(mount: HTMLElement) {
   const draft = svgEl('g', { class: 'draft' });
   ink.append(defs, shapes, draft);
   const pins = h('div', { class: 'pins' });
-  const coachText = h('p');
-  const coachMore = h('p');
-  const coachKeys = h('p', { class: 'keys', id: 'vr-keys' });
-  const coach = h('div', { class: 'coach', role: 'status' });
-  coach.append(icon(coachArt(reducedMotion())), coachText, coachMore, coachKeys);
   // The top bar (vt-8020 D6): one plain line, the shape as a segmented control whose indicator slides, Cancel.
   const toolButtons = new Map<MarkerShape, HTMLButtonElement>();
   const toolLabels = new Map<MarkerShape, HTMLSpanElement>();
@@ -402,7 +462,7 @@ function buildDom(mount: HTMLElement) {
   const ask = h('span', { class: 'tb-confirm', role: 'group' }, askText, discard, keep);
   const toolbar = h('div', { class: 'tb', role: 'toolbar' }, barLead, seg, h('span', { class: 'tb-sep', 'aria-hidden': 'true' }), cancel, ask);
   // Focusable: from the keyboard, Enter places a mark the arrows then move (markKey).
-  const mark = h('div', { class: 'mark', tabindex: '0', role: 'application', 'aria-describedby': 'vr-keys' }, pins, coach, toolbar);
+  const mark = h('div', { class: 'mark', tabindex: '0', role: 'application', 'aria-describedby': 'vr-keys' }, pins, coachKeys, toolbar);
   mark.prepend(ink);
 
   // The card after the marking layer: it stays on top of it, usable, while the reporter marks.
@@ -422,9 +482,9 @@ function buildDom(mount: HTMLElement) {
     notify, notifyBox, notifyText, error, where, whereText, send,
     attach, fileInput, fileNote, files, tray,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
-    sizeLabel, sizeButtons, sizeInd, sizeSeg, techText, techBtn, tech,
+    sizeLabel, sizeButtons, sizeInd, sizeSeg, coachLabel, coachSwitch, techText, techBtn, tech,
     sent, sentTitle, sentBody, see, seeText, sentClose,
-    mark, ink, shapes, draft, pins, coach, coachText, coachMore, coachKeys,
+    mark, ink, shapes, draft, pins, coach, coachArtSlot, coachText, coachMore, coachDismiss, coachKeys,
     toolbar, barLead, seg, segInd, toolButtons, toolLabels, cancel, ask, askText, discard, keep,
   };
 }
@@ -472,7 +532,11 @@ export class ReportWidget {
   private marking = false;
   private markers: Drawn[] = [];
   private nextKey = 1;
-  private tool: MarkerShape = 'circle';
+  private tool: MarkerShape = TOOLS[0]!;
+  /** The coach shows while marking until dismissed (settings.ts readCoach). */
+  private coachOn = readCoach();
+  /** The shape the coach's art shows; its SVG is rebuilt (and its clock restarted) when the pick changes. */
+  private coachShape: MarkerShape | null = null;
   private frozen: Frozen | null = null;
   private job: ReportJob | null = null;
   private sending = false;
@@ -753,6 +817,17 @@ export class ReportWidget {
         if (this.parked) this.placeCard(true);
       });
     }
+    const setCoach = (shown: boolean) => {
+      this.coachOn = shown;
+      writePref(COACH_KEY, shown ? 'on' : 'off');
+      this.paint();
+    };
+    on(e.coachDismiss, 'click', () => {
+      setCoach(false);
+      // The button that had focus is gone: drawing goes on from the layer.
+      if (this.marking) e.mark.focus();
+    });
+    on(e.coachSwitch, 'click', () => setCoach(!this.coachOn));
     on(e.techBtn, 'click', () => {
       this.techOpen = !this.techOpen;
       this.paint();
@@ -1350,8 +1425,6 @@ export class ReportWidget {
     this.paint();
     this.placeCard();
     this.placeSeg(true);
-    const vw = globalThis.innerWidth || 800;
-    this.placeCoach({ x: vw / 2 - 150, y: BAR_CLEAR + 12 }, false);
     this.e.mark.focus();
   }
 
@@ -1420,10 +1493,20 @@ export class ReportWidget {
     card.classList.add('parked');
     card.style.left = `${r.x}px`;
     card.style.top = `${r.y}px`;
+    this.placeCoachSide();
     if (!land) return;
     // The read commits the new place as the style the glide starts from, so restoring the glide moves nothing.
     void card.offsetWidth;
     card.style.removeProperty('transition');
+  }
+
+  /** The coach takes the card's edge that faces the open page (place.ts coachSide); styles place it by `data-side`. */
+  private placeCoachSide(): void {
+    const k = SIZE_SCALE[this.size];
+    // Its painted height once shown (the copy wraps per locale), else the usual one.
+    const h = this.e.coach.offsetHeight || COACH.h;
+    const side = coachSide(this.parked ?? this.dock, this.frame(), { w: COACH.w * k, h: h * k }, COACH.gap * k);
+    if (this.e.coach.dataset.side !== side) this.e.coach.dataset.side = side;
   }
 
   private unpark(): void {
@@ -1458,7 +1541,6 @@ export class ReportWidget {
   }
 
   private pointerMove(ev: PointerEvent): void {
-    if (!this.markers.length) this.placeCoach({ x: ev.clientX, y: ev.clientY }, true);
     const d = this.drawing;
     if (!d || ev.pointerId !== d.pointer) return;
     this.e.draft.replaceChildren(...this.shapeNodes({ shape: d.shape, rect: rectBetween(d.start, { x: ev.clientX, y: ev.clientY }), head: arrowHead(d.start, { x: ev.clientX, y: ev.clientY }) }));
@@ -1531,20 +1613,6 @@ export class ReportWidget {
     this.e.draft.replaceChildren(...this.shapeNodes({ shape: this.tool, rect: r, head: 'se' }));
   }
 
-  /** The coach rides beside the pointer, inside the viewport. */
-  private placeCoach(p: Point, beside: boolean): void {
-    const vw = globalThis.innerWidth || 800;
-    const vh = globalThis.innerHeight || 600;
-    const w = this.e.coach.offsetWidth || 300;
-    const hgt = this.e.coach.offsetHeight || 140;
-    let x = beside ? p.x + 20 : p.x;
-    let y = beside ? p.y + 20 : p.y;
-    if (x + w > vw - 8) x = beside ? p.x - w - 20 : vw - w - 8;
-    if (y + hgt > vh - 90) y = beside ? p.y - hgt - 20 : vh - hgt - 90;
-    this.e.coach.style.left = `${Math.max(8, x)}px`;
-    this.e.coach.style.top = `${Math.max(8, y)}px`;
-  }
-
   private shapeNodes(m: Pick<Marker, 'shape' | 'rect' | 'head'>): SVGElement[] {
     const { x, y, w, h: hh } = m.rect;
     if (m.shape === 'circle') {
@@ -1557,7 +1625,7 @@ export class ReportWidget {
     }
     const veil = svgEl('rect', { class: 'veil', x, y, width: w, height: hh, rx: 4 });
     const label = svgEl('text', { class: 'veil-label', x: x + w / 2, y: y + hh / 2 + 4, 'text-anchor': 'middle' });
-    label.textContent = w > 60 && hh > 20 ? this.s.hidden : '';
+    label.textContent = w > 150 && hh > 20 ? this.s.hidden : '';
     return [veil, label];
   }
 
@@ -1881,6 +1949,8 @@ export class ReportWidget {
   private paintSettings(): void {
     const { e, s } = this;
     e.sizeLabel.textContent = s.size;
+    e.coachLabel.textContent = s.coachSetting;
+    e.coachSwitch.setAttribute('aria-checked', String(this.coachOn));
     for (const [z, btn] of e.sizeButtons) {
       btn.textContent = s.sizes[z];
       btn.setAttribute('aria-checked', String(this.size === z));
@@ -1989,7 +2059,8 @@ export class ReportWidget {
     e.mark.hidden = !this.marking;
     e.toolbar.setAttribute('aria-label', s.toolbar);
     e.seg.setAttribute('aria-label', s.toolbar);
-    e.barLead.textContent = s.barLead;
+    // Cover says what it is for the moment it is picked: the one tool that hides instead of points.
+    e.barLead.textContent = this.tool === 'hide' ? s.barLeadHide : s.barLead;
     for (const [tool, btn] of e.toolButtons) {
       const label = e.toolLabels.get(tool);
       if (label) label.textContent = s.tools[tool];
@@ -2001,9 +2072,16 @@ export class ReportWidget {
     e.askText.textContent = s.discardMarks(this.markers.filter((m) => !this.passKeys.has(m.key)).length);
     e.discard.textContent = s.discard;
     e.keep.textContent = s.keep;
-    e.coach.hidden = !this.marking || this.markers.length > 0;
-    e.coachText.textContent = s.coach;
+    e.coach.hidden = !this.marking || !this.coachOn;
+    if (e.coach.hidden) this.coachShape = null; // shown again, it starts its run from the top
+    else if (this.coachShape !== this.tool) {
+      this.coachShape = this.tool;
+      e.coachArtSlot.replaceChildren(icon(coachArt(this.tool, reducedMotion())));
+      this.placeCoachSide();
+    }
+    e.coachText.textContent = s.coach[this.tool];
     e.coachMore.textContent = s.coachMore;
+    e.coachDismiss.textContent = s.coachDismiss;
     e.coachKeys.textContent = s.keyboardHint;
     e.mark.setAttribute('aria-label', s.marking);
     if (this.marking) {

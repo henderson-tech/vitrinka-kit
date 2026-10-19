@@ -1,5 +1,49 @@
 # @vitrinka/web
 
+## 0.9.0
+
+- **Box first, and the default.** The marking bar reads **Box · Circle ·
+  Arrow · Cover**, with Box picked when marking starts: most problems are a
+  region, and a box is the one gesture nobody has to learn. Since 0.7.0
+  marking started on Circle.
+- **Hide is now Cover, and says what it does.** Reporters did not know what
+  **Hide** was for. It is **Cover** (cs **Zakrýt**), and while it is picked
+  the bar's line reads "Cover what the team shouldn't see" (cs "Zakryjte, co
+  tým nemá vidět"). A placed cover reads "Covered — not sent" (cs "Zakryto —
+  neodešle se"), shown once the box is wide enough to hold it. What a cover
+  does is unchanged: the region is blank in everything the report sends.
+- **The coach lives on the card, not on the page.** It no longer follows
+  the pointer over the page you are marking. It rides on the card's edge
+  that faces the page — above a card in a bottom corner, below one in a top
+  corner — or beside the card when the window is too short, and over the
+  card's top on a phone. Drawing goes on through it. It shows the picked
+  shape (a box dragged, a loop drawn, an arrow, a cover) with its own line
+  ("Click, hold and move across the problem."), stays while you mark, and
+  leaves for good on **Got it, don't show again** (cs **Chápu, už
+  nezobrazovat**). **Settings → Marking tips** brings it back, per browser
+  (`vitrinka.report.coach`). The keyboard instructions left its face: they
+  are the marking layer's description for screen readers.
+- **The coach draws under its pointer.** The pointer ran on SVG motion at a
+  steady pace and the line on an eased CSS animation of its own, so the line
+  drew ahead of the pointer. Both now run on one SVG clock with the same
+  timing: wherever the run is paused, the pointer's tip sits on the end of
+  the line. Since 0.7.0.
+- **⌥⇧A opens Report a problem by default** (Alt+Shift+A on Windows and
+  Linux): the recorder pill's annotate chord, so "flag it here" is one key
+  in either face. A reporter records another in Settings or removes it, and
+  a removed shortcut stays removed (`off` in
+  `vitrinka.recorder.report.keybind`).
+
+Upgrading:
+
+- **A page that uses ⌥⇧A / Alt+Shift+A itself** now shares it with the
+  widget while Report a problem is mounted; the widget opens its card. A
+  reporter can remove or change the widget's shortcut in Settings.
+- **Tests that named the tools** press **Cover** instead of **Hide** (cs
+  **Zakrýt** instead of **Skrýt**), and a first mark drawn without picking a
+  shape is now a box. The coach no longer leaves after the first mark: a
+  test that waited for it to hide presses **Got it, don't show again**.
+
 ## 0.8.2
 
 - **Your own opener reaches Report a problem from the pill.** While a

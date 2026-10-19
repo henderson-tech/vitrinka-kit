@@ -1,6 +1,6 @@
 /**
  * The reporter's own settings beyond the shortcut (vt-8020 D9): the widget's
- * size and the technical details a support conversation asks for. Each
+ * size, the marking tips and the technical details a support conversation asks for. Each
  * setting is one localStorage key of this origin — the reporter's, on this
  * browser, never sent anywhere.
  *
@@ -41,6 +41,16 @@ export function writePref(key: string, value: string): void {
 export function readSize(): WidgetSize {
   const v = readPref(SIZE_KEY);
   return SIZES.find((s) => s === v) ?? 'md';
+}
+
+/**
+ * The marking tips above the card (vt-8020): on until the person presses
+ * "Got it, don't show again", and Settings turns them back on.
+ */
+export const COACH_KEY = 'vitrinka.report.coach';
+
+export function readCoach(): boolean {
+  return readPref(COACH_KEY) !== 'off';
 }
 
 export interface TechInput {

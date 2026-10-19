@@ -1,7 +1,7 @@
 /**
  * The reporter's own shortcut for Report a problem (QA Studio assumptions:
- * the snap HotKeyRecorder rules). There is no default: the person records
- * one in the widget's settings by pressing it. The next key pressed with a
+ * the snap HotKeyRecorder rules). It starts as DEFAULT_KEYBIND; the person
+ * records another in the widget's settings by pressing it, or removes it. The next key pressed with a
  * modifier becomes the shortcut; Esc on its own cancels; a bare key is
  * refused with the reason — and so is Shift alone, which in a browser types
  * capitals. Matched by physical key (`code`: ⌥ rewrites `key` on a Mac).
@@ -95,18 +95,32 @@ function parseKeybind(raw: string | null | undefined): Keybind | null {
   }
 }
 
+/**
+ * ⌥⇧A on a Mac, Shift+Alt+A elsewhere (vt-8020): the recorder pill's annotate
+ * chord, so "flag it here" is one key in either face — one face is on screen at
+ * a time. A Mac's ⌥ turns the A into Å, which is why matching reads `code`.
+ */
+export const DEFAULT_KEYBIND: Keybind = { code: 'KeyA', alt: true, ctrl: false, meta: false, shift: true };
+
+/** Stored when the person removes the shortcut: an absent key means the default, so "none" needs a value of its own. */
+const KEYBIND_OFF = 'off';
+
+/** The stored value as the shortcut in force: absent (or unreadable) → the default, `off` → none. */
+export function resolveKeybind(raw: string | null | undefined): Keybind | null {
+  if (raw === KEYBIND_OFF) return null;
+  return parseKeybind(raw) ?? DEFAULT_KEYBIND;
+}
+
 export function loadKeybind(): Keybind | null {
-  return parseKeybind(getRecorderStorage().getString(KEYBIND_STORAGE_KEY));
+  return resolveKeybind(getRecorderStorage().getString(KEYBIND_STORAGE_KEY));
 }
 
 export function saveKeybind(b: Keybind | null): void {
-  const s = getRecorderStorage();
-  if (b) s.set(KEYBIND_STORAGE_KEY, JSON.stringify(b));
-  else s.remove(KEYBIND_STORAGE_KEY);
+  getRecorderStorage().set(KEYBIND_STORAGE_KEY, b ? JSON.stringify(b) : KEYBIND_OFF);
 }
 
 /** Hear another tab change the shortcut; returns the unsubscribe. */
 export function watchKeybind(on: (b: Keybind | null) => void): () => void {
   const s = getRecorderStorage();
-  return s.watch ? s.watch(KEYBIND_STORAGE_KEY, (v) => on(parseKeybind(v))) : () => undefined;
+  return s.watch ? s.watch(KEYBIND_STORAGE_KEY, (v) => on(resolveKeybind(v))) : () => undefined;
 }

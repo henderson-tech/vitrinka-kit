@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { cornerRect, type Frame, pickCorner } from '../place';
+import { coachSide, cornerRect, type Frame, pickCorner } from '../place';
 
 const F: Frame = { vw: 1440, vh: 810, w: 380, h: 440, top: 72, bottom: 96, edge: 16 };
 
@@ -33,5 +33,24 @@ describe('pickCorner', () => {
 
   it('keeps the bottom inset the card rested with, so marking starts where the card is', () => {
     expect(cornerRect('br', F)).toEqual({ x: 1440 - 380 - 16, y: 810 - 440 - 96, w: 380, h: 440 });
+  });
+});
+
+describe('coachSide', () => {
+  const coach = { w: 300, h: 168 };
+
+  it('rides on the edge facing the open page: above a bottom card, below a top one', () => {
+    expect(coachSide('br', F, coach, 10)).toBe('above');
+    expect(coachSide('tl', F, coach, 10)).toBe('below');
+  });
+
+  it('goes beside the card, towards the middle, when the viewport is too short for it', () => {
+    const short = { ...F, vh: 640 };
+    expect(coachSide('br', short, coach, 10)).toBe('left');
+    expect(coachSide('bl', short, coach, 10)).toBe('right');
+  });
+
+  it('lies over the card when a phone leaves no room around it', () => {
+    expect(coachSide('br', { vw: 390, vh: 700, w: 358, h: 560, top: 72, bottom: 84, edge: 16 }, coach, 10)).toBe('over');
   });
 });

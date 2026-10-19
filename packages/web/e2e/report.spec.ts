@@ -58,10 +58,20 @@ test('the large button opens the card, and a shortcut the reporter records opens
   await expect(card).toBeVisible();
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toBeFocused();
 
-  // No default chord: the reporter records one by pressing it.
+  // The default chord is ⌥⇧A (Alt+Shift+A off a Mac), with nothing recorded.
+  await card.getByRole('button', { name: 'Close' }).click();
+  await expect(card).toBeHidden();
+  await page.keyboard.press('Alt+Shift+KeyA');
+  await expect(card).toBeVisible();
   await card.getByRole('button', { name: 'Menu', exact: true }).click();
   await card.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await expect(card.getByRole('button', { name: /^Keyboard shortcut: (Alt\+Shift\+A|⌥⇧A)/ })).toBeVisible();
+  // Removed, it stays removed: the default does not come back.
+  await card.getByRole('button', { name: 'Remove', exact: true }).click();
   const shortcut = card.getByRole('button', { name: /^Keyboard shortcut: Not set/ });
+  await expect(shortcut).toHaveText('Not set');
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.recorder.report.keybind'))).toBe('off');
+  // The reporter records their own by pressing it.
   await shortcut.click();
   await expect(shortcut).toHaveText('Press keys · Esc cancels');
   await page.keyboard.press('r');
@@ -134,7 +144,8 @@ test('describe and send without marking', async ({ page }) => {
   expect(rows.events[0]).toMatchObject({ seq: 1, kind: 'rrweb', blobKey: 'reports/rep-1/chunk-1' });
 });
 
-test('markers 1..n with notes; the coach says click, hold and move and leaves after the first; no element selector', async ({ page }) => {
+test('markers 1..n with notes; the coach rides on the card, follows the picked shape and leaves for good on "Got it"; no element selector', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(base);
   await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
@@ -146,27 +157,54 @@ test('markers 1..n with notes; the coach says click, hold and move and leaves af
 
   const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
   await expect(toolbar).toBeVisible();
-  const coach = page.getByRole('status').filter({ hasText: 'Click, hold and move around the problem.' });
-  await expect(coach).toBeVisible();
+  await expect(toolbar.getByRole('radio', { name: 'Box', exact: true })).toHaveAttribute('aria-checked', 'true');
+  const gotIt = card.getByRole('button', { name: 'Got it, don’t show again' });
+  const coach = card.getByRole('status').filter({ has: page.getByRole('button', { name: 'Got it, don’t show again' }) });
+  await expect(coach).toContainText('Click, hold and move across the problem.');
   expect(await coach.textContent()).not.toMatch(/drag/i);
+  // On the card's edge facing the page, never over the card: here, above a card resting bottom-right.
+  const coachBox = (await coach.boundingBox())!;
+  const cardBox = (await card.boundingBox())!;
+  expect(coachBox.y + coachBox.height).toBeLessThanOrEqual(cardBox.y);
   // Hovering the page outlines nothing: marks are drawn, never picked.
   await page.mouse.move(300, 160);
   await expect(coach).toBeVisible();
 
   await draw(page, [80, 150], [420, 230]);
   await expect(page.getByRole('button', { name: 'Mark 1', exact: true })).toBeVisible();
-  await expect(coach).toBeHidden();
+  await expect(coach).toBeVisible();
   await page.getByRole('textbox', { name: 'Mark 1 — Add a note (optional)' }).fill('August is here twice');
 
-  await toolbar.getByRole('radio', { name: 'Box' }).click();
+  await toolbar.getByRole('radio', { name: 'Circle' }).click();
+  await expect(coach).toContainText('Click, hold and move around the problem.');
   await draw(page, [560, 200], [700, 260]);
   await toolbar.getByRole('radio', { name: 'Arrow' }).click();
   await draw(page, [900, 120], [820, 190]);
-  await toolbar.getByRole('radio', { name: 'Hide' }).click();
+  await toolbar.getByRole('radio', { name: 'Cover' }).click();
+  // Cover says what it is for the moment it is picked.
+  await expect(toolbar).toContainText('Cover what the team shouldn’t see');
+  await expect(coach).toContainText('it stays blank in what you send');
   await draw(page, [30, 360], [520, 420]);
   for (const n of [2, 3, 4]) await expect(page.getByRole('button', { name: `Mark ${n}`, exact: true })).toBeVisible();
 
+  await gotIt.click();
+  await expect(coach).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.report.coach'))).toBe('off');
   await page.keyboard.press('Escape');
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  await expect(toolbar).toBeVisible();
+  await expect(gotIt).toBeHidden();
+  await page.keyboard.press('Escape');
+  // Settings brings the tips back.
+  await card.getByRole('button', { name: 'Menu', exact: true }).click();
+  await card.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  const tips = card.getByRole('switch', { name: 'Marking tips' });
+  await expect(tips).toHaveAttribute('aria-checked', 'false');
+  await tips.click();
+  await expect(tips).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('vitrinka.report.coach'))).toBe('on');
+  await card.getByRole('button', { name: 'Back', exact: true }).click();
+
   await expect(card).toBeVisible();
   await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(4);
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('August is listed twice');
@@ -176,12 +214,13 @@ test('markers 1..n with notes; the coach says click, hold and move and leaves af
   const body = created();
   const markers = body.markers as { n: number; shape: string; rect: { x: number; y: number; w: number; h: number }; note?: string; head?: string }[];
   expect(markers.map((m) => [m.n, m.shape])).toEqual([
-    [1, 'circle'],
-    [2, 'box'],
+    [1, 'box'],
+    [2, 'circle'],
     [3, 'arrow'],
     [4, 'hide'],
   ]);
-  expect(markers[0]).toEqual({ n: 1, shape: 'circle', rect: { x: 80, y: 150, w: 340, h: 80 }, note: 'August is here twice' });
+  expect(markers[0]).toEqual({ n: 1, shape: 'box', rect: { x: 80, y: 150, w: 340, h: 80 }, note: 'August is here twice' });
+
   expect(markers[2]).toMatchObject({ rect: { x: 820, y: 120, w: 80, h: 70 }, head: 'sw' });
   // No element selector anywhere on the wire.
   for (const s of seen) expect(s.body).not.toMatch(/selector/i);
@@ -191,6 +230,47 @@ test('markers 1..n with notes; the coach says click, hold and move and leaves af
   expect(chunks).toContain('left:30px;top:360px;width:490px;height:60px');
 });
 
+// The coach's pointer and the shape it draws run on one clock: wherever the run is paused,
+// the pointer's tip sits on the end of what is drawn so far — never behind the line.
+test('the coach draws exactly under its pointer, frame by frame', async ({ page }) => {
+  await page.goto(base);
+  await page.getByRole('button', { name: /^Report a problem/ }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  await card.getByRole('button', { name: 'Show us where' }).click();
+  const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
+  const gaps = async () =>
+    page.locator('.coach svg').evaluate((svg: SVGSVGElement) => {
+      svg.pauseAnimations();
+      const tip = () => {
+        const r = svg.querySelector('.pointer > path')!.getBoundingClientRect();
+        return { x: r.left, y: r.top };
+      };
+      const drawnEnd = () => {
+        const shape = svg.querySelector<SVGGeometryElement>('.loop')!;
+        if (shape instanceof SVGRectElement) {
+          const r = shape.getBoundingClientRect();
+          return { x: r.right, y: r.bottom };
+        }
+        // A loop: the end of its revealed dash, on the page.
+        const off = parseFloat(getComputedStyle(shape).strokeDashoffset);
+        const len = shape.getTotalLength();
+        const p = shape.getPointAtLength(len * (1 - off / 200)).matrixTransform(shape.getScreenCTM()!);
+        return { x: p.x, y: p.y };
+      };
+      const out: number[] = [];
+      for (const t of [0.6, 0.9, 1.2, 1.5, 1.8]) {
+        svg.setCurrentTime(t);
+        const a = tip();
+        const b = drawnEnd();
+        out.push(Math.hypot(a.x - b.x, a.y - b.y));
+      }
+      return out;
+    });
+  for (const d of await gaps()) expect(d).toBeLessThan(1.5);
+  await toolbar.getByRole('radio', { name: 'Circle', exact: true }).click();
+  for (const d of await gaps()) expect(d).toBeLessThan(1.5);
+});
+
 test('the locale option, the locale attribute and setLocale() repaint live without losing the draft', async ({ page }) => {
   await page.goto(`${base}/?mount`);
   await page.getByRole('button', { name: /^Nahlásit problém/ }).click();
@@ -198,7 +278,7 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
   const draft = czech.getByRole('textbox', { name: 'Co se pokazilo?' });
   await draft.fill('Srpen je ve vyúčtování dvakrát');
   await czech.getByRole('button', { name: 'Ukažte nám kde' }).click();
-  await expect(page.getByText('Klikněte, podržte a veďte kolem problému.')).toBeVisible();
+  await expect(page.getByText('Klikněte, podržte a veďte přes problém.')).toBeVisible();
   await draw(page, [80, 150], [420, 230]);
   await page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' }).fill('tady');
   await page.keyboard.press('Escape');
@@ -217,7 +297,7 @@ test('the locale option, the locale attribute and setLocale() repaint live witho
   await expect(czech.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
   await czech.getByRole('button', { name: 'Ukažte nám kde' }).click();
   await expect(page.getByRole('textbox', { name: 'Značka 1 — Přidejte poznámku (nepovinné)' })).toHaveValue('tady');
-  await expect(page.getByRole('toolbar').getByRole('radio', { name: 'Kruh', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('toolbar').getByRole('radio', { name: 'Obdélník', exact: true })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('a hide blanks what was under it when it was drawn, even when the page changes before Send', async ({ page }) => {
@@ -227,7 +307,7 @@ test('a hide blanks what was under it when it was drawn, even when the page chan
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('My IBAN is wrong');
   await card.getByRole('button', { name: 'Show us where' }).click();
-  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Hide' }).click();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Cover' }).click();
   const iban = (await page.getByText(/^IBAN/).boundingBox())!;
   await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
   await page.keyboard.press('Escape');
@@ -254,7 +334,7 @@ test('a hide added after a failed send is blanked in the retried capture', async
   await expect(card.getByText('Couldn’t send — your text is safe, try again')).toBeVisible();
   await card.getByRole('button', { name: 'Show us where' }).click();
   const tools = page.getByRole('toolbar', { name: 'Marking tools' });
-  await tools.getByRole('radio', { name: 'Hide' }).click();
+  await tools.getByRole('radio', { name: 'Cover' }).click();
   const iban = (await page.getByText(/^IBAN/).boundingBox())!;
   await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
   await page.keyboard.press('Escape');
@@ -420,7 +500,8 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
 
   const canvas = page.getByRole('application', { name: 'Marking' });
   await expect(canvas).toBeFocused();
-  await expect(page.getByText(/Enter to start, arrows to move, Shift\+arrows to resize/)).toBeVisible();
+  // The keyboard way is the canvas's description for assistive technology, never painted on the coach.
+  await expect(canvas).toHaveAccessibleDescription(/Enter to start, arrows to move, Shift\+arrows to resize/);
   await page.keyboard.press('Enter');
   for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
   await page.keyboard.press('Shift+ArrowDown');
@@ -431,7 +512,7 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(canvas).toBeFocused();
 
-  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Hide' }).focus();
+  await page.getByRole('toolbar', { name: 'Marking tools' }).getByRole('radio', { name: 'Cover' }).focus();
   await page.keyboard.press('Enter');
   await expect(canvas).toBeFocused();
   await page.keyboard.press('Enter');
@@ -444,7 +525,7 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
   const markers = created().markers as { n: number; shape: string; note?: string }[];
   expect(markers.map((m) => [m.n, m.shape, m.note])).toEqual([
-    [1, 'circle', 'the total'],
+    [1, 'box', 'the total'],
     [2, 'hide', undefined],
   ]);
 });
@@ -518,13 +599,13 @@ test('the shape indicator is in place on the marking bar’s first frame and sli
   const toolbar = page.getByRole('toolbar', { name: 'Marking tools' });
   await expect(toolbar).toBeVisible();
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  // Slid to its first place, it would grow from width 0 at the control's edge, Circle bare until it arrived.
+  // Slid to its first place, it would grow from width 0 at the control's edge, Box bare until it arrived.
   expect(await runs()).toEqual([]);
-  const circle = (await toolbar.getByRole('radio', { name: 'Circle', exact: true }).boundingBox())!;
+  const box = (await toolbar.getByRole('radio', { name: 'Box', exact: true }).boundingBox())!;
   const placed = (await indicator.boundingBox())!;
-  expect(Math.abs(placed.x - circle.x)).toBeLessThan(1);
-  expect(Math.abs(placed.width - circle.width)).toBeLessThan(1);
-  await toolbar.getByRole('radio', { name: 'Box', exact: true }).click();
+  expect(Math.abs(placed.x - box.x)).toBeLessThan(1);
+  expect(Math.abs(placed.width - box.width)).toBeLessThan(1);
+  await toolbar.getByRole('radio', { name: 'Circle', exact: true }).click();
   await expect.poll(runs).toEqual(['transform', 'width']);
 });
 

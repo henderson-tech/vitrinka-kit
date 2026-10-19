@@ -306,10 +306,14 @@ profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
 § Report a problem). You need the project's report key (`vkb_…`).
 
 **Marking.** **Show us where** puts a glass bar at the top of the page —
-"Mark where the problem is", a segmented **Circle · Box · Arrow · Hide**
-and **Cancel** — and you circle, box, point at or hide parts of the page,
-taught by a coach card ("click, hold and move") until the first mark
-exists. A mark carries a pin on the page (its number and ✕) and a line in
+"Mark where the problem is", a segmented **Box · Circle · Arrow · Cover**
+(Box picked) and **Cancel** — and you box, circle, point at or cover parts
+of the page. **Cover** blanks what is under it in everything the report
+sends, and the bar says so while it is picked ("Cover what the team
+shouldn’t see"). A coach on the card’s edge facing the page — above it, or
+beside it when there is no room — shows the picked shape’s gesture ("click,
+hold and move") until the reporter presses **Got it, don’t show again**;
+**Settings → Marking tips** brings it back (`vitrinka.report.coach`). A mark carries a pin on the page (its number and ✕) and a line in
 the card for its note; a press on the number puts the caret there, and a
 note on a mark is enough to send. The card stays where it rested and moves
 only when a mark lands under it, to the corner that covers the least of
@@ -481,13 +485,16 @@ or press Alt+arrow while it has focus; the corner is remembered per site
 (`vitrinka.report.dock`), and the card opens beside the button — above it
 at the bottom, below it at the top. **Settings** (⋯) holds the shortcut
 below, **Size** — Small · Medium · Large, one scale for the button, the
-card and the marking bar (`vitrinka.report.size`) — and **Technical
+card and the marking bar (`vitrinka.report.size`) — **Marking tips**, and **Technical
 details** for a support conversation: version, capture window, whether
 capture runs, the buffer and its cap, the server.
 
-**The shortcut.** There is none by default. A reporter sets their own in
-**Settings** by pressing it: a modifier other than Shift is required, Esc
-cancels. It is kept in `localStorage` (`vitrinka.recorder.report.keybind`).
+**The shortcut.** ⌥⇧A on a Mac, Alt+Shift+A elsewhere — the recorder
+pill’s annotate chord, so "flag it here" is one key in either face. A
+reporter records another in **Settings** by pressing it (a modifier other
+than Shift is required, Esc cancels) or removes it, and a removed shortcut
+stays removed. It is kept in `localStorage`
+(`vitrinka.recorder.report.keybind`; `off` once removed).
 
 **Typing stays in the widget.** A key typed into a field of the card, a
 mark's line or a pill sheet never reaches your page's shortcuts — even one
