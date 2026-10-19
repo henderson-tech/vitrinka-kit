@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { DEFAULT_KEYBIND, keybindLabel, resolveKeybind } from '../keybind';
+import { DEFAULT_KEYBIND, keybindAria, keybindLabel, resolveKeybind } from '../keybind';
 
 describe('resolveKeybind', () => {
   it('answers ⌥⇧A when nothing is stored, or what is stored cannot be read', () => {
@@ -24,5 +24,10 @@ describe('resolveKeybind', () => {
   it('names the default the way each platform writes it', () => {
     expect(keybindLabel(DEFAULT_KEYBIND, true)).toBe('⌥⇧A');
     expect(keybindLabel(DEFAULT_KEYBIND, false)).toBe('Alt+Shift+A');
+  });
+
+  it('names the chord in aria-keyshortcuts words, never a glyph', () => {
+    expect(keybindAria(DEFAULT_KEYBIND)).toBe('Alt+Shift+A');
+    expect(keybindAria({ code: 'KeyR', alt: false, ctrl: true, meta: true, shift: false })).toBe('Control+Meta+R');
   });
 });

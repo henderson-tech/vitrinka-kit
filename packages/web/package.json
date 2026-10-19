@@ -1,6 +1,6 @@
 {
   "name": "@vitrinka/web",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "vitrinka toolkit for React DOM apps — the journey recorder (capture manual-testing sessions: rrweb DOM stream, clicks, navigation, network, console, notes) and Report a problem (a reporter's button, marks and the last minutes, cs/en), straight into vitrinka.",
   "license": "Elastic-2.0",
   "repository": {

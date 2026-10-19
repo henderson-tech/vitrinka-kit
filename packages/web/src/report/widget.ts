@@ -41,7 +41,7 @@ import { memberLinked, rememberDisplayMode } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
 import { type Identity, type IdentifyInput, normalizeIdentity, onSharedIdentity, sharedIdentity } from './identity';
-import { type Keybind, keybindLabel, loadKeybind, matchesKeybind, readKeybindPress, saveKeybind, watchKeybind } from './keybind';
+import { type Keybind, keybindAria, keybindLabel, loadKeybind, matchesKeybind, readKeybindPress, saveKeybind, watchKeybind } from './keybind';
 import {
   type ArrowHead,
   arrowEnds,
@@ -287,7 +287,9 @@ export function hitsOpener(ev: Event, sel: string | null): boolean {
 /** The widget's DOM, built once into the HUD host's shadow mount. */
 function buildDom(mount: HTMLElement) {
   const fabLabel = h('span');
-  const fabKbd = h('kbd');
+  // The chord is painted for the eye only: in the name it would rename the button ("Report a problem Alt+Shift+A");
+  // assistive technology hears it from aria-keyshortcuts (paint).
+  const fabKbd = h('kbd', { 'aria-hidden': 'true' });
   const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabLabel, fabKbd);
 
   const title = h('h2', { id: 'vr-title' });
@@ -1981,7 +1983,7 @@ export class ReportWidget {
     e.fabLabel.textContent = s.button;
     e.fab.setAttribute('aria-expanded', String(this.isOpen));
     e.fab.setAttribute('aria-description', s.moveHint);
-    e.fab.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight');
+    e.fab.setAttribute('aria-keyshortcuts', `${this.keybind ? `${keybindAria(this.keybind)} ` : ''}Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight`);
     e.fabKbd.hidden = !this.keybind;
     e.fabKbd.textContent = this.keybind ? keybindLabel(this.keybind) : '';
 
