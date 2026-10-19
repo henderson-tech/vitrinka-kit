@@ -221,6 +221,17 @@ function typing(): boolean {
   return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable);
 }
 
+/** The click landed on the host's own control (`open-selector`) — the widget's, and the pill face's while it shows (element.ts). */
+export function hitsOpener(ev: Event, sel: string | null): boolean {
+  const t = ev.target;
+  if (!sel || !(t instanceof Element)) return false;
+  try {
+    return t.closest(sel) !== null;
+  } catch {
+    return false; // not a selector: nothing of the page opens the card
+  }
+}
+
 /** The widget's DOM, built once into the HUD host's shadow mount. */
 function buildDom(mount: HTMLElement) {
   const fabLabel = h('span');
@@ -894,16 +905,7 @@ export class ReportWidget {
     );
     this.offs.push(
       listen(document, 'click', (ev) => {
-        const sel = this.openSelector;
-        const t = ev.target;
-        if (!sel || !(t instanceof Element)) return;
-        let hit: Element | null = null;
-        try {
-          hit = t.closest(sel);
-        } catch {
-          return; // not a selector: nothing of the page opens the card
-        }
-        if (!hit) return;
+        if (!hitsOpener(ev, this.openSelector)) return;
         ev.preventDefault();
         this.open();
       }),

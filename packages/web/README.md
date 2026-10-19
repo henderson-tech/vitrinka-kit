@@ -446,7 +446,11 @@ Reporters never need it: your token vouches for them.
 the widget's `base` gets **Record** and **Recent recordings** in the ⋯
 menu. **Record** swaps Report a problem for the recorder pill in place,
 recording on the member's link, never your `vkb_` key; the idle pill's ⋯
-menu then offers **Report a problem**, which swaps back. **Record** waits,
+menu then offers **Report a problem**, which swaps back. Your own opener
+does the same: `open()` or your `open-selector` control swaps back (the
+pick, as the pill's row remembers it) and opens the card; while the pill
+records it leaves the recording on screen and warns once in the console,
+since leaving would strand the session. **Record** waits,
 and says so, while the card holds a report not sent yet — words, a mark,
 a picked type, a file — since the swap would lose it. The pick is
 remembered per browser and origin (`vitrinka.report.face`); a member who

@@ -13,6 +13,7 @@
 import { linkWorkspace } from '@vitrinka/link';
 
 import { LINK_KEY, readLink } from '../recorder/config';
+import { getState } from '../recorder/queue';
 import { subscribe } from '../recorder/state';
 import { getRecorderStorage } from '../recorder/storage';
 import type { ReportFace } from './element';
@@ -78,6 +79,15 @@ export function startFace(base: string): ReportFace {
   const picked = rememberedFace();
   if (picked) return picked;
   return store()?.getItem(MODE_KEY) === 'dev' ? 'recorder' : 'report';
+}
+
+/**
+ * The pill holds a recording: the session record its ⋯ menu reads, which
+ * offers "Report a problem" only while there is none (Menu.tsx) — leaving
+ * the pill mid-recording would strand the session, so nothing switches away.
+ */
+export function pillRecording(): boolean {
+  return getState() !== null;
 }
 
 /**

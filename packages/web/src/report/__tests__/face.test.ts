@@ -6,8 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { clearLink, configureRecorder, storeLink, type StoredLink } from '../../recorder/config';
+import { setState } from '../../recorder/queue';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../../recorder/storage';
-import { FACE_KEY, memberLinked, rememberDisplayMode, rememberedFace, rememberFace, startFace, watchMemberLink } from '../face';
+import { FACE_KEY, memberLinked, pillRecording, rememberDisplayMode, rememberedFace, rememberFace, startFace, watchMemberLink } from '../face';
 
 const BASE = 'https://vitrinka.test';
 const link = (over: Partial<StoredLink> = {}): StoredLink => ({ token: 'vkr_member', workspace: 'acme', label: 'Chrome', expires_in: 3600, ...over });
@@ -86,5 +87,16 @@ describe('the remembered face', () => {
     expect(startFace(BASE)).toBe('recorder');
     rememberFace('report');
     expect(startFace(BASE)).toBe('report');
+  });
+});
+
+describe('pillRecording', () => {
+  it('holds exactly while the session record the pill’s menu reads exists', () => {
+    setState(null);
+    expect(pillRecording()).toBe(false);
+    setState({ sessionId: 'sess-1', project: 'voke', environment: 'development', title: '', seq: 0, paused: false, activeMs: 0, resumeAt: null });
+    expect(pillRecording()).toBe(true);
+    setState(null);
+    expect(pillRecording()).toBe(false);
   });
 });

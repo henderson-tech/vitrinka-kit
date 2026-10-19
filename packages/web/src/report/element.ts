@@ -15,14 +15,17 @@
  * `vkr_` key or a device link). A linked vitrinka member also switches faces
  * in place (vt-8020 D8, face.ts): the report menu's Record swaps in the pill
  * on the device link, the pill's "Report a problem" swaps back, and the pick
- * survives a reload (npm entry only, like `face: 'recorder'`).
+ * survives a reload (npm entry only, like `face: 'recorder'`). The host's
+ * openers — `open()` and `open-selector` — swap back too and open the card,
+ * except while the pill records.
  */
+import { listen } from '../recorder/hud/listen';
 import type { RecordLoader } from './engine';
-import { memberLinked, rememberFace, startFace, watchMemberLink } from './face';
+import { memberLinked, pillRecording, rememberFace, startFace, watchMemberLink } from './face';
 import { type Locale, parseLocale } from './i18n';
 import type { IdentifyInput } from './identity';
 import type { CaptureNarrowing } from './profile';
-import { ReportWidget } from './widget';
+import { hitsOpener, ReportWidget } from './widget';
 
 export const REPORT_TAG = 'vitrinka-report';
 
@@ -59,6 +62,7 @@ export interface ReportOptions extends ReportScriptOptions {
 export interface ReportHandle {
   /** The face on screen — a linked member's Record switch turns a `report` mount into `recorder`. */
   readonly face: ReportFace;
+  /** Opens the card; on a member's switched pill it swaps back first (never while the pill records). */
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
@@ -72,6 +76,7 @@ export interface VitrinkaReportElement extends HTMLElement {
   options: ReportScriptOptions;
   /** The face on screen: `recorder` while a linked member has switched to the pill. */
   readonly face: ReportFace;
+  /** Opens the card; on the pill it swaps back first (never while the pill records). */
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
@@ -128,6 +133,10 @@ export function defineReportElement(faces: Faces): void {
     private gen = 0;
     /** The report widget currently offers Record. */
     private recordOffered = false;
+    /** The host's `open-selector` control while the pill shows (the report widget binds it otherwise). */
+    private offPillOpener: (() => void) | null = null;
+    /** An open() refused on a recording pill has said why. */
+    private warnedRecording = false;
     private offLink: (() => void) | null = null;
     private pendingIdentity: IdentifyInput | undefined = undefined;
 
@@ -156,7 +165,7 @@ export function defineReportElement(faces: Faces): void {
         this.mount();
         return;
       }
-      // The rest are the report face's: the pill reads none, and a switch back reads them afresh.
+      // The rest are the report face's: the pill's opener reads `open-selector` per click, and a switch back reads them afresh.
       if (!this.widget) return;
       if (name === 'locale') this.widget.setLocale(value);
       else if (name === 'button') this.widget.setButton(value !== 'false');
@@ -164,7 +173,8 @@ export function defineReportElement(faces: Faces): void {
     }
 
     open(): void {
-      this.widget?.open();
+      if (this.shown === 'recorder') this.openFromPill();
+      else this.widget?.open();
     }
 
     close(): void {
@@ -210,6 +220,8 @@ export function defineReportElement(faces: Faces): void {
       this.widget?.unmount();
       this.widget = null;
       this.recordOffered = false;
+      this.offPillOpener?.();
+      this.offPillOpener = null;
       this.pill?.();
       this.pill = null;
     }
@@ -221,6 +233,12 @@ export function defineReportElement(faces: Faces): void {
       const loadPill = faces.recorderFace;
       if (face === 'recorder' && loadPill) {
         this.shown = 'recorder';
+        // The widget that binds the host's control is down while the pill shows: the control still reaches the card.
+        this.offPillOpener = listen(document, 'click', (ev) => {
+          if (!hitsOpener(ev, this.getAttribute('open-selector'))) return;
+          ev.preventDefault();
+          this.open();
+        });
         const gen = this.gen;
         loadPill()
           .then((mountPill) => {
@@ -264,12 +282,34 @@ export function defineReportElement(faces: Faces): void {
       this.widget.setRecordSwitch(offer ? () => this.switchTo('recorder') : null);
     }
 
-    /** The member's pick, remembered for this browser; applied once the menu that asked has let go of its click. */
-    private switchTo(face: ReportFace): void {
+    /**
+     * A host opener on the pill: back to Report a problem — remembered as the
+     * pill's own row does — and the card opens there. Never while the pill
+     * records: it hides its own way back then, as leaving strands the session.
+     */
+    private openFromPill(): void {
+      if (pillRecording()) {
+        if (!this.warnedRecording) {
+          console.warn('vitrinka: Report a problem stays closed while the recorder pill records — leaving would strand the session; stop the recording first');
+        }
+        this.warnedRecording = true;
+        return;
+      }
+      this.switchTo('report', () => this.widget?.open());
+    }
+
+    /**
+     * The member's pick, remembered for this browser; applied once the menu
+     * that asked has let go of its click, then `then` runs on the new face —
+     * unless the face changed meanwhile.
+     */
+    private switchTo(face: ReportFace, then?: () => void): void {
       rememberFace(face);
       const gen = this.gen;
       setTimeout(() => {
-        if (gen === this.gen && this.shown !== face) this.show(face);
+        if (gen !== this.gen) return;
+        if (this.shown !== face) this.show(face);
+        then?.();
       }, 0);
     }
   }
