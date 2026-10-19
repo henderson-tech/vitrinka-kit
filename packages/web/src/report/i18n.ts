@@ -7,6 +7,8 @@
  * Marking is taught as "click, hold and move" — never "drag" (D21): a
  * first-time reporter does not know the word.
  */
+import type { MarkerShape } from './markers';
+
 export type Locale = 'cs' | 'en';
 export type ReportKind = 'bug' | 'suggestion' | 'question' | 'other';
 export const REPORT_KINDS: readonly ReportKind[] = ['bug', 'suggestion', 'question', 'other'];
@@ -50,17 +52,24 @@ export interface Strings {
   toolbar: string;
   /** The marking bar's one plain line. */
   barLead: string;
+  /** The bar's line while Cover is picked: what covering is for. */
+  barLeadHide: string;
   /** Leaves marking and drops the marks of this pass (vt-8020 D12). */
   cancelMarking: string;
   discardMarks: (n: number) => string;
   discard: string;
   keep: string;
-  coach: string;
+  /** The coach's line for the picked shape. */
+  coach: Record<MarkerShape, string>;
   coachMore: string;
+  /** Turns the coach off for good on this browser; Settings turns it back on. */
+  coachDismiss: string;
+  coachSetting: string;
   /** The marking layer's name, for assistive technology. */
   marking: string;
-  /** How to mark from the keyboard (the layer's description; shown in the coach card). */
+  /** How to mark from the keyboard: the layer's description for assistive technology, never painted. */
   keyboardHint: string;
+  /** Written on a placed cover. */
   hidden: string;
   notePlaceholder: string;
   mark: (n: number) => string;
@@ -181,18 +190,26 @@ const en: Strings = {
   sentBody: 'The team will take a look.',
   sentNotify: 'We’ll email you when it’s fixed.',
   seeReport: 'See your report',
-  tools: { circle: 'Circle', box: 'Box', arrow: 'Arrow', hide: 'Hide' },
+  tools: { circle: 'Circle', box: 'Box', arrow: 'Arrow', hide: 'Cover' },
   toolbar: 'Marking tools',
   barLead: 'Mark where the problem is',
+  barLeadHide: 'Cover what the team shouldn’t see',
   cancelMarking: 'Cancel',
   discardMarks: (n) => (n === 1 ? 'Discard 1 mark?' : `Discard ${n} marks?`),
   discard: 'Discard',
   keep: 'Keep',
-  coach: 'Click, hold and move around the problem.',
+  coach: {
+    box: 'Click, hold and move across the problem.',
+    circle: 'Click, hold and move around the problem.',
+    arrow: 'Click, hold and move from a clear spot to the problem.',
+    hide: 'Click, hold and move across anything private — it stays blank in what you send.',
+  },
   coachMore: 'You can mark more than one place.',
+  coachDismiss: 'Got it, don’t show again',
+  coachSetting: 'Marking tips',
   marking: 'Marking',
   keyboardHint: 'Keyboard: Enter to start, arrows to move, Shift+arrows to resize, Enter to place.',
-  hidden: 'Hidden',
+  hidden: 'Covered — not sent',
   notePlaceholder: 'Add a note (optional)',
   mark: (n) => `Mark ${n}`,
   removeMark: (n) => `Remove mark ${n}`,
@@ -302,18 +319,26 @@ const cs: Strings = {
   sentBody: 'Tým se na to podívá.',
   sentNotify: 'Až to bude opravené, pošleme vám e-mail.',
   seeReport: 'Zobrazit hlášení',
-  tools: { circle: 'Kruh', box: 'Obdélník', arrow: 'Šipka', hide: 'Skrýt' },
+  tools: { circle: 'Kruh', box: 'Obdélník', arrow: 'Šipka', hide: 'Zakrýt' },
   toolbar: 'Nástroje pro označení',
   barLead: 'Označte, kde je problém',
+  barLeadHide: 'Zakryjte, co tým nemá vidět',
   cancelMarking: 'Zrušit',
   discardMarks: (n) => csPlural(n, 'Zahodit 1 značku?', `Zahodit ${n} značky?`, `Zahodit ${n} značek?`),
   discard: 'Zahodit',
   keep: 'Ponechat',
-  coach: 'Klikněte, podržte a veďte kolem problému.',
+  coach: {
+    box: 'Klikněte, podržte a veďte přes problém.',
+    circle: 'Klikněte, podržte a veďte kolem problému.',
+    arrow: 'Klikněte, podržte a veďte z volného místa k problému.',
+    hide: 'Klikněte, podržte a veďte přes vše soukromé — v hlášení zůstane prázdné.',
+  },
   coachMore: 'Označit můžete i více míst.',
+  coachDismiss: 'Chápu, už nezobrazovat',
+  coachSetting: 'Nápověda při označování',
   marking: 'Označování',
   keyboardHint: 'Klávesnice: Enter začne, šipky posouvají, Shift+šipky mění velikost, Enter umístí.',
-  hidden: 'Skryto',
+  hidden: 'Zakryto — neodešle se',
   notePlaceholder: 'Přidejte poznámku (nepovinné)',
   mark: (n) => `Značka ${n}`,
   removeMark: (n) => `Odebrat značku ${n}`,

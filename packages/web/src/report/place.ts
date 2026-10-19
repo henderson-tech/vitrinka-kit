@@ -60,3 +60,19 @@ export function pickCorner(current: Corner, marks: readonly Rect[], f: Frame): C
   }
   return best;
 }
+
+/** Where the marking coach rides on the card (vt-8020): never over the page it teaches about. */
+export type CoachSide = 'above' | 'below' | 'left' | 'right' | 'over';
+
+/**
+ * The card's edge that faces the open page: above a card in a bottom corner, below one in a top
+ * corner; when the viewport has no room there, beside it towards the middle; when there is none
+ * either (a phone), over the card's top. `coach` is its painted size, `gap` the space kept to the card.
+ */
+export function coachSide(corner: Corner, f: Frame, coach: { w: number; h: number }, gap: number): CoachSide {
+  const atBottom = corner === 'br' || corner === 'bl';
+  const room = f.vh - f.top - f.h - f.bottom;
+  if (room >= coach.h + gap) return atBottom ? 'above' : 'below';
+  if (f.vw - 2 * f.edge - f.w >= coach.w + gap) return corner === 'br' || corner === 'tr' ? 'left' : 'right';
+  return 'over';
+}

@@ -262,6 +262,7 @@ a.row:hover { background: var(--faint); }
 .settings .label { font-weight: 600; }
 .size-row { margin-top: 18px; }
 .size-row .seg button { padding: 0 12px; font-size: 13px; }
+.tips-row { margin-top: 8px; }
 .tech-wrap { margin-top: 18px; }
 .tech { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-deep); font-size: 12.5px; }
 .tech dt { color: var(--dim); }
@@ -355,26 +356,46 @@ a.row:hover { background: var(--faint); }
 .tb-discard { height: 32px; padding: 0 13px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 650; }
 .tb-discard:hover { background: #e43a57; }
 
-/* -- the coach card (D21): stays beside the pointer until mark 1 exists --- */
+/* -- the coach (D21, vt-8020): on the card's edge that faces the open page (place.ts coachSide), never over it -- */
 .coach {
-  position: fixed; width: 300px; padding: 14px 16px 15px;
+  position: absolute; z-index: 3; padding: 10px 12px 11px;
+  /* Drawing goes on through it (to the marking layer under the card): only its button takes a press. */
+  pointer-events: none;
   background: #151417; color: #f2f1ef; border-radius: 14px;
   box-shadow: 0 18px 44px rgba(0, 0, 0, .38), 0 0 0 1px rgba(255, 255, 255, .1) inset;
-  pointer-events: none;
   transition: opacity .12s ease;
 }
+.coach[data-side="above"] { left: 0; right: 0; bottom: calc(100% + 10px); }
+.coach[data-side="below"] { left: 0; right: 0; top: calc(100% + 10px); }
+.coach[data-side="left"] { right: calc(100% + 10px); top: 0; width: 300px; }
+.coach[data-side="right"] { left: calc(100% + 10px); top: 0; width: 300px; }
+/* No room around the card (a phone): over its top, the words without the art. */
+.coach[data-side="over"] { left: 10px; right: 10px; top: 58px; }
+.coach[data-side="over"] .coach-art { display: none; }
 .coach.pressing { opacity: .55; }
-.coach svg { display: block; width: 100%; height: 64px; border-radius: 9px; background: #222126; }
-.coach p { margin: 11px 0 0; font-size: 15px; line-height: 1.4; }
+.coach svg { display: block; width: 100%; height: 52px; border-radius: 9px; background: #222126; }
+.coach p { margin: 8px 0 0; font-size: 14.5px; line-height: 1.38; }
 .coach p + p { margin-top: 2px; color: rgba(242, 241, 239, .66); font-size: 13px; }
-.coach p.keys { margin-top: 8px; font-size: 12px; color: rgba(242, 241, 239, .5); }
+.coach-ok {
+  pointer-events: auto; margin-top: 8px; height: 28px; padding: 0 12px; border: 0; border-radius: 8px;
+  background: rgba(255, 255, 255, .09); color: #f2f1ef; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.coach-ok:hover { background: rgba(255, 255, 255, .14); }
 .mark:focus { outline: none; }
 .mark:focus-visible { outline: 3px solid rgba(230, 69, 95, .65); outline-offset: -3px; }
+/* The art runs on SMIL (widget.ts coachArt): one clock moves the pointer and grows the shape. */
 .coach .bar { fill: #5b5a61; }
-.coach .loop { fill: none; stroke: #e6455f; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 200; stroke-dashoffset: 200; animation: vr-draw 2.8s ease-in-out infinite; }
-.coach .hold { fill: none; stroke: #fff; stroke-width: 1.5; opacity: 0; animation: vr-hold 2.8s ease-in-out infinite; }
-@keyframes vr-draw { 0%, 18% { stroke-dashoffset: 200; } 72%, 100% { stroke-dashoffset: 0; } 90% { opacity: 1; } 100% { opacity: 0; } }
-@keyframes vr-hold { 0%, 8% { opacity: 0; } 14%, 72% { opacity: .9; } 80%, 100% { opacity: 0; } }
+.coach .loop { fill: none; stroke: #e6455f; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.coach .veil { fill: #3a3940; stroke: rgba(255, 255, 255, .2); stroke-width: 1; }
+.coach .hold { fill: none; stroke: #fff; stroke-width: 1.5; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.switch {
+  position: relative; flex: none; width: 38px; height: 22px; padding: 0; border: 0; border-radius: 999px;
+  background: rgba(255, 255, 255, .16); cursor: pointer; transition: background .15s ease;
+}
+.switch[aria-checked="true"] { background: var(--accent); }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: translate .15s ease; }
+.switch[aria-checked="true"] .knob { translate: 16px 0; }
 
 @media (max-width: 520px) {
   .vr { --edge: 16px; --lift: calc(var(--edge) + 68px * var(--vr-scale)); }
@@ -382,15 +403,12 @@ a.row:hover { background: var(--faint); }
   .tb { max-width: calc((100vw - 16px) / var(--vr-scale)); overflow-x: auto; }
   .tb-lead { display: none; }
   .seg button { padding: 0 9px; }
-  .coach { width: 260px; }
 }
 /* Every motion of the face stops here: the menu rises with the card's vr-in, the coach dims as you press, the chevron turns. */
 @media (prefers-reduced-motion: reduce) {
   .card, .pop { animation: none; }
-  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm, .link svg, .coach { transition: none; }
+  .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm, .link svg, .coach, .switch, .switch .knob { transition: none; }
   .card.busy .head::after { animation: none; }
   .fab, .fab.gliding { transition: none; }
-  .coach .loop { animation: none; stroke-dashoffset: 0; }
-  .coach .hold { animation: none; opacity: .9; }
 }
 `;
