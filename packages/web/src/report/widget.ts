@@ -1503,10 +1503,13 @@ export class ReportWidget {
   /** The coach takes the card's edge that faces the open page (place.ts coachSide); styles place it by `data-side`. */
   private placeCoachSide(): void {
     const k = SIZE_SCALE[this.size];
-    // Its painted height once shown (the copy wraps per locale), else the usual one.
-    const h = this.e.coach.offsetHeight || COACH.h;
-    const side = coachSide(this.parked ?? this.dock, this.frame(), { w: COACH.w * k, h: h * k }, COACH.gap * k);
-    if (this.e.coach.dataset.side !== side) this.e.coach.dataset.side = side;
+    // Measured in the layout it takes on the card's edge — the art shown, the card's width — never the one it
+    // holds now ('over' hides the art), so a window grown back from a phone's size finds it above again. Both
+    // writes land before the next paint: the trial layout is never seen. Hidden, it reads 0: the usual height.
+    const coach = this.e.coach;
+    coach.dataset.side = 'above';
+    const h = coach.offsetHeight || COACH.h;
+    coach.dataset.side = coachSide(this.parked ?? this.dock, this.frame(), { w: COACH.w * k, h: h * k }, COACH.gap * k);
   }
 
   private unpark(): void {
