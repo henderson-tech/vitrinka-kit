@@ -165,6 +165,23 @@ test('a host’s open() reaches the card from the idle pill and keeps Report a p
   expect(await page.evaluate(() => [document.querySelector('vitrinka-report')!.face, localStorage.getItem('vitrinka.report.face')])).toEqual(['report', 'report']);
 });
 
+test('an open() still pending when the host remounts the element with a new key goes with the old mount', async ({ page }) => {
+  await member(page);
+  await page.goto(`${server.url}/npm`);
+  await pickRecord(page);
+  const after = await page.evaluate(async () => {
+    const el = document.querySelector('vitrinka-report')!;
+    el.open();
+    el.setAttribute('key', 'vkb_e2e_remounted');
+    // Past the deferred switch the old mount's pill would have taken.
+    await new Promise((r) => setTimeout(r, 100));
+    return [el.face, localStorage.getItem('vitrinka.report.face')];
+  });
+  expect(after).toEqual(['recorder', 'recorder']);
+  await expect(page.getByRole('button', { name: 'Start recording', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Report a problem', exact: true })).toHaveCount(0);
+});
+
 test('the host’s open-selector control opens the card from a pill the page reloaded onto', async ({ page }) => {
   await member(page);
   await page.goto(`${server.url}/npm`);

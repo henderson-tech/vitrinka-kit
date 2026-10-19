@@ -285,13 +285,16 @@ export function defineReportElement(faces: Faces): void {
     /**
      * A host opener on the pill: back to Report a problem — remembered as the
      * pill's own row does — and the card opens there. Deferred like switchTo,
-     * then decided on the face as it is by then, asked again right before the
+     * then decided on the face this mount shows by then (a remount — a new
+     * key or base, a reconnect — drops it), asked again right before the
      * pill comes down: never while it records or a Start waits on its
      * session, as leaving strands it.
      */
     private openFromPill(): void {
       if (this.keepsPill()) return;
+      const at = this.at;
       setTimeout(() => {
+        if (!at || this.at !== at) return;
         if (this.shown === 'recorder') {
           if (this.keepsPill()) return;
           rememberFace('report');
