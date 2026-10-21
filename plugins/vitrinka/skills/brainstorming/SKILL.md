@@ -53,7 +53,9 @@ Only what a fresh session needs to build correctly: key components, data flow, i
 Deferred decisions, if any.
 ```
 
-Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic>-decisions.md"}`; a later pass on the same topic uploads the next VERSION of the same filename, never a second lineage.
+Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic>-decisions.md", source: {ref: "<repo path of the log>.md", rev: "<git sha>"}}`; a later pass on the same topic uploads the next VERSION of the same filename, never a second lineage.
+
+**Citing a decision**: the upload's reply carries `rowCites` (`{"D12": "vitr:dec/…"}`) and parser `warnings` for doubtful replacement claims; a warning never creates a replacement edge. A source comment cites with that token — `(vitr:dec/…)` after a self-contained sentence of what was decided — never a bare `(Dn)`; `get {kind: "cite", codes: [...]}` resolves one, `create {kind: "cite", target}` mints any other (`docs {topic: "guide:cite"}`).
 
 ## Feature brief — contracts
 
@@ -69,6 +71,7 @@ Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic
 
 An authenticated service (`vitrinka auth login`; self-hosted deployments set `VITRINKA_URL`). No throwaway server: the board outlives the session.
 
+- **An existing canvas meant for Studio is converted, never recreated**: `set_board_meta {slug, board_type:"brainstorm"}` preserves cards, questions and staged picks/notes; conversion never releases them. Subgroup alone does not select Studio.
 - **Board vs terminal**: the board is for 2-3 *different visual takes* — layouts, design directions, flows — or an explicit ask; plain preference questions stay in `AskUserQuestion`. Offer just-in-time, once; on decline stay text-only.
 - **A take of an in-app surface renders with the app's `app.css` and its real components, never a private kit.**
 - **Until the board actually exists** (created, composed, URL handed over), terminal mode is in force and the written-out map is mandatory. With a board, the FULL map lives on it — one CHAPTER section per decision — and the terminal map is shortened to its titles, never skipped.

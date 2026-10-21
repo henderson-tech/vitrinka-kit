@@ -51,6 +51,10 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   find <url>` (or `search {q: <url>, mode:"resolve"}`) names the task that
   already tracks it — exact, never a ranked guess. Contract: `docs {topic:
   "guide:external-links"}`.
+- **Similar work before filing**: `search {mode:"similar", project, q:
+  <draft title>}` (`vitrinka search <title> --similar --project <p>`)
+  lists the open tasks that read like the draft — link or extend one
+  instead of filing a twin.
 - **Attachments are versioned, never replaced**: the same filename is the
   next version, `versionOf` names the lineage, a `distill` carries
   `derivedFrom`. Write a `hint` on everything you attach; `meta.tokens`
@@ -112,7 +116,8 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   with the reply's `compiled` as `f`); `search {kind:"task"}` narrowed by
   type, state, parent or `epic` (any depth), `within` for every match in
   one task's tree; `search {board}` with no q for the tasks a board likely
-  belongs to; a refused type, state or project names the allowed values.
+  belongs to; `search {q, across: true}` for every workspace you belong to;
+  a refused type, state or project names the allowed values.
   `get {kind:"brief"}` before planning anything in a project;
   `read_task_ref` under a `budget` or with a `question` — never a
   transcript blind; `ask_task {id, question}` for a cited answer over the

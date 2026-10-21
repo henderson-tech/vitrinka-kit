@@ -64,6 +64,7 @@ stamps `n1`, `n2`… onto id-less ones):
 | `entity` (DB table) | `columns:[{name, type?, pk?, fk?:"table.col", unique?, nullable?}]` — each column is a port; an `fk` implies a crow's-foot column-to-column edge when you don't declare one |
 | `endpoint` (API route) | `method`, `path`, `codes?:[int]`, `tag?` |
 | `service` (deployment) | `image?`, `replicas?`, `mappings?:[{host, cont, proto?}]` (renders a port strip `443→8080`) |
+| `sequence` (sequence block) | `participants?:[{id, title?, kind?:"actor"}]` (columns, left to right), `messages:[{from, to, label?, dashed?, head?:"open|cross|none"}]` (rows, top to bottom); a step `{block:"alt|opt|loop|par|critical|break", label?, messages:[…], else?:[{label?, messages:[…]}]}` frames the steps it contains. The server lays out columns, lifelines, rows and frames inside the node; a participant only a message names joins on first use |
 
 `chips` are OBJECTS — `[{text, tone?}]` — never bare strings and never
 `{label}` (either silently drops the chip).
@@ -103,10 +104,12 @@ on repairs. Ambiguity still 400s with the exact fix.
 (third-party), `accent` (highlight a domain group).
 
 Full JSON examples (service architecture with lanes/groups, an ER pair where
-`fk:"users.id"` alone draws the crow's-foot, mermaid passthrough — a payload
-carrying `"mermaid":"<source>"` and no `lanes` converts server-side, loud
-error naming any unsupported line): `docs {topic:"element:diagram"}` /
-`vitrinka docs element:diagram`.
+`fk:"users.id"` alone draws the crow's-foot, mermaid passthrough: a payload
+carrying `"mermaid":"<source>"` and no nodes, groups or lanes converts
+server-side from a flowchart, a sequenceDiagram (one `sequence` node:
+its alt/else, opt, loop, par, critical and break blocks become frames) or a stateDiagram-v2 (composite states
+become groups); any other type or line is a loud error carrying the fix):
+`docs {topic:"element:diagram"}` / `vitrinka docs element:diagram`.
 
 ## Verify, then iterate — the quality loop
 
