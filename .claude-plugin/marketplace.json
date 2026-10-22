@@ -73,6 +73,19 @@
         "device-testing",
         "ios-simulator"
       ]
+    },
+    {
+      "name": "vitrinka-mod",
+      "displayName": "Vitrinka mod",
+      "source": "./plugins/vitrinka-mod",
+      "description": "A Claude Code mod: the session's board, epic and task in the prompt footer as links, and /vt to open them, the work tree, brainstorms and both inbox lanes without spending a model turn.",
+      "category": "productivity",
+      "keywords": [
+        "mod",
+        "footer",
+        "dashboard",
+        "navigation"
+      ]
     }
   ]
 }

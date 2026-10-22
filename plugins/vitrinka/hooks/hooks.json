@@ -7,6 +7,14 @@
           { "type": "command", "command": "vitrinka hook-context bind 2>/dev/null || true", "timeout": 5 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__vitrinka__create(_board)?$",
+        "hooks": [
+          { "type": "command", "command": "vitrinka hook-context focus 2>/dev/null || true", "timeout": 5 }
+        ]
+      }
     ]
   }
 }

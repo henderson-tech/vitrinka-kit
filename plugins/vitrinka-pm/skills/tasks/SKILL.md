@@ -20,7 +20,7 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   are universal; a project's states (`list {kind:"state"}`) are keys inside
   them and `status` derives from the group. `list {kind:"state"}` before
   writing `state`; `list {kind:"field"}` before writing `fields`.
-- **Types** `task · bug · story · epic · todo · qa · journey · meeting` are
+- **Types** `task · bug · story · epic · todo · qa · journey · meeting · watch` are
   ONE generated enum. An `epic` is the feature's whole record (children by
   `parentId`, the feature preset `outcome · non_goals · gates · decisions ·
   ledger_state · waiting_on · next_action`); a `qa` task is its test plan
@@ -60,8 +60,10 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   `derivedFrom`. Write a `hint` on everything you attach; `meta.tokens`
   tells the next reader the price. Never delete a version to clean up.
 - **Every task's `url` is its ONE link** — in chat a masked link labelled
-  by its `key` (`[VIT-12](<url>)`) over the url exactly as returned; never
-  compose, shorten or guess a route. Bodies reference by grammar, not URL:
+  by its `key` (`[VIT-12](<url>)`) over the url exactly as returned, the
+  first time a session names it; after that the key alone, linked again
+  when asked, after a compaction or resume, and in a PR, file or hand-over.
+  Never compose, shorten or guess a route. Bodies reference by grammar, not URL:
   `<PREFIX>-<id>` / `vt-<id>` / `#<id>` for tasks, `owner/repo#123` for
   PRs, a repo path (`internal/web/foo.go:64`), an attachment's filename.
 - **Unknown arguments are a 400** naming the key and the accepted set —
@@ -80,6 +82,17 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   `vitrinka outbox list` shows what waits and what the server parked, and
   why. An operation with neither an MCP tool nor a CLI verb has no door:
   say so, never a raw request.
+
+## Watch for
+
+Use a Watch for when repeated source observations must produce evidence and
+prepared work, not a todo reminder or task-follow subscription. Create
+`{kind:"task", type:"watch"}`; drive it with `update_watch` ops `intent`,
+`draft`, `plan`, `arm`, `pause`, `resume`, `cancel`, `check`. A draft or saved
+plan authorizes nothing: arm exactly the revision you reviewed; an edit
+needs arming again. New follow-up work lands in Intake, never auto-accepted
+or executed; an existing follow-up keeps its own prerequisites. Read
+`get_task {id, view:"watch"}` for the plan, health and allowed actions.
 
 ## The doors
 

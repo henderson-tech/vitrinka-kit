@@ -1,6 +1,6 @@
 {
   "name": "vitrinka-signals",
-  "version": "5.26.0",
+  "version": "5.27.0",
   "displayName": "Vitrinka Hlídač",
   "description": "Hlídač on top of core: ask whether prod is OK after a deploy, investigate a prepared problem from its brief and groups, and set up the sources Hlídač reads.",
   "author": {
