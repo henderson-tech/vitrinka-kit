@@ -1,0 +1,37 @@
+{
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "dependencies": [
+    "vitrinka"
+  ],
+  "description": "A Claude Code mod: the session's board, epic and task in the prompt footer as links, and /vt to open them, the work tree, brainstorms and both inbox lanes without spending a model turn.",
+  "displayName": "Vitrinka mod",
+  "homepage": "https://vitrinka.ai",
+  "keywords": [
+    "mod",
+    "footer",
+    "dashboard",
+    "navigation"
+  ],
+  "license": "Elastic-2.0",
+  "name": "vitrinka-mod",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "compass": {
+      "type": "boolean",
+      "title": "Footer compass",
+      "description": "Draw the session's board, epic and task in the prompt footer",
+      "default": true
+    },
+    "tickSeconds": {
+      "type": "number",
+      "title": "Dashboard refresh",
+      "description": "Seconds between the /vt pane's refreshes while it is open",
+      "default": 30
+    }
+  },
+  "version": "5.27.0"
+}
