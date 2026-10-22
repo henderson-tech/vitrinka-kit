@@ -39,7 +39,7 @@ and routes (`internal/web/x.go`, `/p/<project>?task=`), not descriptions of them
 - `<unit>` — does: … · used by: … · depends on: …
 
 ## Decisions that matter
-<!-- server --> one row per decision: key · title · chosen option · rejected labels · diagram link.
+<!-- server --> one row per decision: key · title · chosen option · rejected labels · diagram link · the chosen option's composed why (hint + detail, cut at 500 characters; a pick without one keeps the cell's `<!-- skill -->`).
 <!-- skill --> ≤ 8 load-bearing calls only, each "chosen over X because Y". Preference-level calls stay in the log.
 
 ## Prerequisites

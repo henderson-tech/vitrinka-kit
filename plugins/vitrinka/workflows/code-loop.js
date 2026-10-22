@@ -16,11 +16,16 @@ export const meta = {
 // `--help`. The two variants differ in ONE slot — where apps run: the core
 // flows follow the repo's CLAUDE.md, the run-target flows (build-idea, test)
 // follow the resolved `run.web` of lib/runtarget.js.
+// How an app runs on a devbox, said once for both variants in the devbox
+// skill's words: a bounded `devbox run` never started an app, and since
+// devbox#377 a raw one is source-only (no stack, no ports), so the stack
+// verbs start it and `devbox url` names its address.
+const DEVBOX_APPS = 'On a devbox an app starts with `devbox setup --apply` the first time on a branch, or `devbox up` once its workspace exists, and its address is what `devbox url <ws> <app>` prints, never composed; a test suite is a source-only `devbox run -- \'<cmd>\'`, and only a one-off command that needs the running stack is `devbox run --up -- \'<cmd>\'`.'
 const PREAMBLE_LINES = {
   stage: 'You are one stage of a vitrinka workflow. Your final text IS the return value: return raw data for the schema, never a human-facing report.',
   checkout: 'Work in the current checkout (a worktree). Never switch branches, never stash, never touch the main checkout.',
-  appsByRepo: 'Apps and test suites run where the repo\'s CLAUDE.md says — a worktree\'s devbox when one exists (`devbox run -- \'<cmd>\'`), otherwise locally; say which in `problems` when you had to fall back.',
-  appsByRunTarget: 'Apps run where the run target says: the Prepare stage resolved `.claude/vitrinka-workflows.json` → `run.web` and hands you `where` (devbox | local) and `baseUrl`; `devbox` means `devbox run -- \'<cmd>\'` on this branch\'s workspace, `local` means this machine. Simulator work (iOS, Android) always runs on this machine. Say so in `problems` when you had to deviate.',
+  appsByRepo: 'Apps and test suites run where the repo\'s CLAUDE.md says — a worktree\'s devbox when one exists, otherwise locally; say which in `problems` when you had to fall back. ' + DEVBOX_APPS,
+  appsByRunTarget: 'Apps run where the run target says: the Prepare stage resolved `.claude/vitrinka-workflows.json` → `run.web` and hands you `where` (devbox | local) and `baseUrl`; `devbox` means this branch\'s devbox workspace, `local` means this machine. ' + DEVBOX_APPS + ' Simulator work (iOS, Android) always runs on this machine. Say so in `problems` when you had to deviate.',
   links: 'Every vitrinka board/task link you return is the server-returned `url`, verbatim — never composed, never shortened.',
   browser: 'Browser work: onyx `browser_start(session: $CLAUDE_CODE_SESSION_ID)` first, headless, then playwright; screenshots land in `.vitrinka/mcp/` or the capture root you were given, never the repo root.',
   doors: 'When a door refuses (4xx with a diagnosis), apply the corrected call it names once; a second refusal is a `problems` entry, not a workaround.',

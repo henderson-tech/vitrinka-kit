@@ -42,6 +42,15 @@
       ]
     },
     {
+      "title": "Hlídač",
+      "description": "Prod status, prepared problems and the sources they come from, opt-in.",
+      "skills": [
+        "watch",
+        "investigate",
+        "setup"
+      ]
+    },
+    {
       "title": "Experimental",
       "description": "Unattended workflows and ask-first device testing, opt-in.",
       "skills": [

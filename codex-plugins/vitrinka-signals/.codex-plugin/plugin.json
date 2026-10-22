@@ -1,0 +1,32 @@
+{
+  "name": "vitrinka-signals",
+  "version": "5.26.0",
+  "description": "Hlídač on top of core: ask whether prod is OK after a deploy, investigate a prepared problem from its brief and groups, and set up the sources Hlídač reads.",
+  "author": {
+    "name": "Henderson Tech",
+    "url": "https://github.com/henderson-tech"
+  },
+  "homepage": "https://vitrinka.ai",
+  "repository": "https://github.com/henderson-tech/vitrinka-kit",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "errors",
+    "monitoring",
+    "sentry",
+    "prod-status"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "category": "Developer Tools",
+    "developerName": "Vitrinka",
+    "displayName": "Vitrinka Hlídač",
+    "longDescription": "Hlídač on top of core: ask whether prod is OK after a deploy, investigate a prepared problem from its brief and groups, and set up the sources Hlídač reads.",
+    "shortDescription": "Prod status, prepared problems and the sources they come from, opt-in.",
+    "websiteURL": "https://vitrinka.ai"
+  }
+}

@@ -69,6 +69,10 @@ link, `[<artifact title>](<url>)`, the URL exactly as minted.
   read. A 409 means re-read affected content and reconcile, never blindly
   retry. The receipt carries the next revision. Outline pagination must stay
   on one revision or restart.
+- **Links and keys in prose become smart refs**: write the plain URL, a
+  `[label](url)` or a task key (`vt-12`) and the reader gets a chip with the
+  target's title, as far as THAT reader may see it. `payload.inlineRefs` is
+  server-owned — stamped from the prose on every write, never authored.
 - Vitrinka is **an authenticated service**: `vitrinka auth login` mints the
   token (`VITRINKA_TOKEN` or the OS keyring; self-hosted deployments set
   `VITRINKA_URL`) — never print it.
