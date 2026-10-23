@@ -382,3 +382,91 @@ final class ConsoleCollapserTests: XCTestCase {
         XCTAssertTrue(c.expire(now: t0.addingTimeInterval(500)).isEmpty)
     }
 }
+
+/// A stand-in for SwiftUI's private `AccessibilityNode`: it answers the
+/// NSAccessibility selectors but does not declare NSAccessibilityProtocol,
+/// has no `accessibilityTitle`, and its attribute API answers nothing — the
+/// shape the second GUI run traced.
+final class FakeSwiftUINode: NSObject {
+    let role: String
+    let label: String?
+    let identifier: String
+    let frame: NSRect
+    let value: Any?
+    weak var parent: AnyObject?
+    var children: [FakeSwiftUINode] = []
+
+    init(_ role: String, _ frame: NSRect, label: String? = nil, identifier: String = "", value: Any? = nil, parent: FakeSwiftUINode? = nil) {
+        self.role = role
+        self.label = label
+        self.identifier = identifier
+        self.frame = frame
+        self.value = value
+        super.init()
+        if let parent {
+            self.parent = parent
+            parent.children.append(self)
+        }
+    }
+
+    @objc func accessibilityRole() -> String? { role }
+    @objc func accessibilityLabel() -> String? { label }
+    @objc func accessibilityIdentifier() -> String { identifier }
+    @objc func accessibilityFrame() -> NSRect { frame }
+    @objc func accessibilityParent() -> Any? { parent }
+    @objc func accessibilityChildren() -> [Any]? { children }
+    @objc func accessibilityValue() -> Any? { value }
+}
+
+@MainActor
+final class SwiftUINodeResolveTests: XCTestCase {
+    func testTheFakeReproducesSwiftUIsNode() {
+        let n = FakeSwiftUINode("AXButton", NSRect(x: 0, y: 0, width: 10, height: 10), label: "Open settings")
+        XCTAssertFalse((n as Any) is NSAccessibilityProtocol, "the protocol cast fails, as on SwiftUI's node")
+        XCTAssertFalse(n.responds(to: NSSelectorFromString("accessibilityTitle")))
+        XCTAssertNil(AXRead.legacy(n, "AXRole"), "the attribute API answers nothing")
+    }
+
+    func testAButtonIsReadThroughDynamicDispatch() {
+        let host = FakeSwiftUINode("AXGroup", NSRect(x: 3000, y: 1900, width: 600, height: 400))
+        let button = FakeSwiftUINode("AXButton", NSRect(x: 3115, y: 2007, width: 109, height: 24), label: "Open settings", parent: host)
+        XCTAssertEqual(AXRead.role(button), "AXButton")
+        XCTAssertEqual(AXRead.label(button), "Open settings")
+        XCTAssertNil(AXRead.title(button))
+        XCTAssertNil(AXRead.identifier(button), "an empty identifier is none")
+        XCTAssertEqual(AXRead.frame(button), NSRect(x: 3115, y: 2007, width: 109, height: 24))
+        XCTAssertTrue((AXRead.parent(button) as AnyObject) === host)
+        let l = ElementLabels.resolve(from: button)
+        XCTAssertEqual(l?.text, "Open settings")
+        XCTAssertEqual(l?.selector, "AXButton")
+        XCTAssertEqual(l?.frame, NSRect(x: 3115, y: 2007, width: 109, height: 24))
+    }
+
+    func testTheWalkGoesUpThroughAccessibilityParent() {
+        let host = FakeSwiftUINode("AXGroup", NSRect(x: 0, y: 0, width: 600, height: 400))
+        let button = FakeSwiftUINode("AXButton", NSRect(x: 10, y: 10, width: 90, height: 24), label: "Add item", identifier: "add-item", parent: host)
+        let text = FakeSwiftUINode("AXStaticText", NSRect(x: 20, y: 14, width: 60, height: 16), value: "Add item", parent: button)
+        let l = ElementLabels.resolve(from: text)
+        XCTAssertEqual(l?.text, "Add item")
+        XCTAssertEqual(l?.selector, "AXButton#add-item")
+    }
+
+    func testARowIsNamedByItsCheckboxChild() {
+        let outline = FakeSwiftUINode("AXOutline", NSRect(x: 0, y: 0, width: 300, height: 200))
+        let row = FakeSwiftUINode("AXRow", NSRect(x: 0, y: 100, width: 300, height: 24), parent: outline)
+        let cell = FakeSwiftUINode("AXCell", NSRect(x: 10, y: 100, width: 280, height: 24), identifier: "ListCell", parent: row)
+        _ = FakeSwiftUINode("AXCheckBox", NSRect(x: 12, y: 102, width: 200, height: 20), label: "Calibrate fan curve", value: NSNumber(value: 0), parent: cell)
+        let l = ElementLabels.resolve(from: cell)
+        XCTAssertEqual(l?.text, "Calibrate fan curve")
+        XCTAssertEqual(l?.selector, "AXCell")
+    }
+
+    func testDescendThroughDynamicChildren() {
+        let host = FakeSwiftUINode("AXGroup", NSRect(x: 0, y: 0, width: 600, height: 400))
+        let approve = FakeSwiftUINode("AXButton", NSRect(x: 400, y: 20, width: 80, height: 24), label: "Approve", identifier: "approve", parent: host)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 300, y: 20, width: 80, height: 24), label: "Close", parent: host)
+        let hit = ElementLabels.descend(from: host, to: NSPoint(x: 420, y: 30))
+        XCTAssertTrue((hit as AnyObject) === approve)
+        XCTAssertEqual(ElementLabels.resolve(from: hit)?.selector, "AXButton#approve")
+    }
+}

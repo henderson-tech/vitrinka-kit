@@ -264,7 +264,7 @@ final class RecorderRuntime {
         model.status.update(elapsed: h.elapsedMs / 1000, frames: h.shots, queued: h.queued, sync: sync)
         if sessionActive, model.phase == .idle || model.phase == .saved { model.phase = .recording }
         if !sessionActive, model.phase == .recording { model.phase = .idle }
-        if sessionActive { AccessibilityTree.activate() } else { AccessibilityTree.deactivate() }
+        if sessionActive, config.activatesAccessibilityTree { AccessibilityTree.activate() } else if !sessionActive { AccessibilityTree.deactivate() }
     }
 
     private func refreshLinked() {
@@ -318,7 +318,7 @@ final class RecorderRuntime {
         sessionActive = true
         paused = false
         // Before the first click: SwiftUI builds its accessibility tree now.
-        AccessibilityTree.activate()
+        if config.activatesAccessibilityTree { AccessibilityTree.activate() }
         resetCaptureState()
         model.phase = .recording
         await console?.start(from: Date(), newSession: true)

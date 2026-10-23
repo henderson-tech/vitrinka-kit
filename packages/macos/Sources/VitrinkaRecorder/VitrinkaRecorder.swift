@@ -31,6 +31,12 @@ public struct VitrinkaRecorderConfiguration: Sendable {
     /// Rewrites every route before the redaction engine scrubs it, for
     /// credentials in route paths (`reset/<token>`). It runs under any policy.
     public var sanitizeRoute: (@Sendable (String) -> String)?
+    /// While recording, set `AXEnhancedUserInterface` on the app (what an
+    /// assistive client such as VoiceOver sets) so SwiftUI builds its
+    /// accessibility tree and clicks on SwiftUI controls get names. Stop
+    /// restores the previous value. Like VoiceOver, it can change how the app
+    /// animates window moves and resizes. Off: SwiftUI clicks may have no name.
+    public var activatesAccessibilityTree = true
 
     public enum Credential: Sendable {
         /// `VITRINKA_RECORDER_TOKEN` in the environment, else the user default

@@ -16,9 +16,11 @@ struct ElementLabel: Equatable {
 /// SwiftUI builds its accessibility tree only while an assistive client is
 /// active; without one, an in-process hit test on a SwiftUI window stops at
 /// the hosting view and a click on a SwiftUI button has no name. While a
-/// recording runs, the recorder marks its own app the way an assistive
-/// client does (`AXEnhancedUserInterface` on the application element), and
-/// Stop restores the previous value. It changes nothing outside the process.
+/// recording runs (and `activatesAccessibilityTree` is on, the default), the
+/// recorder marks its own app the way an assistive client does
+/// (`AXEnhancedUserInterface` on the application element), and Stop restores
+/// the previous value. It changes nothing outside the process, but like
+/// VoiceOver it can change how the app animates windows.
 @MainActor
 enum AccessibilityTree {
     private static var setByUs = false
@@ -65,48 +67,66 @@ enum AXRead {
         return s
     }
 
+    /// The getter by dynamic dispatch: SwiftUI's accessibility nodes answer
+    /// the NSAccessibility selectors without declaring the protocol, so the
+    /// protocol cast fails on them. Guarded by `responds(to:)`, because KVC
+    /// on a missing key raises.
+    static func dynamic(_ e: Any, _ getter: String) -> Any? {
+        guard let o = e as? NSObject, o.responds(to: NSSelectorFromString(getter)) else { return nil }
+        return o.value(forKey: getter)
+    }
+
+    // Each read: the protocol, then dynamic dispatch, then the attribute API.
+
     static func role(_ e: Any) -> String? {
-        string((e as? NSAccessibilityProtocol)?.accessibilityRole()?.rawValue) ?? string(legacy(e, "AXRole"))
+        string((e as? NSAccessibilityProtocol)?.accessibilityRole()?.rawValue) ?? string(dynamic(e, "accessibilityRole")) ?? string(legacy(e, "AXRole"))
     }
 
     static func subrole(_ e: Any) -> String? {
-        string((e as? NSAccessibilityProtocol)?.accessibilitySubrole()?.rawValue) ?? string(legacy(e, "AXSubrole"))
+        string((e as? NSAccessibilityProtocol)?.accessibilitySubrole()?.rawValue) ?? string(dynamic(e, "accessibilitySubrole"))
+            ?? string(legacy(e, "AXSubrole"))
     }
 
     /// The accessibility identifier, else an AppKit view's own `identifier`
     /// (AppKit does not always mirror it), never SwiftUI's plumbing ids.
     static func identifier(_ e: Any) -> String? {
-        if let s = string((e as? NSAccessibilityProtocol)?.accessibilityIdentifier()) ?? string(legacy(e, "AXIdentifier")) { return s }
+        if let s = string((e as? NSAccessibilityProtocol)?.accessibilityIdentifier()) ?? string(dynamic(e, "accessibilityIdentifier"))
+            ?? string(legacy(e, "AXIdentifier"))
+        {
+            return s
+        }
         // An AppKit control answers through its cell.
         guard let v = (e as? NSView) ?? (e as? NSCell)?.controlView, !NSStringFromClass(type(of: v)).contains("SwiftUI") else { return nil }
         return string(v.identifier?.rawValue)
     }
 
     static func label(_ e: Any) -> String? {
-        string((e as? NSAccessibilityProtocol)?.accessibilityLabel()) ?? string(legacy(e, "AXDescription"))
+        string((e as? NSAccessibilityProtocol)?.accessibilityLabel()) ?? string(dynamic(e, "accessibilityLabel")) ?? string(legacy(e, "AXDescription"))
     }
 
     static func title(_ e: Any) -> String? {
-        string((e as? NSAccessibilityProtocol)?.accessibilityTitle()) ?? string(legacy(e, "AXTitle"))
+        string((e as? NSAccessibilityProtocol)?.accessibilityTitle()) ?? string(dynamic(e, "accessibilityTitle")) ?? string(legacy(e, "AXTitle"))
     }
 
     /// The value as text. Only ever read for static text.
     static func textValue(_ e: Any) -> String? {
-        string((e as? NSAccessibilityProtocol)?.accessibilityValue()) ?? string(legacy(e, "AXValue"))
+        string((e as? NSAccessibilityProtocol)?.accessibilityValue()) ?? string(dynamic(e, "accessibilityValue")) ?? string(legacy(e, "AXValue"))
     }
 
     static func parent(_ e: Any) -> Any? {
-        (e as? NSAccessibilityProtocol)?.accessibilityParent() ?? legacy(e, "AXParent")
+        (e as? NSAccessibilityProtocol)?.accessibilityParent() ?? dynamic(e, "accessibilityParent") ?? legacy(e, "AXParent")
     }
 
     static func children(_ e: Any) -> [Any] {
         if let c = (e as? NSAccessibilityProtocol)?.accessibilityChildren(), !c.isEmpty { return c }
+        if let c = dynamic(e, "accessibilityChildren") as? [Any], !c.isEmpty { return c }
         return (legacy(e, "AXChildren") as? [Any]) ?? []
     }
 
     /// AppKit screen coordinates; nil when empty.
     static func frame(_ e: Any) -> NSRect? {
         if let f = (e as? NSAccessibilityProtocol)?.accessibilityFrame(), !f.isEmpty { return f }
+        if let f = (dynamic(e, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty { return f }
         guard let p = (legacy(e, "AXPosition") as? NSValue)?.pointValue, let s = (legacy(e, "AXSize") as? NSValue)?.sizeValue,
               s.width > 0, s.height > 0
         else { return nil }

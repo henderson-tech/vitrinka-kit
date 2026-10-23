@@ -120,11 +120,14 @@ text), with `role#identifier` as the selector. A text field's value is never
 read, and a click inside a private view records no name.
 
 SwiftUI builds its accessibility tree only while an assistive client is
-active. While a recording runs, the recorder marks its own app the way such
-a client does (`AXEnhancedUserInterface` on the app's accessibility element)
-so SwiftUI controls have names; Stop restores the previous value. Nothing
-outside the app changes and no permission is involved. If a control still
-has no name, the click keeps its position and role.
+active. While a recording runs (Debug builds only), the recorder therefore
+sets `AXEnhancedUserInterface` on its own app's accessibility element, as
+VoiceOver does, so SwiftUI controls have names; Stop restores the previous
+value. Nothing outside the app changes and no permission is involved, but
+like VoiceOver it can change how the app animates window moves and resizes.
+`config.activatesAccessibilityTree = false` turns this off; SwiftUI clicks
+then may have no name. A control without a name keeps the click's position
+and role.
 
 ### Console
 
