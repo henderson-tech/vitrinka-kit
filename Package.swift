@@ -11,12 +11,24 @@ import PackageDescription
 let package = Package(
     name: "vitrinka-kit",
     platforms: [.macOS(.v14)],
+    products: [
+        // The journey recorder. Its live code compiles only into Debug builds;
+        // a Release build gets empty stubs (packages/macos/README.md).
+        .library(name: "VitrinkaRecorder", targets: ["VitrinkaRecorder"]),
+    ],
     targets: [
         // Foundation only: wire types, API client, device link, durable
         // queue and the Swift port of @vitrinka/redact.
         .target(
             name: "VitrinkaRecorderCore",
             path: "packages/macos/Sources/VitrinkaRecorderCore"
+        ),
+        // AppKit, SwiftUI and ScreenCaptureKit: capture, event lanes, HUD and
+        // the public API.
+        .target(
+            name: "VitrinkaRecorder",
+            dependencies: ["VitrinkaRecorderCore"],
+            path: "packages/macos/Sources/VitrinkaRecorder"
         ),
         .testTarget(
             name: "VitrinkaRecorderCoreTests",
@@ -25,6 +37,11 @@ let package = Package(
             // A copy of packages/redact/spec/vectors.json; a test fails when
             // the two drift apart.
             resources: [.copy("Resources/vectors.json")]
+        ),
+        .testTarget(
+            name: "VitrinkaRecorderTests",
+            dependencies: ["VitrinkaRecorder"],
+            path: "packages/macos/Tests/VitrinkaRecorderTests"
         ),
     ]
 )
