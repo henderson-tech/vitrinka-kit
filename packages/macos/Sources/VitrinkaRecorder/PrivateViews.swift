@@ -149,19 +149,45 @@ final class RouteRegistry {
     /// Called with the lane window whose route changed.
     var onChange: ((NSWindow) -> Void)?
 
+    private var pendingLanes: [NSWindow] = []
+    private var notifyScheduled = false
+
+    /// A marker appeared, changed its route or left its window. The lane is
+    /// resolved a moment later: a sheet's content can reach its window before
+    /// the sheet is attached to its parent.
     func changed(_ v: RouteMarkerView) {
         let id = ObjectIdentifier(v)
-        if let w = v.window {
-            let lane = Lanes.laneWindow(of: w)
-            if var e = markers[id] {
-                e.lane = lane
-                markers[id] = e
-            } else {
+        if v.window != nil {
+            if markers[id] == nil {
                 counter += 1
-                markers[id] = Entry(view: v, lane: lane, order: counter)
+                markers[id] = Entry(view: v, lane: nil, order: counter)
             }
-            onChange?(lane)
         } else if let e = markers.removeValue(forKey: id), let lane = e.lane {
+            pendingLanes.append(lane)
+        }
+        guard !notifyScheduled else { return }
+        notifyScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            self.flushNotifications()
+        }
+    }
+
+    private func flushNotifications() {
+        notifyScheduled = false
+        var lanes = pendingLanes
+        pendingLanes = []
+        for (id, e) in markers {
+            guard let v = e.view, let w = v.window else {
+                markers[id] = nil
+                continue
+            }
+            let lane = Lanes.laneWindow(of: w)
+            markers[id]?.lane = lane
+            lanes.append(lane)
+        }
+        var seen = Set<ObjectIdentifier>()
+        for lane in lanes where seen.insert(ObjectIdentifier(lane)).inserted {
             onChange?(lane)
         }
     }
@@ -173,11 +199,11 @@ final class RouteRegistry {
     func route(for laneWindow: NSWindow) -> String {
         var best: (order: Int, route: String)?
         for (id, e) in markers {
-            guard let v = e.view, v.window != nil, let lane = e.lane else {
+            guard let v = e.view, let w = v.window else {
                 markers[id] = nil
                 continue
             }
-            guard lane === laneWindow else { continue }
+            guard Lanes.laneWindow(of: w) === laneWindow else { continue }
             if best.map({ e.order > $0.order }) ?? true { best = (e.order, v.route) }
         }
         return best?.route ?? base[laneWindow.windowNumber] ?? ""

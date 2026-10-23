@@ -605,9 +605,17 @@ final class RecorderRuntime {
 
     private func windowChanged(_ window: NSWindow, sheetBegan: Bool) {
         guard recordingLive, Lanes.isRecordable(window) else { return }
+        if sheetBegan {
+            // Let the sheet attach and its content (route markers) arrive.
+            Task {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                self.windowChanged(window, sheetBegan: false)
+            }
+            return
+        }
         let laneWindow = Lanes.laneWindow(of: window)
         let focus = NSApp.keyWindow.map { Lanes.laneWindow(of: $0) === laneWindow } ?? true
-        screenChanged(laneWindow, focus: focus, reason: .nav, delay: sheetBegan || laneWindow.attachedSheet != nil ? Self.sheetDelay : Self.navDelay)
+        screenChanged(laneWindow, focus: focus, reason: .nav, delay: laneWindow.attachedSheet != nil ? Self.sheetDelay : Self.navDelay)
     }
 
     private func routeChanged(_ laneWindow: NSWindow) {
