@@ -30,6 +30,12 @@ let package = Package(
             dependencies: ["VitrinkaRecorderCore"],
             path: "packages/macos/Sources/VitrinkaRecorder"
         ),
+        // A small SwiftUI host app that exercises every lane in a live run.
+        .executableTarget(
+            name: "RecorderDemo",
+            dependencies: ["VitrinkaRecorder"],
+            path: "packages/macos/Examples/RecorderDemo"
+        ),
         .testTarget(
             name: "VitrinkaRecorderCoreTests",
             dependencies: ["VitrinkaRecorderCore"],
