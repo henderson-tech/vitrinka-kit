@@ -648,10 +648,10 @@ export class ReportWidget {
   }
 
   /**
-   * Live inside the topmost open dialog while there is one (the recorder's
-   * sheet path, hud/host.ts): a modal makes everything outside it inert and
-   * its focus trap pulls focus back. The one DOM tree moves, so the draft,
-   * the marks and their notes go along; focus is restored after the move.
+   * Associate with the topmost open dialog so its inert/focus rules leave
+   * reporting usable. The sheet host's top-layer popover keeps the button,
+   * card and marks anchored to the viewport, independent of the dialog's box.
+   * The one DOM tree moves with its draft and marks; focus survives the move.
    */
   private followDialog(): void {
     const target = this.activeDialog();

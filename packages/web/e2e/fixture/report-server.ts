@@ -67,10 +67,37 @@ function page(query: string): string {
   // A host's own recorder bundle beside the standalone widget (claim-recorder.ts).
   const recorder = query.includes('recorder') ? '<script src="/claim-recorder.js"></script>' : '';
   // Host modals (`?dialog`), both mounted up front: window.openModal(id = 'modal') shows one with showModal().
-  const modal = query.includes('dialog')
-    ? '<dialog id="modal"><p>Edit settlement</p><button>Save</button></dialog><dialog id="second"><p>Confirm</p></dialog>' +
-      '<script>window.openModal = (id = "modal") => document.getElementById(id).showModal()</script>'
-    : '';
+  const modal = query.includes('aria-dialog')
+    ? `<button id="open-editor">Open editor</button>
+      <div id="modal" role="dialog" aria-modal="true" aria-label="Edit settlement" hidden
+        style="position:fixed;left:50%;top:50%;translate:-50% -50%;width:600px;height:300px;overflow:hidden;background:white;pointer-events:auto">
+        <label>Settlement month<input id="month" value="September"></label><button id="close-editor">Close editor</button>
+      </div>
+      <script>
+        const modal = document.getElementById('modal');
+        const month = document.getElementById('month');
+        window.openModal = () => {
+          modal.hidden = false;
+          modal.dataset.state = 'open';
+          document.body.style.pointerEvents = 'none';
+          month.focus();
+        };
+        document.getElementById('open-editor').onclick = window.openModal;
+        document.getElementById('close-editor').onclick = () => {
+          modal.hidden = true;
+          modal.dataset.state = 'closed';
+          document.body.style.pointerEvents = '';
+        };
+        document.addEventListener('focusin', (event) => {
+          if (!modal.hidden && !modal.contains(event.target)) month.focus();
+        });
+      </script>`
+    : query.includes('dialog')
+      ? '<button onclick="openModal()">Open editor</button>' +
+        '<dialog id="modal" aria-label="Edit settlement" style="translate:-50% -50%;position:fixed;left:50%;top:50%;margin:0;width:600px;height:300px;overflow:hidden">' +
+        '<p>Edit settlement</p><label>Settlement month<input value="September"></label><button onclick="this.closest(\'dialog\').close()">Close editor</button><button>Save</button></dialog>' +
+        '<dialog id="second"><p>Confirm</p></dialog><script>window.openModal = (id = "modal") => document.getElementById(id).showModal()</script>'
+      : '';
   const tag = query.includes('nobutton')
     ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'
     : '<vitrinka-report key="vkb_e2e" locale="en"></vitrinka-report>';

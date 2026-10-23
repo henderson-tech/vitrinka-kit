@@ -13,5 +13,5 @@ export const HOST_STYLE =
   'all:initial;position:fixed;z-index:2147483647;inset:0 auto auto 0;margin:0;padding:0;border:0;' +
   'background:transparent;overflow:visible;width:0;height:0;pointer-events:none;color-scheme:normal;';
 
-/** Inline style of a sheet host portaled into a dialog — the same 0×0 origin box. */
+/** A dialog-associated top-layer popover uses the same viewport-origin box. */
 export const SHEET_HOST_STYLE = HOST_STYLE;

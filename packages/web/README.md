@@ -224,10 +224,12 @@ preference too (`sheetW`, `sheetH` in CSS px, 0 = the default). It is sent
 in a PATCH of its own when you let go. A server that predates it answers 422,
 and the size then stays on the device while size and details still sync.
 
-The sheet renders inside the topmost open dialog when one exists, so a
-Radix focus trap or a `<dialog>.showModal()` never fights it, and nothing
-you do on the pill reaches the page (a "close on outside click" never fires
-because of the recorder).
+The sheet stays associated with the topmost open dialog when one exists,
+so a Radix focus trap or a `<dialog>.showModal()` never fights it. Its own
+manual popover paints in the browser's top layer: the report button, card
+and recorder sheets keep their window positions even when the dialog is
+transformed or clips its content. Nothing you do on the pill reaches the
+page (a "close on outside click" never fires because of the recorder).
 
 ## With the Vitrinka extension
 

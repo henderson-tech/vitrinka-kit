@@ -446,6 +446,49 @@ test('under an open modal dialog the report stays reachable, and keeps its draft
   await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
 });
 
+for (const modal of ['dialog', 'aria-dialog']) {
+  test(`the report stays at the window corner above a transformed ${modal}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 810 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(`${base}/?${modal}`);
+    await armed(page);
+    const fab = page.getByRole('button', { name: /^Report a problem/ });
+    const position = () => fab.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return { right: Math.round(innerWidth - rect.right), bottom: Math.round(innerHeight - rect.bottom) };
+    });
+    await expect.poll(position).toEqual({ right: 24, bottom: 24 });
+    await page.getByRole('button', { name: 'Open editor', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: 'Edit settlement', exact: true });
+    await editor.getByRole('textbox', { name: 'Settlement month' }).fill('October');
+    await expect.poll(position).toEqual({ right: 24, bottom: 24 });
+
+    await fab.click();
+    const card = page.getByRole('dialog', { name: 'Report a problem', exact: true });
+    const draft = card.getByRole('textbox', { name: 'What went wrong?' });
+    await draft.fill('The editor shows the wrong month');
+    await expect(draft).toBeFocused();
+    await expect.poll(() => card.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return { right: Math.round(innerWidth - rect.right), bottom: Math.round(innerHeight - rect.bottom) };
+    })).toEqual({ right: 24, bottom: 96 });
+    await page.keyboard.press('Escape');
+    await expect(card).toBeHidden();
+    await expect(editor).toBeVisible();
+    await expect(editor.getByRole('textbox', { name: 'Settlement month' })).toHaveValue('October');
+    await fab.click();
+    await expect(draft).toHaveValue('The editor shows the wrong month');
+    await card.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    expect(created()).toMatchObject({ description: 'The editor shows the wrong month' });
+    await page.keyboard.press('Escape');
+    await editor.getByRole('button', { name: 'Close editor', exact: true }).click();
+    await expect(editor).toBeHidden();
+    await expect.poll(position).toEqual({ right: 24, bottom: 24 });
+    await expect(page.locator('[data-vitrinka-sheet]')).toHaveCount(0);
+  });
+}
+
 test('the report follows the modal shown last, not the last dialog in the page', async ({ page }) => {
   await page.goto(`${base}/?dialog`);
   await armed(page);
