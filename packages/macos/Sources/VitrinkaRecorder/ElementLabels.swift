@@ -123,15 +123,23 @@ enum AXRead {
         return (legacy(e, "AXChildren") as? [Any]) ?? []
     }
 
-    /// AppKit screen coordinates; nil when empty.
+    /// AppKit screen coordinates (bottom-left origin); nil when empty.
+    ///
+    /// The attribute API's AXPosition/AXSize come first, converted from
+    /// their top-left global origin: AppKit's table mock elements (rows and
+    /// cells) answer `accessibilityFrame` in those top-left coordinates too,
+    /// so their protocol frame cannot be trusted. Elements without the
+    /// attribute API (SwiftUI's nodes) answer `accessibilityFrame` through
+    /// the protocol or dynamic dispatch, in AppKit coordinates.
     static func frame(_ e: Any) -> NSRect? {
+        if let p = (legacy(e, "AXPosition") as? NSValue)?.pointValue, let s = (legacy(e, "AXSize") as? NSValue)?.sizeValue,
+           s.width > 0, s.height > 0
+        {
+            return ScreenGeometry.fromCG(CGRect(origin: p, size: s))
+        }
         if let f = (e as? NSAccessibilityProtocol)?.accessibilityFrame(), !f.isEmpty { return f }
         if let f = (dynamic(e, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty { return f }
-        guard let p = (legacy(e, "AXPosition") as? NSValue)?.pointValue, let s = (legacy(e, "AXSize") as? NSValue)?.sizeValue,
-              s.width > 0, s.height > 0
-        else { return nil }
-        // The attribute API answers in top-left global coordinates.
-        return NSRect(x: p.x, y: ScreenGeometry.primaryHeight - p.y - s.height, width: s.width, height: s.height)
+        return nil
     }
 }
 
@@ -178,18 +186,17 @@ enum ElementLabels {
     /// answer; each candidate is descended to the smallest element under the
     /// point and resolved to its control. The first named result wins.
     static func resolve(inWindow windowElement: Any, hits: [Any], at point: NSPoint) -> ElementLabel? {
-        var starts: [Any] = AXRead.children(windowElement).filter { c in
-            guard let role = AXRead.role(c), overlayRoles.contains(role), let f = AXRead.frame(c) else { return false }
-            return f.contains(point)
+        let windowChildren = AXRead.children(windowElement).filter { c in
+            // Only the window's children are picked by frame; a hit-test
+            // answer is never second-guessed.
+            AXRead.frame(c)?.contains(point) ?? false
         }
-        starts += hits
-        // The window's other children, when no hit test reached below a container.
-        starts += AXRead.children(windowElement)
+        let overlays = windowChildren.filter { AXRead.role($0).map(overlayRoles.contains) ?? false }
+        let starts: [Any] = overlays + hits + windowChildren
         var best: ElementLabel?
         var tried = Set<ObjectIdentifier>()
         for start in starts {
             guard tried.insert(ObjectIdentifier(start as AnyObject)).inserted else { continue }
-            if let f = AXRead.frame(start), !f.contains(point) { continue }
             let deepest = descend(from: start, to: point)
             guard let found = resolve(from: deepest) else { continue }
             if found.text != nil { return found }

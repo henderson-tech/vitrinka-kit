@@ -511,3 +511,63 @@ final class SheetResolveTests: XCTestCase {
         XCTAssertNil(ElementLabels.resolve(inWindow: window, hits: [], at: NSPoint(x: 700, y: 590)), "nothing named under the point")
     }
 }
+
+/// AppKit's table mock element (NSTableViewCellMockElement): it answers the
+/// attribute API with AXPosition/AXSize in top-left global coordinates, and
+/// its `accessibilityFrame` carries the same top-left numbers.
+final class FakeTableMockElement: NSObject {
+    let role: String
+    let topLeft: CGRect
+    weak var parentNode: AnyObject?
+    var kids: [Any] = []
+
+    init(_ role: String, topLeft: CGRect, parent: AnyObject?) {
+        self.role = role
+        self.topLeft = topLeft
+        parentNode = parent
+    }
+
+    override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
+        switch attribute.rawValue {
+        case "AXRole": return role
+        case "AXPosition": return NSValue(point: topLeft.origin)
+        case "AXSize": return NSValue(size: topLeft.size)
+        case "AXChildren": return kids
+        case "AXParent": return parentNode
+        default: return nil
+        }
+    }
+
+    /// The trap: top-left numbers through the frame getter.
+    @objc func accessibilityFrame() -> NSRect { topLeft }
+}
+
+@MainActor
+final class TableMockFrameTests: XCTestCase {
+    func testATopLeftCellInABottomLeftOutlineResolvesToItsRowsLabel() {
+        let h = ScreenGeometry.primaryHeight
+        // The cell on screen, AppKit coordinates (bottom-left origin).
+        let cellApp = NSRect(x: 2370, y: 2157, width: 844, height: 25)
+        let cellTopLeft = CGRect(x: cellApp.minX, y: h - cellApp.maxY, width: cellApp.width, height: cellApp.height)
+        let outline = FakeSwiftUINode("AXOutline", NSRect(x: 2359, y: 2044, width: 866, height: 149))
+        let cell = FakeTableMockElement("AXCell", topLeft: cellTopLeft, parent: outline)
+        let checkbox = FakeSwiftUINode("AXCheckBox", NSRect(x: 2380, y: 2159, width: 300, height: 20), label: "Order spare fans")
+        checkbox.parent = cell
+        cell.kids = [checkbox]
+        let window = FakeSwiftUINode("AXWindow", NSRect(x: 2300, y: 1900, width: 1000, height: 400))
+        let point = NSPoint(x: 2792, y: 2169.5)
+
+        XCTAssertEqual(AXRead.frame(cell), cellApp, "AXPosition/AXSize are converted from top-left")
+        XCTAssertTrue(AXRead.frame(cell)?.contains(point) == true)
+        let l = ElementLabels.resolve(inWindow: window, hits: [cell], at: point)
+        XCTAssertEqual(l?.text, "Order spare fans")
+        XCTAssertEqual(l?.selector, "AXCell")
+    }
+
+    func testAHitTestAnswerIsNeverDroppedByAFrameCheck() {
+        let window = FakeSwiftUINode("AXWindow", NSRect(x: 0, y: 0, width: 400, height: 300))
+        // A hit whose frame (wrongly) does not hold the point still resolves.
+        let button = FakeSwiftUINode("AXButton", NSRect(x: 0, y: -5000, width: 50, height: 20), label: "Order")
+        XCTAssertEqual(ElementLabels.resolve(inWindow: window, hits: [button], at: NSPoint(x: 100, y: 100))?.text, "Order")
+    }
+}
