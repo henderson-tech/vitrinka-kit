@@ -54,7 +54,11 @@ public struct VitrinkaRecorderConfiguration: Sendable {
     public enum Chords: Sendable { case standard, off }
     public enum HUDMode: Sendable { case floating, hidden }
     /// `.shortcutsOnly`: ⌘ and ⌃ chords, Return, Escape, Tab, arrows and
-    /// Delete. Typed characters are never recorded.
+    /// Delete. While an editable text field or text view has focus, only ⌘
+    /// and ⌃ chords, Return, Escape and Tab: Delete and the arrows are text
+    /// editing there. Typed characters are never recorded. The same key
+    /// pressed again within 1 s on the same target is one event with
+    /// `repeats: N`.
     public enum KeyCapture: Sendable { case off, shortcutsOnly }
     /// Which unified-log entries of this process the console lane records.
     ///

@@ -116,6 +116,13 @@ enum Lanes {
 
 /// The key lane's vocabulary: which key-downs are recorded, and how.
 enum KeyCombos {
+    /// An editable text field (through its field editor) or text view.
+    @MainActor static func isTextInput(_ responder: NSResponder?) -> Bool {
+        if let tv = responder as? NSTextView { return tv.isEditable }
+        if let tf = responder as? NSTextField { return tf.isEditable }
+        return false
+    }
+
     static let specialNames: [UInt16: String] = [
         36: "↩", 76: "⌤", 53: "⎋", 48: "⇥", 51: "⌫", 117: "⌦",
         123: "←", 124: "→", 125: "↓", 126: "↑",
@@ -136,14 +143,20 @@ enum KeyCombos {
         }
     }
 
+    /// Delete, forward delete and the arrows: text editing inside a field.
+    static let textEditingKeys: Set<UInt16> = [51, 117, 123, 124, 125, 126]
+
     /// The combo text of a recordable key-down, or nil for plain typing.
     /// Only ⌘/⌃ chords and the special keys qualify; a character typed with
-    /// at most ⇧/⌥ is never recorded.
-    static func combo(keyCode: UInt16, flags: NSEvent.ModifierFlags, charactersIgnoringModifiers: String?) -> String? {
+    /// at most ⇧/⌥ is never recorded. While a text field or text view has
+    /// focus (`inTextInput`), Delete and the arrows are editing and are not
+    /// recorded either: only ⌘/⌃ chords, Return, Escape and Tab.
+    static func combo(keyCode: UInt16, flags: NSEvent.ModifierFlags, charactersIgnoringModifiers: String?, inTextInput: Bool = false) -> String? {
         let f = flags.intersection(.deviceIndependentFlagsMask)
         let chord = f.contains(.command) || f.contains(.control)
         let special = specialNames[keyCode]
         guard chord || special != nil else { return nil }
+        if inTextInput, !chord, textEditingKeys.contains(keyCode) { return nil }
         var s = ""
         if f.contains(.control) { s += "⌃" }
         if f.contains(.option) { s += "⌥" }
@@ -157,6 +170,49 @@ enum KeyCombos {
             s += "key\(keyCode)"
         }
         return s
+    }
+}
+/// One recorded key press waiting to be sent.
+struct RecordedKey: Equatable {
+    var combo: String
+    var target: String?
+    var lane: Lane
+    var date: Date
+    /// How many more times the same key was pressed in the run.
+    var repeats = 0
+}
+
+/// Identical consecutive key presses (same combo, target and lane), each
+/// within 1 s of the one before, become one event with `repeats: N`.
+struct KeyCollapser {
+    static let window: TimeInterval = 1
+
+    private(set) var pending: RecordedKey?
+    private var lastAt: Date?
+
+    /// Take one press; returns the finished run it ended, if any.
+    mutating func admit(_ k: RecordedKey) -> [RecordedKey] {
+        if var p = pending, let last = lastAt, p.combo == k.combo, p.target == k.target, p.lane == k.lane,
+           k.date.timeIntervalSince(last) <= Self.window
+        {
+            p.repeats += 1
+            pending = p
+            lastAt = k.date
+            return []
+        }
+        let out = pending.map { [$0] } ?? []
+        pending = k
+        lastAt = k.date
+        return out
+    }
+
+    /// The pending run once it is over at `now`; with no `now`, at once.
+    mutating func flush(now: Date? = nil) -> [RecordedKey] {
+        guard let p = pending else { return [] }
+        if let now, let last = lastAt, now.timeIntervalSince(last) < Self.window { return [] }
+        pending = nil
+        lastAt = nil
+        return [p]
     }
 }
 #endif

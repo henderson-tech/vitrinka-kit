@@ -137,6 +137,17 @@ and the sheets and popovers over it: it keeps a frame that meets the window,
 else it uses the frame flipped over the main screen's height. An element
 that the accessibility hit test returns is never dropped by a frame check.
 
+### Keys
+
+With `keys: .shortcutsOnly` (the default) a key-down records
+`key {combo, target, route}` for ⌘ and ⌃ chords, Return, Escape, Tab, the
+arrows and Delete. Typed characters are never recorded, and a secure field
+records nothing. While an editable text field or text view has focus, only
+⌘ and ⌃ chords, Return, Escape and Tab are recorded: Delete and the arrows
+are text editing there and would leak how much was typed. The same key
+pressed again within 1 s on the same target and lane is one event with
+`repeats: N` (the number of extra presses).
+
 ### Console
 
 The console lane reads the app's own unified log (no entitlement) while a

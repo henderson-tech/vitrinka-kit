@@ -62,6 +62,10 @@ final class RecorderRuntime {
     private var lastHash: [String: UInt64] = [:]
     private var geometry: [String: CaptureGeometry] = [:]
 
+    // Key runs: identical presses within 1 s become one event.
+    private var keyRun = KeyCollapser()
+    private var keyFlush: Task<Void, Never>?
+
     // Window lanes.
     private var laneIDs: [Int: String] = [:]
     private var navKeys: [String: String] = [:]
@@ -345,6 +349,7 @@ final class RecorderRuntime {
 
     func setPaused(_ p: Bool) async {
         guard sessionActive, p != paused else { return }
+        if p { flushKeys() }
         paused = p
         await engine.setPaused(p)
         if p {
@@ -373,6 +378,7 @@ final class RecorderRuntime {
             await c.stop()
         }
         await settleCaptures(deadline: 5)
+        flushKeys()
         await barrier()
         do {
             let outcome = try await engine.stop()
@@ -474,7 +480,34 @@ final class RecorderRuntime {
     // MARK: - Events
 
     private func send(_ kind: String, _ payload: JSONObject, lane: Lane, at date: Date = Date()) {
+        // A key run in progress goes out first, so the stream keeps its order.
+        flushKeys()
         pipe.yield(.event(kind: kind, payload: payload, lane: lane, at: date))
+    }
+
+    private func emitKey(_ k: RecordedKey) {
+        var payload: JSONObject = ["combo": .string(k.combo)]
+        if let t = k.target { payload["target"] = .string(t) }
+        payload["route"] = .string(k.lane.tabHost)
+        if k.repeats > 0 { payload["repeats"] = .number(Double(k.repeats)) }
+        pipe.yield(.event(kind: "key", payload: payload, lane: k.lane, at: k.date))
+    }
+
+    /// Send the pending key run now (before another event, a pause, Stop).
+    private func flushKeys() {
+        keyFlush?.cancel()
+        keyFlush = nil
+        for k in keyRun.flush() { emitKey(k) }
+    }
+
+    /// Send the pending key run once 1 s passed without another press.
+    private func scheduleKeyFlush() {
+        keyFlush?.cancel()
+        keyFlush = Task {
+            try? await Task.sleep(nanoseconds: UInt64((KeyCollapser.window + 0.05) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            for k in self.keyRun.flush(now: Date()) { self.emitKey(k) }
+        }
     }
 
     /// Wait until every event sent so far reached the engine.
@@ -543,18 +576,21 @@ final class RecorderRuntime {
         // A secure field sends nothing, not even Return.
         if let tv = window.firstResponder as? NSTextView, tv.isFieldEditor, tv.delegate is NSSecureTextField { return false }
         if window.firstResponder is NSSecureTextField { return false }
-        guard let combo = KeyCombos.combo(keyCode: event.keyCode, flags: flags, charactersIgnoringModifiers: event.charactersIgnoringModifiers) else {
+        let inText = KeyCombos.isTextInput(window.firstResponder)
+        guard let combo = KeyCombos.combo(keyCode: event.keyCode, flags: flags, charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                                          inTextInput: inText)
+        else {
             return false
         }
         let laneWindow = Lanes.laneWindow(of: window)
         let lane = laneInfo(laneWindow)
-        var payload: JSONObject = ["combo": .string(combo)]
         let rules = engine.rules.rules
-        if let target = ElementLabels.label(of: window.firstResponder)?.text, !rules.maskAllText {
-            payload["target"] = .string(String(rules.redactText(target).prefix(Self.labelCap)))
+        var target: String?
+        if let t = ElementLabels.label(of: window.firstResponder)?.text, !rules.maskAllText {
+            target = String(rules.redactText(t).prefix(Self.labelCap))
         }
-        payload["route"] = .string(lane.tabHost)
-        send("key", payload, lane: lane)
+        for k in keyRun.admit(RecordedKey(combo: combo, target: target, lane: lane, date: Date())) { emitKey(k) }
+        scheduleKeyFlush()
         return false
     }
 

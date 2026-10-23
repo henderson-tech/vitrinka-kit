@@ -660,3 +660,68 @@ final class MixedFrameTests: XCTestCase {
         XCTAssertEqual(AXRead.normalise(tl, near: ref, primaryHeight: 1000), tl, "no point: raw")
     }
 }
+
+final class KeyLaneTextInputTests: XCTestCase {
+    func testInsideATextFieldOnlyChordsReturnEscapeAndTab() {
+        XCTAssertNil(KeyCombos.combo(keyCode: 51, flags: [], charactersIgnoringModifiers: nil, inTextInput: true), "⌫ is editing")
+        XCTAssertNil(KeyCombos.combo(keyCode: 117, flags: [], charactersIgnoringModifiers: nil, inTextInput: true))
+        XCTAssertNil(KeyCombos.combo(keyCode: 123, flags: [], charactersIgnoringModifiers: nil, inTextInput: true))
+        XCTAssertNil(KeyCombos.combo(keyCode: 125, flags: [.shift], charactersIgnoringModifiers: nil, inTextInput: true))
+        XCTAssertEqual(KeyCombos.combo(keyCode: 36, flags: [], charactersIgnoringModifiers: "\r", inTextInput: true), "↩")
+        XCTAssertEqual(KeyCombos.combo(keyCode: 53, flags: [], charactersIgnoringModifiers: nil, inTextInput: true), "⎋")
+        XCTAssertEqual(KeyCombos.combo(keyCode: 48, flags: [.shift], charactersIgnoringModifiers: nil, inTextInput: true), "⇧⇥")
+        XCTAssertEqual(KeyCombos.combo(keyCode: 0, flags: [.command], charactersIgnoringModifiers: "a", inTextInput: true), "⌘A")
+        XCTAssertEqual(KeyCombos.combo(keyCode: 51, flags: [.command], charactersIgnoringModifiers: nil, inTextInput: true), "⌘⌫")
+    }
+
+    func testOutsideATextFieldDeleteAndArrowsStay() {
+        XCTAssertEqual(KeyCombos.combo(keyCode: 51, flags: [], charactersIgnoringModifiers: nil), "⌫")
+        XCTAssertEqual(KeyCombos.combo(keyCode: 123, flags: [], charactersIgnoringModifiers: nil), "←")
+    }
+
+    @MainActor
+    func testWhatCountsAsTextInput() {
+        XCTAssertTrue(KeyCombos.isTextInput(NSTextField(string: "")))
+        XCTAssertFalse(KeyCombos.isTextInput(NSTextField(labelWithString: "Label")))
+        XCTAssertTrue(KeyCombos.isTextInput(NSTextView()))
+        let readOnly = NSTextView()
+        readOnly.isEditable = false
+        XCTAssertFalse(KeyCombos.isTextInput(readOnly))
+        XCTAssertFalse(KeyCombos.isTextInput(NSButton()))
+        XCTAssertFalse(KeyCombos.isTextInput(nil))
+    }
+}
+
+final class KeyCollapserTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_792_782_000)
+    private let lane = Lane(tabId: "main", tabHost: "/main/items")
+
+    private func press(_ combo: String, at s: Double, target: String? = "New item name") -> RecordedKey {
+        RecordedKey(combo: combo, target: target, lane: lane, date: t0.addingTimeInterval(s))
+    }
+
+    func testFifteenDeletesBecomeOneEvent() {
+        var c = KeyCollapser()
+        var out: [RecordedKey] = []
+        for i in 0 ..< 15 { out += c.admit(press("⌫", at: Double(i) * 0.1)) }
+        XCTAssertTrue(out.isEmpty, "the run is still open")
+        XCTAssertTrue(c.flush(now: t0.addingTimeInterval(1.0)).isEmpty, "less than 1 s after the last press")
+        out = c.flush(now: t0.addingTimeInterval(2.5))
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.repeats, 14, "14 more presses")
+        XCTAssertEqual(out.first?.date, t0, "stamped at the first press")
+    }
+
+    func testAnotherKeyAGapOrAnotherTargetEndsTheRun() {
+        var c = KeyCollapser()
+        XCTAssertTrue(c.admit(press("↩", at: 0)).isEmpty)
+        XCTAssertTrue(c.admit(press("↩", at: 0.5)).isEmpty)
+        let ended = c.admit(press("⎋", at: 0.7))
+        XCTAssertEqual(ended.map { $0.combo }, ["↩"])
+        XCTAssertEqual(ended.first?.repeats, 1)
+        XCTAssertEqual(c.admit(press("⎋", at: 2.0)).map { $0.repeats }, [0], "more than 1 s apart: a new event")
+        XCTAssertEqual(c.admit(press("⎋", at: 2.1, target: "Search")).map { $0.repeats }, [0], "another target")
+        XCTAssertEqual(c.flush().map { $0.target }, ["Search"])
+        XCTAssertTrue(c.flush().isEmpty)
+    }
+}
