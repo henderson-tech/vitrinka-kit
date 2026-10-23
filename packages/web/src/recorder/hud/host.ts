@@ -246,11 +246,12 @@ export function sheetTarget(): Element | null {
 }
 
 /**
- * A sheet host: its own open shadow root (so the HUD stylesheet applies
- * inside a foreign dialog too), shielded, appended to `target`.
+ * A sheet host stays in the dialog's focus/inert subtree, but its manual
+ * popover paints in the browser's top layer: fixed children keep the viewport
+ * as their containing block, never the dialog's transform, filter or clipping.
  */
 export function createSheetHost(target: Element): { mount: HTMLElement; destroy: () => void } {
-  const el = document.createElement('div');
+  const el = document.createElement('div') as PopoverEl;
   el.setAttribute(RRWEB_BLOCK_ATTR, '');
   el.setAttribute('data-vitrinka-sheet', '');
   el.style.cssText = SHEET_HOST_STYLE;
@@ -259,7 +260,9 @@ export function createSheetHost(target: Element): { mount: HTMLElement; destroy:
   root.append(mount);
   shield(el);
   const releaseGuard = holdKeyGuard();
+  if (typeof el.showPopover === 'function') el.popover = 'manual';
   target.append(el);
+  el.showPopover?.();
   return {
     mount,
     destroy: () => {

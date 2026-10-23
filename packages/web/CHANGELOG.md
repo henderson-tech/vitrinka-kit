@@ -1,5 +1,14 @@
 # @vitrinka/web
 
+## 0.9.3
+
+- **Reporting stays in the window, not the app's modal.** The floating
+  button, report card and recorder sheets paint in their own browser
+  top-layer popover, even while associated with an open dialog for focus
+  and native-modal interaction. A centered, transformed or clipped dialog
+  no longer moves the button into its corner or clips the report UI. The
+  underlying dialog and both drafts remain intact.
+
 ## 0.9.2
 
 - **A linked member co-owns what they report.** When this browser holds a
