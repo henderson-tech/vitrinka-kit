@@ -123,23 +123,46 @@ enum AXRead {
         return (legacy(e, "AXChildren") as? [Any]) ?? []
     }
 
-    /// AppKit screen coordinates (bottom-left origin); nil when empty.
-    ///
-    /// The attribute API's AXPosition/AXSize come first, converted from
-    /// their top-left global origin: AppKit's table mock elements (rows and
-    /// cells) answer `accessibilityFrame` in those top-left coordinates too,
-    /// so their protocol frame cannot be trusted. Elements without the
-    /// attribute API (SwiftUI's nodes) answer `accessibilityFrame` through
-    /// the protocol or dynamic dispatch, in AppKit coordinates.
-    static func frame(_ e: Any) -> NSRect? {
+    /// The frame as the element answers it: the protocol, dynamic dispatch,
+    /// then AXPosition/AXSize. In-process, the coordinate system differs per
+    /// class: SwiftUI's nodes answer AppKit (bottom-left) coordinates, while
+    /// some AppKit elements (table mock cells, hosting views, the sheet
+    /// window) answer top-left numbers. `frame(_:near:)` normalises.
+    static func rawFrame(_ e: Any) -> NSRect? {
+        if let f = (e as? NSAccessibilityProtocol)?.accessibilityFrame(), !f.isEmpty { return f }
+        if let f = (dynamic(e, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty { return f }
         if let p = (legacy(e, "AXPosition") as? NSValue)?.pointValue, let s = (legacy(e, "AXSize") as? NSValue)?.sizeValue,
            s.width > 0, s.height > 0
         {
-            return ScreenGeometry.fromCG(CGRect(origin: p, size: s))
+            return NSRect(origin: p, size: s)
         }
-        if let f = (e as? NSAccessibilityProtocol)?.accessibilityFrame(), !f.isEmpty { return f }
-        if let f = (dynamic(e, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty { return f }
         return nil
+    }
+
+    /// The frame in AppKit screen coordinates, normalised against the window
+    /// it belongs to (`near`, AppKit coordinates, title bar included): the
+    /// raw frame when it meets the window, else its flip over the primary
+    /// screen's height when that meets it, else the raw frame. When both
+    /// meet (a window near the middle of the primary screen), the one that
+    /// holds the click point (`at`) wins.
+    static func frame(_ e: Any, near ref: NSRect? = nil, at point: NSPoint? = nil) -> NSRect? {
+        guard let r = rawFrame(e) else { return nil }
+        return normalise(r, near: ref, at: point, primaryHeight: ScreenGeometry.primaryHeight)
+    }
+
+    nonisolated static func normalise(_ r: NSRect, near ref: NSRect?, at point: NSPoint? = nil, primaryHeight h: CGFloat) -> NSRect {
+        guard let ref else { return r }
+        let flipped = NSRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
+        let rawMeets = r.intersects(ref)
+        let flipMeets = flipped.intersects(ref)
+        if !rawMeets, flipMeets { return flipped }
+        if rawMeets, flipMeets, let point, !r.contains(point), flipped.contains(point) { return flipped }
+        return r
+    }
+
+    /// Whether the element's normalised frame holds the point.
+    static func covers(_ e: Any, _ point: NSPoint, near ref: NSRect?) -> Bool {
+        frame(e, near: ref, at: point)?.contains(point) ?? false
     }
 }
 
@@ -168,7 +191,9 @@ enum ElementLabels {
         var hits: [Any] = []
         if let hit = window.accessibilityHitTest(screenPoint) { hits.append(hit) }
         if let root = window.contentView, let hit = root.accessibilityHitTest(screenPoint) { hits.append(hit) }
-        let found = resolve(inWindow: window, hits: hits, at: screenPoint)
+        // The window and the windows drawn over it (a sheet, a popover).
+        let ref = Lanes.overlays(of: Lanes.laneWindow(of: window)).reduce(window.frame) { $0.union($1.frame) }
+        let found = resolve(inWindow: window, hits: hits, at: screenPoint, near: ref)
         if let found, found.text != nil { return found }
         let p = window.convertPoint(fromScreen: screenPoint)
         if let root = window.contentView?.superview ?? window.contentView, let v = root.hitTest(root.convert(p, from: nil)),
@@ -185,11 +210,11 @@ enum ElementLabels {
     /// dialog or popover under the point comes first, then each hit-test
     /// answer; each candidate is descended to the smallest element under the
     /// point and resolved to its control. The first named result wins.
-    static func resolve(inWindow windowElement: Any, hits: [Any], at point: NSPoint) -> ElementLabel? {
+    static func resolve(inWindow windowElement: Any, hits: [Any], at point: NSPoint, near ref: NSRect? = nil) -> ElementLabel? {
         let windowChildren = AXRead.children(windowElement).filter { c in
             // Only the window's children are picked by frame; a hit-test
             // answer is never second-guessed.
-            AXRead.frame(c)?.contains(point) ?? false
+            AXRead.covers(c, point, near: ref)
         }
         let overlays = windowChildren.filter { AXRead.role($0).map(overlayRoles.contains) ?? false }
         let starts: [Any] = overlays + hits + windowChildren
@@ -197,8 +222,8 @@ enum ElementLabels {
         var tried = Set<ObjectIdentifier>()
         for start in starts {
             guard tried.insert(ObjectIdentifier(start as AnyObject)).inserted else { continue }
-            let deepest = descend(from: start, to: point)
-            guard let found = resolve(from: deepest) else { continue }
+            let deepest = descend(from: start, to: point, near: ref)
+            guard let found = resolve(from: deepest, near: ref, at: point) else { continue }
             if found.text != nil { return found }
             if best == nil { best = found }
         }
@@ -217,7 +242,7 @@ enum ElementLabels {
     /// A hit test may stop at a container (a hosting view answers for its
     /// whole tree). Walk down to the smallest descendant whose frame holds
     /// the point.
-    static func descend(from start: Any, to point: NSPoint) -> Any {
+    static func descend(from start: Any, to point: NSPoint, near ref: NSRect? = nil) -> Any {
         var node = start
         var visited = 0
         for _ in 0 ..< maxHops {
@@ -225,7 +250,7 @@ enum ElementLabels {
             for c in AXRead.children(node) {
                 visited += 1
                 if visited > 2000 { return node }
-                guard let f = AXRead.frame(c), f.contains(point) else { continue }
+                guard let f = AXRead.frame(c, near: ref, at: point), f.contains(point) else { continue }
                 let area = f.width * f.height
                 if next.map({ area < $0.1 }) ?? true { next = (c, area) }
             }
@@ -239,7 +264,7 @@ enum ElementLabels {
     /// that carries a name. Text is the human label first (label, title, a
     /// row's own text), the identifier only when there is nothing else;
     /// the selector is `role#identifier`. A text field's value is never read.
-    static func resolve(from start: Any) -> ElementLabel? {
+    static func resolve(from start: Any, near ref: NSRect? = nil, at point: NSPoint? = nil) -> ElementLabel? {
         var node: Any? = start
         var bareControl: ElementLabel?
         var named: ElementLabel?
@@ -253,11 +278,11 @@ enum ElementLabels {
                 let text = human ?? (rowRoles.contains(role) ? childLabel(of: n) : nil)
                 let selector = id.map { "\(role)#\($0)" } ?? role
                 if text != nil || id != nil {
-                    return ElementLabel(text: text ?? id, selector: selector, frame: AXRead.frame(n))
+                    return ElementLabel(text: text ?? id, selector: selector, frame: AXRead.frame(n, near: ref, at: point))
                 }
-                if bareControl == nil { bareControl = ElementLabel(text: nil, selector: selector, frame: AXRead.frame(n)) }
+                if bareControl == nil { bareControl = ElementLabel(text: nil, selector: selector, frame: AXRead.frame(n, near: ref, at: point)) }
             } else if named == nil, let shown = human ?? (role == "AXStaticText" ? AXRead.textValue(n) : nil) {
-                named = ElementLabel(text: shown, selector: role ?? "AXElement", frame: AXRead.frame(n))
+                named = ElementLabel(text: shown, selector: role ?? "AXElement", frame: AXRead.frame(n, near: ref, at: point))
             }
             node = AXRead.parent(n)
         }

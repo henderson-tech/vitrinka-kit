@@ -129,6 +129,14 @@ like VoiceOver it can change how the app animates window moves and resizes.
 then may have no name. A control without a name keeps the click's position
 and role.
 
+In-process accessibility frames come in two coordinate systems: SwiftUI's
+nodes answer AppKit screen coordinates (origin at the bottom left), while
+some AppKit elements (table cells, hosting views, the sheet window) answer
+top-left numbers. The recorder compares every frame with the clicked window
+and the sheets and popovers over it: it keeps a frame that meets the window,
+else it uses the frame flipped over the main screen's height. An element
+that the accessibility hit test returns is never dropped by a frame check.
+
 ### Console
 
 The console lane reads the app's own unified log (no entitlement) while a

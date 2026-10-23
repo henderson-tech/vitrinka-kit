@@ -81,12 +81,6 @@ enum ScreenGeometry {
     @MainActor static func toCG(_ p: NSPoint) -> CGPoint {
         CGPoint(x: p.x, y: primaryHeight - p.y)
     }
-
-    /// The inverse: a top-left global (CG / accessibility attribute) rect →
-    /// AppKit screen coordinates.
-    @MainActor static func fromCG(_ r: CGRect) -> NSRect {
-        NSRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
-    }
 }
 
 // MARK: - SwiftUI markers

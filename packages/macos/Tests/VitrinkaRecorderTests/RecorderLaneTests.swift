@@ -2,6 +2,7 @@ import AppKit
 import ImageIO
 import SwiftUI
 @testable import VitrinkaRecorder
+import VitrinkaRecorderCore
 import XCTest
 
 final class LaneNamingTests: XCTestCase {
@@ -394,7 +395,7 @@ final class FakeSwiftUINode: NSObject {
     let frame: NSRect
     let value: Any?
     weak var parent: AnyObject?
-    var children: [FakeSwiftUINode] = []
+    var children: [Any] = []
 
     init(_ role: String, _ frame: NSRect, label: String? = nil, identifier: String = "", value: Any? = nil, parent: FakeSwiftUINode? = nil) {
         self.role = role
@@ -557,9 +558,10 @@ final class TableMockFrameTests: XCTestCase {
         let window = FakeSwiftUINode("AXWindow", NSRect(x: 2300, y: 1900, width: 1000, height: 400))
         let point = NSPoint(x: 2792, y: 2169.5)
 
-        XCTAssertEqual(AXRead.frame(cell), cellApp, "AXPosition/AXSize are converted from top-left")
-        XCTAssertTrue(AXRead.frame(cell)?.contains(point) == true)
-        let l = ElementLabels.resolve(inWindow: window, hits: [cell], at: point)
+        let ref = NSRect(x: 2300, y: 1900, width: 1000, height: 400)
+        XCTAssertEqual(AXRead.frame(cell, near: ref), cellApp, "top-left numbers are flipped onto the window")
+        XCTAssertTrue(AXRead.covers(cell, point, near: ref))
+        let l = ElementLabels.resolve(inWindow: window, hits: [cell], at: point, near: ref)
         XCTAssertEqual(l?.text, "Order spare fans")
         XCTAssertEqual(l?.selector, "AXCell")
     }
@@ -569,5 +571,92 @@ final class TableMockFrameTests: XCTestCase {
         // A hit whose frame (wrongly) does not hold the point still resolves.
         let button = FakeSwiftUINode("AXButton", NSRect(x: 0, y: -5000, width: 50, height: 20), label: "Order")
         XCTAssertEqual(ElementLabels.resolve(inWindow: window, hits: [button], at: NSPoint(x: 100, y: 100))?.text, "Order")
+    }
+}
+
+/// One window with all three frame conventions the GUI runs met: a hosting
+/// view and an AXSheet answering top-left numbers, a table mock cell
+/// answering top-left numbers, and SwiftUI nodes answering AppKit
+/// (bottom-left) coordinates.
+@MainActor
+final class MixedFrameTests: XCTestCase {
+    private var h: CGFloat { ScreenGeometry.primaryHeight }
+
+    /// AppKit rect → the top-left numbers some AppKit elements answer.
+    private func topLeft(_ r: NSRect) -> NSRect { NSRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height) }
+
+    private struct Tree {
+        var window: FakeSwiftUINode
+        var content: FakeSwiftUINode
+        var cell: FakeTableMockElement
+        var ref: NSRect
+    }
+
+    private func tree() -> Tree {
+        // A display stacked above the primary one, as on the test Mac.
+        let w = NSRect(x: 3000, y: h + 500, width: 900, height: 500)
+        let window = FakeSwiftUINode("AXWindow", w)
+        let contentApp = NSRect(x: w.minX, y: w.minY, width: 900, height: 472)
+        let content = FakeSwiftUINode("AXGroup", topLeft(contentApp), parent: window)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 3020, y: w.minY + 420, width: 100, height: 24), label: "Show details", identifier: "show-details", parent: content)
+        let outline = FakeSwiftUINode("AXOutline", NSRect(x: 3010, y: w.minY + 20, width: 880, height: 150), parent: content)
+        let cellApp = NSRect(x: 3020, y: w.minY + 50, width: 860, height: 25)
+        let cell = FakeTableMockElement("AXCell", topLeft: topLeft(cellApp), parent: outline)
+        let checkbox = FakeSwiftUINode("AXCheckBox", NSRect(x: 3030, y: w.minY + 52, width: 300, height: 20), label: "Calibrate fan curve")
+        checkbox.parent = cell
+        cell.kids = [checkbox]
+        outline.children.append(cell)
+        let sheetApp = NSRect(x: 3270, y: w.minY + 200, width: 360, height: 125)
+        let sheet = FakeSwiftUINode("AXSheet", topLeft(sheetApp), parent: window)
+        let sheetHost = FakeSwiftUINode("AXGroup", topLeft(sheetApp), parent: sheet)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 3460, y: w.minY + 210, width: 59, height: 24), label: "Close", parent: sheetHost)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 3535, y: w.minY + 210, width: 75, height: 24), label: "Approve", identifier: "approve", parent: sheetHost)
+        return Tree(window: window, content: content, cell: cell, ref: w)
+    }
+
+    func testTheSheetsApproveResolvesWhenTheHitIsTheHostingView() {
+        let t = tree()
+        let p = NSPoint(x: 3560, y: t.ref.minY + 220)
+        let l = ElementLabels.resolve(inWindow: t.window, hits: [t.content], at: p, near: t.ref)
+        XCTAssertEqual(l?.text, "Approve")
+        XCTAssertEqual(l?.selector, "AXButton#approve")
+        let close = ElementLabels.resolve(inWindow: t.window, hits: [t.content], at: NSPoint(x: 3480, y: t.ref.minY + 220), near: t.ref)
+        XCTAssertEqual(close?.text, "Close")
+    }
+
+    func testARowResolvesFromTheCellHitAndFromTheHostingView() {
+        let t = tree()
+        let p = NSPoint(x: 3500, y: t.ref.minY + 60)
+        XCTAssertEqual(ElementLabels.resolve(inWindow: t.window, hits: [t.cell], at: p, near: t.ref)?.text, "Calibrate fan curve")
+        let viaHost = ElementLabels.resolve(inWindow: t.window, hits: [t.content], at: p, near: t.ref)
+        XCTAssertEqual(viaHost?.text, "Calibrate fan curve")
+        XCTAssertEqual(viaHost?.selector, "AXCell")
+    }
+
+    func testAMainWindowButtonResolves() {
+        let t = tree()
+        let l = ElementLabels.resolve(inWindow: t.window, hits: [t.content], at: NSPoint(x: 3050, y: t.ref.minY + 430), near: t.ref)
+        XCTAssertEqual(l?.text, "Show details")
+        XCTAssertEqual(l?.selector, "AXButton#show-details")
+    }
+
+    func testNormalisationPicksTheFrameThatMeetsTheWindow() {
+        let ref = NSRect(x: 0, y: 2000, width: 800, height: 600)
+        let appKit = NSRect(x: 10, y: 2100, width: 50, height: 20)
+        XCTAssertEqual(AXRead.normalise(appKit, near: ref, primaryHeight: 1329), appKit)
+        let tl = NSRect(x: 10, y: 1329 - appKit.maxY, width: 50, height: 20)
+        XCTAssertEqual(AXRead.normalise(tl, near: ref, primaryHeight: 1329), appKit)
+        XCTAssertEqual(AXRead.normalise(tl, near: nil, primaryHeight: 1329), tl, "no reference: raw")
+    }
+
+    func testWhenBothFramesMeetTheWindowThePointDecides() {
+        // A window across the middle of a 1000-point primary screen.
+        let ref = NSRect(x: 0, y: 300, width: 800, height: 400)
+        let appKit = NSRect(x: 10, y: 600, width: 50, height: 25)
+        let tl = NSRect(x: 10, y: 1000 - appKit.maxY, width: 50, height: 25)
+        XCTAssertTrue(tl.intersects(ref), "the raw top-left numbers meet the window too")
+        XCTAssertEqual(AXRead.normalise(tl, near: ref, at: NSPoint(x: 20, y: 610), primaryHeight: 1000), appKit)
+        XCTAssertEqual(AXRead.normalise(appKit, near: ref, at: NSPoint(x: 20, y: 610), primaryHeight: 1000), appKit)
+        XCTAssertEqual(AXRead.normalise(tl, near: ref, primaryHeight: 1000), tl, "no point: raw")
     }
 }
