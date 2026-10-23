@@ -44,7 +44,7 @@ func applicationDidFinishLaunching(_ notification: Notification) {
     // Nothing starts without a URL: VITRINKA_RECORDER_URL in the environment,
     // or the user default VitrinkaRecorderURL.
     if var config = VitrinkaRecorderConfiguration.fromEnvironment(appID: "com.example.myapp.debug") {
-        config.logs = .all(subsystems: ["com.example.myapp"])   // optional
+        config.logs = .errors(unlabelledPrefixes: ["myapp:"])   // optional, see Console
         VitrinkaRecorder.configure(config)
     }
     #endif
@@ -53,7 +53,8 @@ func applicationDidFinishLaunching(_ notification: Notification) {
 
 `configure` installs the HUD (a small floating panel), the event monitor and
 queue recovery. It records nothing until the tester presses Record in the
-HUD, or the host calls `try await VitrinkaRecorder.start()`.
+HUD, or the host calls `try await VitrinkaRecorder.start()`. A session
+without a title is named "<app name> · <local date and time>".
 
 The server resolves the project and environment from the **app id** through
 its project's Apps rules (an exact match). Add the id you pass (the bundle id
@@ -111,6 +112,43 @@ private view on a captured window cannot be located, the frame is dropped.
 Everything else is captured as rendered: mark private what you would not put
 on a board.
 
+### Clicks and their names
+
+A click records where it landed (in the keyframe's pixels) and what it
+landed on: the control's accessibility label or title (a list row's own
+text), with `role#identifier` as the selector. A text field's value is never
+read, and a click inside a private view records no name.
+
+SwiftUI builds its accessibility tree only while an assistive client is
+active. While a recording runs, the recorder marks its own app the way such
+a client does (`AXEnhancedUserInterface` on the app's accessibility element)
+so SwiftUI controls have names; Stop restores the previous value. Nothing
+outside the app changes and no permission is involved. If a control still
+has no name, the click keeps its position and role.
+
+### Console
+
+The console lane reads the app's own unified log (no entitlement) while a
+recording runs:
+
+- `.errors` (the default): error and fault entries of the app's own
+  subsystems — the bundle id and the app id (each also without a trailing
+  `.debug`, `.dev`, `.development`, `.staging`, `.beta`, `.test` or `.qa`)
+  and every subsystem under them. `Logger.warning` writes at the error level,
+  so the host's warnings count too.
+- `.errors(subsystems:unlabelledPrefixes:)`: also other subsystems you name,
+  and lines without a subsystem (`NSLog`) that start with one of your
+  prefixes, e.g. `.errors(unlabelledPrefixes: ["pultik:"])`.
+- `.all(subsystems:unlabelledPrefixes:)`: every level except debug of the
+  same subsystems.
+- `.off`.
+
+Framework lines without a subsystem (CoreAudio, caches) never count. A line
+that repeats within 60 s (the same subsystem, category and text, with numbers
+ignored) is sent once, then once more as a summary with `repeats: N`. A
+session sends at most 200 console entries, then one "console lane capped"
+entry.
+
 ### Event sources
 
 The default `eventSource: .localMonitor` installs one local `NSEvent`
@@ -136,7 +174,10 @@ VitrinkaRecorder.observe(event)
 
 While the app is active: ⌥⇧N note, ⌥⇧P pause or resume, ⌥⇧S stop,
 ⌥⇧A annotate a region (drag a rectangle, type, Return). The HUD panel and
-the annotate overlay are never in a keyframe and never reach a lane.
+the annotate overlay are never in a keyframe and never reach a lane. The HUD
+buttons have accessibility labels ("Pause", "Note", "Mark this moment",
+"Annotate a region", "Stop and save") and identifiers (`vitrinka-hud-pause`,
+`-note`, `-mark`, `-annotate`, `-stop`) for VoiceOver and UI automation.
 
 `VitrinkaRecorder.mark("text")` takes a keyframe and puts a note on it.
 

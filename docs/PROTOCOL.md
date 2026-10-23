@@ -138,10 +138,10 @@ Only during a session you explicitly start:
 | Channel | Expo recorder | Browser extension | Web recorder | macOS recorder |
 |---|---|---|---|---|
 | Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`; images recorded by URL, never inlined) | JPEG keyframes of the app's own window (with its attached sheet), never of other apps: on start, on a window, sheet or route change, 120 ms after a click (throttled to one per 700 ms), on a mark and for an annotation; private views painted black (below) |
-| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) | clicks (position and element rect in keyframe pixels, the element's accessibility identifier, label or title — never a field's value — and route); window lanes and routes as `nav` |
+| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) | clicks (position and element rect in keyframe pixels, the control's accessibility label or title or a list row's text, `role#identifier` as the selector — never a field's value, no name inside a private view — and route); window lanes and routes as `nav`. While recording, the app's own accessibility tree is turned on (`AXEnhancedUserInterface`) so SwiftUI controls have names |
 | Keys | — | — | — (typing exists only as rrweb's masked input events) | `key {combo, target, route}` for ⌘/⌃ shortcuts and Return, Escape, Tab, arrows, Delete only; typed characters never; nothing while a secure field has focus |
 | Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads | none |
-| Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections | the app process's own unified-log error and fault entries (not `com.apple.*`, not the recorder's `dev.vitrinka.recorder`), plus every entry of subsystems the host names; 8 KiB each |
+| Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections | unified-log error and fault entries of the app's own subsystems (its bundle id and app id; `Logger.warning` writes at error level, so the host's warnings count), plus subsystems and `NSLog` text prefixes the host names; never framework lines without a subsystem, never the recorder's `dev.vitrinka.recorder`; a line repeated within 60 s is sent once plus one `repeats: N` summary; at most 200 per session, then one `capped` entry; 8 KiB each |
 | Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD, and images you attach to them (below) | notes and region annotations you type in the HUD (no attachments yet) |
 
 Every web session's create carries `meta.recorder` (`web/<version>`),
@@ -150,7 +150,7 @@ passes one, and `meta.devicePixelRatio` — the scale every recorded rect is
 in, so the server renders its stills at it.
 
 Every macOS session's create carries `app` (the host's app id, the bundle id
-by default), `title`, and `meta.recorder` (`macos/<version>`),
+by default), `title` (by default "<app name> · <local date and time>"), and `meta.recorder` (`macos/<version>`),
 `meta.platform` (`macos`), `meta.appVersion`, `meta.osVersion`,
 `meta.devicePixelRatio` (the main screen's backing scale) and
 `meta.driver` (`human`). Each top-level window is one lane (`tabId`, e.g.
