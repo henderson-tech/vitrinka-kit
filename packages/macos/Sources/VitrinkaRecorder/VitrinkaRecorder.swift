@@ -50,14 +50,48 @@ public struct VitrinkaRecorderConfiguration: Sendable {
     /// `.shortcutsOnly`: ⌘ and ⌃ chords, Return, Escape, Tab, arrows and
     /// Delete. Typed characters are never recorded.
     public enum KeyCapture: Sendable { case off, shortcutsOnly }
-    public enum LogCapture: Sendable {
-        case off
-        /// Error and fault entries of this process, except Apple's
-        /// `com.apple.*` subsystems and the recorder's own.
-        case errors
-        /// Every entry of the named subsystems (an empty name matches entries
-        /// without a subsystem), plus `.errors`.
-        case all(subsystems: [String])
+    /// Which unified-log entries of this process the console lane records.
+    ///
+    /// Only the app's own subsystems count: the bundle id and the app id
+    /// (each also without a trailing `.debug`, `.dev`, `.development`,
+    /// `.staging`, `.beta`, `.test` or `.qa`), every subsystem under them,
+    /// and the ones listed here. Framework entries and lines without a
+    /// subsystem stay out, unless a line without a subsystem (`NSLog`) starts
+    /// with one of `unlabelledPrefixes`. The recorder's own subsystem is
+    /// always skipped.
+    public struct LogCapture: Sendable, Equatable {
+        public var enabled: Bool
+        /// More subsystems that count as the app's own.
+        public var subsystems: [String]
+        /// Every entry of those subsystems except debug, not only errors and
+        /// faults.
+        public var allLevels: Bool
+        /// Lines without a subsystem (`NSLog("myapp: …")`) whose text starts
+        /// with one of these prefixes. Empty prefixes are ignored.
+        public var unlabelledPrefixes: [String]
+
+        public init(enabled: Bool = true, subsystems: [String] = [], allLevels: Bool = false, unlabelledPrefixes: [String] = []) {
+            self.enabled = enabled
+            self.subsystems = subsystems
+            self.allLevels = allLevels
+            self.unlabelledPrefixes = unlabelledPrefixes.filter { !$0.isEmpty }
+        }
+
+        public static let off = LogCapture(enabled: false)
+        /// Error and fault entries of the app's own subsystems.
+        public static let errors = LogCapture()
+
+        /// Error and fault entries of the app's own subsystems and these, plus
+        /// the matching lines without a subsystem.
+        public static func errors(subsystems: [String] = [], unlabelledPrefixes: [String] = []) -> LogCapture {
+            LogCapture(subsystems: subsystems, unlabelledPrefixes: unlabelledPrefixes)
+        }
+
+        /// Every entry except debug of the app's own subsystems and these, plus
+        /// the matching lines without a subsystem.
+        public static func all(subsystems: [String] = [], unlabelledPrefixes: [String] = []) -> LogCapture {
+            LogCapture(subsystems: subsystems, allLevels: true, unlabelledPrefixes: unlabelledPrefixes)
+        }
     }
 
     public init(baseURL: URL, appID: String? = nil) {

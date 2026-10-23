@@ -76,38 +76,21 @@ struct HUDView: View {
 
     private var recording: some View {
         Group {
-            Circle()
-                .fill(model.paused ? Color.orange : Color.red)
-                .frame(width: 9, height: 9)
-                .help(model.paused ? "Paused" : "Recording")
-            Text(model.clock).font(.system(.body, design: .monospaced))
-            Text("\(model.frames) frames").font(.caption).foregroundStyle(.secondary)
-            syncBadge
+            StatusStrip(status: model.status, paused: model.paused)
             Divider().frame(height: 16)
             if model.recovered {
                 Text("Recovered").font(.caption).foregroundStyle(.secondary)
             }
-            iconButton(model.paused ? "play.fill" : "pause.fill", model.paused ? "Resume (⌥⇧P)" : "Pause (⌥⇧P)", model.onTogglePause)
-            iconButton("square.and.pencil", "Note (⌥⇧N)", model.openNote)
+            iconButton(model.paused ? "play.fill" : "pause.fill", label: model.paused ? "Resume" : "Pause",
+                       help: model.paused ? "Resume (⌥⇧P)" : "Pause (⌥⇧P)", id: "pause", action: model.onTogglePause)
+            iconButton("square.and.pencil", label: "Note", help: "Note on this screen (⌥⇧N)", id: "note", action: model.openNote)
                 .disabled(model.paused)
-            iconButton("flag", "Mark this moment", model.onMark)
+            iconButton("flag", label: "Mark this moment", help: "Mark this moment", id: "mark", action: model.onMark)
                 .disabled(model.paused)
-            iconButton("viewfinder", "Annotate a region (⌥⇧A)", model.onAnnotate)
+            iconButton("viewfinder", label: "Annotate a region", help: "Annotate a region (⌥⇧A)", id: "annotate", action: model.onAnnotate)
                 .disabled(model.paused)
-            iconButton("stop.fill", "Stop and save (⌥⇧S)", model.onStop)
+            iconButton("stop.fill", label: "Stop and save", help: "Stop and save (⌥⇧S)", id: "stop", action: model.onStop)
         }
-    }
-
-    private var syncBadge: some View {
-        let (symbol, color, help): (String, Color, String) = {
-            switch model.sync {
-            case .ok: return ("checkmark.icloud", .secondary, "Synced")
-            case .backlog: return ("icloud.and.arrow.up", .orange, "\(model.queued) waiting to upload")
-            case .offline: return ("icloud.slash", .orange, "Offline — \(model.queued) kept on this Mac")
-            case .dead: return ("exclamationmark.icloud", .red, "The server ended this session")
-            }
-        }()
-        return Image(systemName: symbol).foregroundStyle(color).help(help)
     }
 
     private var saved: some View {
@@ -145,10 +128,50 @@ struct HUDView: View {
         }
     }
 
-    private func iconButton(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 18, height: 18) }
-            .buttonStyle(.borderless)
-            .help(help)
+    private func iconButton(_ symbol: String, label: String, help: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("vitrinka-hud-\(id)")
+    }
+}
+
+/// The clock, the frame count and the sync state. It observes only the
+/// once-a-second status, so the HUD's buttons keep their identity.
+struct StatusStrip: View {
+    @ObservedObject var status: HUDStatus
+    let paused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(paused ? Color.orange : Color.red)
+                .frame(width: 9, height: 9)
+                .accessibilityLabel(paused ? "Paused" : "Recording")
+            Text(status.clock)
+                .font(.system(.body, design: .monospaced))
+                .accessibilityLabel("Elapsed \(status.clock)")
+            Text("\(status.frames) frames").font(.caption).foregroundStyle(.secondary)
+            syncBadge
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var syncBadge: some View {
+        let (symbol, color, text): (String, Color, String) = {
+            switch status.sync {
+            case .ok: return ("checkmark.icloud", .secondary, "Synced")
+            case .backlog: return ("icloud.and.arrow.up", .orange, "\(status.queued) waiting to upload")
+            case .offline: return ("icloud.slash", .orange, "Offline — \(status.queued) kept on this Mac")
+            case .dead: return ("exclamationmark.icloud", .red, "The server ended this session")
+            }
+        }()
+        return Image(systemName: symbol).foregroundStyle(color).help(text).accessibilityLabel(text)
     }
 }
 #endif

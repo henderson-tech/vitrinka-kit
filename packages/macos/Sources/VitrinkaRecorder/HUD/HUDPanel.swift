@@ -49,7 +49,7 @@ final class HUDController {
         panel = HUDPanel(content: hosting)
         model.onWantsKey = { [weak self] wants in self?.wantsKey(wants) }
         // Refit after every model change, once SwiftUI has laid it out.
-        changes = model.objectWillChange.sink { [weak self] _ in
+        changes = model.objectWillChange.merge(with: model.status.objectWillChange).sink { [weak self] _ in
             Task { @MainActor in self?.fit() }
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in

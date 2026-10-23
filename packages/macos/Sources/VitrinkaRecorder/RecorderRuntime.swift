@@ -26,6 +26,10 @@ final class RecorderRuntime {
     let linkStore: LinkStore
     let credential: @Sendable () -> ResolvedCredential?
     let appName: String
+    /// CFBundleDisplayName, else CFBundleName: the default session title.
+    let displayName: String
+    /// The app's own unified-log subsystems (the console lane's filter).
+    let ownSubsystems: [String]
     let model = HUDModel()
 
     private var hud: HUDController?
@@ -74,6 +78,8 @@ final class RecorderRuntime {
         let info = Bundle.main.infoDictionary ?? [:]
         let appID = c.appID ?? Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
         appName = (info["CFBundleName"] as? String) ?? ProcessInfo.processInfo.processName
+        displayName = (info["CFBundleDisplayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? appName
+        ownSubsystems = ConsoleLane.ownSubsystems(bundleID: Bundle.main.bundleIdentifier, appID: appID)
         let dir = Self.storageDirectory(appID: appID)
         let links = LinkStore(directory: dir)
         linkStore = links
@@ -159,7 +165,7 @@ final class RecorderRuntime {
         })
         RouteRegistry.shared.onChange = { [weak self] laneWindow in self?.routeChanged(laneWindow) }
 
-        console = ConsoleLane(filter: config.logs) { lines in
+        console = ConsoleLane(filter: config.logs, own: ownSubsystems) { lines in
             await MainActor.run { RecorderRuntime.shared?.pushConsole(lines) }
         }
 
@@ -243,19 +249,22 @@ final class RecorderRuntime {
         health = h
         sessionActive = h.sessionID != nil
         paused = h.paused
-        model.paused = h.paused
-        model.recovered = h.recovered
-        model.elapsed = h.elapsedMs / 1000
-        model.frames = h.shots
-        model.queued = h.queued
+        // Publish only real changes: the buttons observe `model` and must not
+        // re-render every second (stable views for VoiceOver and automation);
+        // the clock and counters live in `model.status`.
+        if model.paused != h.paused { model.paused = h.paused }
+        if model.recovered != h.recovered { model.recovered = h.recovered }
+        let sync: HUDModel.Sync
         switch h.state {
-        case .dead: model.sync = .dead
-        case .offline: model.sync = .offline
-        case .backlog: model.sync = .backlog
-        default: model.sync = .ok
+        case .dead: sync = .dead
+        case .offline: sync = .offline
+        case .backlog: sync = .backlog
+        default: sync = .ok
         }
+        model.status.update(elapsed: h.elapsedMs / 1000, frames: h.shots, queued: h.queued, sync: sync)
         if sessionActive, model.phase == .idle || model.phase == .saved { model.phase = .recording }
         if !sessionActive, model.phase == .recording { model.phase = .idle }
+        if sessionActive { AccessibilityTree.activate() } else { AccessibilityTree.deactivate() }
     }
 
     private func refreshLinked() {
@@ -272,6 +281,7 @@ final class RecorderRuntime {
             model.message = "\(reason). Press Stop to end the recording."
         case let .unauthorized(source):
             sessionActive = false
+            AccessibilityTree.deactivate()
             if let c = console { Task { await c.stop() } }
             if source == .deviceLink {
                 model.message = "vitrinka rejected this Mac's link. Link it again."
@@ -295,8 +305,9 @@ final class RecorderRuntime {
         }
         model.phase = .starting
         model.message = nil
+        let given = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         do {
-            _ = try await engine.start(title: title ?? "", environment: config.environment, driver: "human")
+            _ = try await engine.start(title: given.isEmpty ? defaultTitle() : given, environment: config.environment, driver: "human")
         } catch {
             model.phase = .idle
             let mapped = Self.map(error)
@@ -306,13 +317,30 @@ final class RecorderRuntime {
         }
         sessionActive = true
         paused = false
+        // Before the first click: SwiftUI builds its accessibility tree now.
+        AccessibilityTree.activate()
         resetCaptureState()
         model.phase = .recording
-        await console?.start(from: Date())
+        await console?.start(from: Date(), newSession: true)
         if let laneWindow = Lanes.currentLaneWindow() {
             screenChanged(laneWindow, focus: true, reason: .start, delay: 0)
         }
         await refresh()
+    }
+
+    /// The Expo recorder sends an empty title. A native app's sessions read
+    /// better with a name: "<display name> · <local date and time>".
+    private func defaultTitle() -> String {
+        Self.defaultTitle(displayName: displayName, now: Date())
+    }
+
+    nonisolated static func defaultTitle(displayName: String, now: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+        let f = DateFormatter()
+        f.locale = locale
+        f.timeZone = timeZone
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return "\(displayName) · \(f.string(from: now))"
     }
 
     func setPaused(_ p: Bool) async {
@@ -322,7 +350,7 @@ final class RecorderRuntime {
         if p {
             await console?.stop()
         } else {
-            await console?.start(from: Date())
+            await console?.start(from: Date(), newSession: false)
             model.message = nil
             if let laneWindow = Lanes.currentLaneWindow() {
                 navKeys = [:]
@@ -340,7 +368,8 @@ final class RecorderRuntime {
         overlay = nil
         if let c = console {
             let tail = await c.poll()
-            pushConsole(tail)
+            let repeats = await c.drainRepeats()
+            pushConsole(tail + repeats)
             await c.stop()
         }
         await settleCaptures(deadline: 5)
@@ -349,6 +378,7 @@ final class RecorderRuntime {
             let outcome = try await engine.stop()
             sessionActive = false
             paused = false
+            AccessibilityTree.deactivate()
             lastBoardURL = outcome.boardURL
             model.boardURL = outcome.boardURL
             model.savedSessionID = outcome.sessionID
@@ -476,7 +506,15 @@ final class RecorderRuntime {
         guard recordingLive, let window = event.window, Lanes.isRecordable(window) else { return }
         let laneWindow = Lanes.laneWindow(of: window)
         let screenPoint = window.convertPoint(toScreen: event.locationInWindow)
-        let label = ElementLabels.label(in: window, screenPoint: screenPoint)
+        var label = ElementLabels.label(in: window, screenPoint: screenPoint)
+        // A click inside a private view records where, never what it said.
+        let point = ScreenGeometry.toCG(screenPoint)
+        let parts = [laneWindow] + Lanes.overlays(of: laneWindow)
+        if let rects = PrivateRegistry.shared.privateRects(on: parts) {
+            if rects.contains(where: { $0.contains(point) }) { label.text = nil }
+        } else {
+            label.text = nil
+        }
         let lane = laneInfo(laneWindow)
         let geo = currentGeometry(laneWindow, lane: lane.tabId)
         let p = geo.pixel(ScreenGeometry.toCG(screenPoint))
@@ -567,13 +605,16 @@ final class RecorderRuntime {
         let lane = laneInfo(laneWindow)
         let rules = engine.rules.rules
         for l in lines {
-            send("console", [
+            var payload: JSONObject = [
                 "level": .string(l.level),
                 "osLevel": .string(l.osLevel),
                 "text": .string(String(rules.redactText(l.text).prefix(ConsoleLane.textCap))),
                 "subsystem": .string(l.subsystem),
                 "category": .string(l.category),
-            ], lane: lane, at: l.date)
+            ]
+            if let n = l.repeats { payload["repeats"] = .number(Double(n)) }
+            if l.capped { payload["capped"] = true }
+            send("console", payload, lane: lane, at: l.date)
         }
     }
 

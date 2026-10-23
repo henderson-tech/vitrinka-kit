@@ -24,10 +24,9 @@ final class HUDModel: ObservableObject {
     @Published var linkedByDevice = false
     @Published var paused = false
     @Published var recovered = false
-    @Published var elapsed: TimeInterval = 0
-    @Published var frames = 0
-    @Published var queued = 0
-    @Published var sync: Sync = .ok
+    /// The clock and counters change every second; they live in their own
+    /// object so that only the status strip re-renders, never the buttons.
+    let status = HUDStatus()
     @Published var userCode: String?
     @Published var verifyURL: URL?
     @Published var boardURL: URL?
@@ -68,6 +67,23 @@ final class HUDModel: ObservableObject {
         noteOpen = false
         noteText = ""
         onWantsKey(false)
+    }
+
+}
+
+/// The once-a-second part of the HUD: clock, frame count, sync state.
+@MainActor
+final class HUDStatus: ObservableObject {
+    @Published private(set) var elapsed: TimeInterval = 0
+    @Published private(set) var frames = 0
+    @Published private(set) var queued = 0
+    @Published private(set) var sync: HUDModel.Sync = .ok
+
+    func update(elapsed: TimeInterval, frames: Int, queued: Int, sync: HUDModel.Sync) {
+        if Int(self.elapsed) != Int(elapsed) { self.elapsed = elapsed }
+        if self.frames != frames { self.frames = frames }
+        if self.queued != queued { self.queued = queued }
+        if self.sync != sync { self.sync = sync }
     }
 
     var clock: String {

@@ -51,21 +51,68 @@ final class KeyLaneTests: XCTestCase {
 }
 
 final class ConsoleFilterTests: XCTestCase {
-    func testErrorsSkipAppleAndTheRecorder() {
-        XCTAssertTrue(ConsoleLane.keep(subsystem: "dev.example.app", isError: true, osLevel: "error", filter: .errors))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "dev.example.app", isError: false, osLevel: "default", filter: .errors))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "com.apple.network", isError: true, osLevel: "error", filter: .errors))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "dev.vitrinka.recorder", isError: true, osLevel: "fault", filter: .errors))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "dev.example.app", isError: true, osLevel: "error", filter: .off))
+    let own = ConsoleLane.ownSubsystems(bundleID: "dev.example.app.debug", appID: "dev.example.app.debug")
+
+    private func keep(_ subsystem: String, error: Bool = true, level: String = "error", text: String = "x",
+                      _ filter: VitrinkaRecorderConfiguration.LogCapture = .errors) -> Bool
+    {
+        ConsoleLane.keep(subsystem: subsystem, isError: error, osLevel: level, text: text, filter: filter, own: own)
     }
 
-    func testAllSubsystemsAddsTheirNonDebugLines() {
-        let f = VitrinkaRecorderConfiguration.LogCapture.all(subsystems: ["dev.example.app", ""])
-        XCTAssertTrue(ConsoleLane.keep(subsystem: "dev.example.app", isError: false, osLevel: "default", filter: f))
-        XCTAssertTrue(ConsoleLane.keep(subsystem: "", isError: false, osLevel: "default", filter: f))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "dev.example.app", isError: false, osLevel: "debug", filter: f))
-        XCTAssertFalse(ConsoleLane.keep(subsystem: "dev.other", isError: false, osLevel: "default", filter: f))
-        XCTAssertTrue(ConsoleLane.keep(subsystem: "dev.other", isError: true, osLevel: "error", filter: f))
+    func testOwnSubsystemsDropABuildFlavour() {
+        XCTAssertEqual(own, ["dev.example.app.debug", "dev.example.app"])
+        XCTAssertEqual(ConsoleLane.ownSubsystems(bundleID: "dev.vitrinka.recorder-demo", appID: "dev.vitrinka.recorder-demo"), ["dev.vitrinka.recorder-demo"])
+        XCTAssertEqual(ConsoleLane.ownSubsystems(bundleID: nil, appID: "dev.foltyn.genesis-fan-control.debug"),
+                       ["dev.foltyn.genesis-fan-control.debug", "dev.foltyn.genesis-fan-control"])
+    }
+
+    func testErrorsTakeOnlyTheAppsOwnSubsystems() {
+        XCTAssertTrue(keep("dev.example.app"))
+        XCTAssertTrue(keep("dev.example.app.network"), "a subsystem under the app's own")
+        XCTAssertTrue(keep("dev.example.app.debug"))
+        XCTAssertFalse(keep("dev.example.application"), "a prefix only counts at a dot")
+        XCTAssertFalse(keep("dev.example.app", error: false, level: "default"), "errors and faults only")
+        XCTAssertFalse(keep("com.apple.network"))
+        XCTAssertFalse(keep("dev.other.lib"))
+        XCTAssertFalse(keep("dev.vitrinka.recorder", level: "fault"), "never the recorder's own")
+        XCTAssertFalse(keep("dev.example.app", .off))
+    }
+
+    func testFrameworkLinesWithoutASubsystemStayOut() {
+        // The noise of the first live run (CoreAudio, a cache): no subsystem.
+        XCTAssertFalse(keep("", text: "HALC_ShellObject::SetPropertyData: call to the proxy failed"))
+        XCTAssertFalse(keep("", text: "fopen failed for data file: errno = 2"))
+        XCTAssertFalse(keep("", text: "Errors found! Invalidating cache..."))
+        XCTAssertFalse(keep("", text: "pultik: poll failed", .all()), "all() does not open the unlabelled lines")
+    }
+
+    func testUnlabelledLinesNeedTheHostsPrefix() {
+        let f = VitrinkaRecorderConfiguration.LogCapture.errors(unlabelledPrefixes: ["pultik:", ""])
+        XCTAssertEqual(f.unlabelledPrefixes, ["pultik:"], "an empty prefix would match everything")
+        XCTAssertTrue(keep("", error: false, level: "default", text: "pultik: poll failed", f))
+        XCTAssertFalse(keep("", error: false, level: "default", text: "HALC_ShellObject failed", f))
+        XCTAssertFalse(keep("", error: false, level: "debug", text: "pultik: noisy", f))
+    }
+
+    func testAllAddsTheNonDebugLinesOfListedSubsystems() {
+        let f = VitrinkaRecorderConfiguration.LogCapture.all(subsystems: ["dev.example.kit"])
+        XCTAssertTrue(keep("dev.example.kit", error: false, level: "default", f))
+        XCTAssertTrue(keep("dev.example.app", error: false, level: "info", f))
+        XCTAssertFalse(keep("dev.example.kit", error: false, level: "debug", f))
+        XCTAssertFalse(keep("dev.other", error: false, level: "default", f))
+        let errorsToo = VitrinkaRecorderConfiguration.LogCapture.errors(subsystems: ["dev.example.kit"])
+        XCTAssertTrue(keep("dev.example.kit", errorsToo))
+        XCTAssertFalse(keep("dev.example.kit", error: false, level: "default", errorsToo))
+    }
+}
+
+final class SessionTitleTests: XCTestCase {
+    func testDefaultTitleIsTheAppNameAndLocalTime() {
+        let at = Date(timeIntervalSince1970: 1_792_782_000) // 2026-10-23 19:00 UTC
+        let title = RecorderRuntime.defaultTitle(displayName: "Recorder Demo", now: at,
+                                                 locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "Europe/Prague")!)
+        XCTAssertTrue(title.hasPrefix("Recorder Demo · Oct 23, 2026"), title)
+        XCTAssertTrue(title.contains("9:00"), "local time (Prague), not UTC: \(title)")
     }
 }
 
@@ -139,9 +186,10 @@ final class ConfigurationTests: XCTestCase {
     }
 }
 
-/// The accessibility spike: does in-process `accessibilityHitTest` name a
-/// control without the Accessibility permission? Offscreen windows, nothing
-/// is shown.
+/// In-process labels. Offscreen windows, nothing is shown. In a test
+/// process AppKit builds no accessibility tree, so these exercise the view
+/// fallback and a SwiftUI spike that skips; `ElementResolveTests` covers the
+/// accessibility walk with synthetic elements.
 @MainActor
 final class AccessibilityLabelSpikeTests: XCTestCase {
     private func window(with content: NSView) -> NSWindow {
@@ -160,8 +208,8 @@ final class AccessibilityLabelSpikeTests: XCTestCase {
         let w = window(with: root)
         let center = w.convertPoint(toScreen: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil))
         let label = ElementLabels.label(in: w, screenPoint: center)
-        XCTAssertEqual(label.text, "open-settings", "identifier first, as Expo's testID")
-        XCTAssertEqual(label.selector, "AXButton#open-settings")
+        XCTAssertEqual(label.text, "Open settings", "the human label first")
+        XCTAssertEqual(label.selector, "AXButton#open-settings", "the identifier rides in the selector")
         XCTAssertNotNil(label.frame)
     }
 
@@ -192,5 +240,145 @@ final class AccessibilityLabelSpikeTests: XCTestCase {
         } else {
             throw XCTSkip("SwiftUI exposed no accessibility element in an offscreen window; the live run decides (clicks fall back to coordinates)")
         }
+    }
+}
+
+/// The accessibility walk on synthetic trees shaped like the ones SwiftUI
+/// and AppKit expose while an assistive client is active.
+@MainActor
+final class ElementResolveTests: XCTestCase {
+    private func el(_ role: NSAccessibility.Role, _ frame: NSRect = NSRect(x: 0, y: 0, width: 10, height: 10),
+                    label: String? = nil, title: String? = nil, id: String? = nil, value: String? = nil,
+                    subrole: NSAccessibility.Subrole? = nil, parent: NSAccessibilityElement? = nil) -> NSAccessibilityElement
+    {
+        let e = NSAccessibilityElement()
+        e.setAccessibilityRole(role)
+        e.setAccessibilityFrame(frame)
+        if let label { e.setAccessibilityLabel(label) }
+        if let title { e.setAccessibilityTitle(title) }
+        if let id { e.setAccessibilityIdentifier(id) }
+        if let value { e.setAccessibilityValue(value) }
+        if let subrole { e.setAccessibilitySubrole(subrole) }
+        if let parent {
+            e.setAccessibilityParent(parent)
+            parent.setAccessibilityChildren((parent.accessibilityChildren() ?? []) + [e])
+        }
+        return e
+    }
+
+    func testAButtonsTextChildResolvesToTheButton() {
+        let root = el(.group)
+        let button = el(.button, NSRect(x: 10, y: 10, width: 80, height: 24), label: "Add item", id: "add-item", parent: root)
+        let text = el(.staticText, NSRect(x: 20, y: 14, width: 60, height: 16), value: "Add item", parent: button)
+        let l = ElementLabels.resolve(from: text)
+        XCTAssertEqual(l?.text, "Add item")
+        XCTAssertEqual(l?.selector, "AXButton#add-item")
+        XCTAssertEqual(l?.frame, NSRect(x: 10, y: 10, width: 80, height: 24))
+    }
+
+    func testAListRowIsNamedByItsCheckboxNotBySwiftUIsCellIdentifier() {
+        let outline = el(.outline)
+        let row = el(.row, NSRect(x: 0, y: 100, width: 300, height: 24), parent: outline)
+        let cell = el(.cell, NSRect(x: 10, y: 100, width: 280, height: 24), id: "ListCell", parent: row)
+        _ = el(.checkBox, NSRect(x: 12, y: 102, width: 200, height: 20), title: "Calibrate fan curve", value: "0", parent: cell)
+        let l = ElementLabels.resolve(from: cell)
+        XCTAssertEqual(l?.text, "Calibrate fan curve")
+        XCTAssertEqual(l?.selector, "AXCell", "SwiftUI's ListCell identifier says nothing")
+    }
+
+    func testATextFieldIsNamedByItsLabelAndNeverByItsValue() {
+        let root = el(.group)
+        let field = el(.textField, label: "API password", value: "hunter2-typed", subrole: .secureTextField, parent: root)
+        let l = ElementLabels.resolve(from: field)
+        XCTAssertEqual(l?.text, "API password")
+        XCTAssertEqual(l?.selector, "AXTextField")
+        let row = el(.row, parent: root)
+        _ = el(.textField, value: "typed in a row", parent: row)
+        XCTAssertNil(ElementLabels.childLabel(of: row), "a row's text field value is typed content")
+    }
+
+    func testAnIconButtonWithoutANameKeepsItsRole() {
+        let root = el(.group, label: "Toolbar")
+        let button = el(.button, parent: root)
+        let l = ElementLabels.resolve(from: button)
+        XCTAssertEqual(l?.selector, "AXButton")
+        XCTAssertEqual(l?.text, "Toolbar", "the nearest named container")
+    }
+
+    func testDescendFindsTheSmallestElementUnderThePoint() {
+        let root = el(.group, NSRect(x: 0, y: 0, width: 400, height: 300))
+        let panel = el(.group, NSRect(x: 0, y: 0, width: 400, height: 150), parent: root)
+        let button = el(.button, NSRect(x: 20, y: 20, width: 100, height: 30), label: "Approve", id: "approve", parent: panel)
+        _ = el(.button, NSRect(x: 200, y: 20, width: 100, height: 30), label: "Close", parent: panel)
+        let hit = ElementLabels.descend(from: root, to: NSPoint(x: 50, y: 35))
+        XCTAssertTrue((hit as AnyObject) === button)
+        XCTAssertEqual(ElementLabels.resolve(from: hit)?.text, "Approve")
+        XCTAssertEqual(ElementLabels.resolve(from: hit)?.selector, "AXButton#approve")
+    }
+}
+
+final class ConsoleCollapserTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_792_782_000)
+
+    private func line(_ text: String, at seconds: Double, category: String = "smc") -> ConsoleLine {
+        ConsoleLine(date: t0.addingTimeInterval(seconds), level: "error", osLevel: "error", text: text,
+                    subsystem: "dev.foltyn.genesis-fan-control", category: category)
+    }
+
+    func testRepeatsWithinAWindowAreSentOnceThenSummarised() {
+        var c = ConsoleCollapser()
+        var sent: [ConsoleLine] = []
+        // The chatty line of the second live run, every 2 s with changing numbers.
+        for i in 0 ..< 30 {
+            sent += c.admit(line("Ghost cluster filter suppressed \(10 + i % 3) sensors: Tp01,Tp05", at: Double(i) * 2))
+        }
+        XCTAssertEqual(sent.count, 1, "the first copy only, within 60 s")
+        XCTAssertNil(sent.first?.repeats)
+        // The window (opened at 0 s) closes; the next poll sends the summary.
+        sent = c.expire(now: t0.addingTimeInterval(61))
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?.repeats, 29, "the copies at 2…58 s")
+        XCTAssertEqual(sent.first?.text, "Ghost cluster filter suppressed 10 sensors: Tp01,Tp05", "the first text")
+        XCTAssertEqual(sent.first?.category, "smc")
+        XCTAssertEqual(sent.first?.date, t0.addingTimeInterval(58), "at the last repeat")
+        // Copies after the window closed open a new window: sent again once.
+        let more = c.admit(line("Ghost cluster filter suppressed 11 sensors: Tp01,Tp05", at: 62))
+        XCTAssertEqual(more.count, 1)
+        XCTAssertNil(more.first?.repeats)
+    }
+
+    func testDifferentLinesAndCategoriesAreNotCollapsed() {
+        var c = ConsoleCollapser()
+        var sent = c.admit(line("payment API answered 502", at: 0))
+        sent += c.admit(line("payment API answered 503", at: 1))  // the same after digit normalisation
+        sent += c.admit(line("payment API answered 502", at: 2, category: "net"))
+        sent += c.admit(line("disk full", at: 3))
+        XCTAssertEqual(sent.map(\.text), ["payment API answered 502", "payment API answered 502", "disk full"])
+        XCTAssertEqual(sent.map(\.category), ["smc", "net", "smc"])
+    }
+
+    func testStopDrainsOpenSummaries() {
+        var c = ConsoleCollapser()
+        _ = c.admit(line("retry 1", at: 0))
+        _ = c.admit(line("retry 2", at: 1))
+        _ = c.admit(line("retry 3", at: 2))
+        _ = c.admit(line("alone", at: 3))
+        let tail = c.drain()
+        XCTAssertEqual(tail.count, 1, "only windows with repeats leave a summary")
+        XCTAssertEqual(tail.first?.repeats, 2)
+        XCTAssertEqual(tail.first?.text, "retry 1")
+        XCTAssertTrue(c.drain().isEmpty)
+    }
+
+    func testTheSessionCapEndsWithOneMarker() {
+        var c = ConsoleCollapser()
+        var sent: [ConsoleLine] = []
+        for i in 0 ..< 260 { sent += c.admit(line("distinct line \(String(UnicodeScalar(UInt8(65 + i % 26))))\(i / 26)x", at: Double(i) * 0.01, category: "c\(i)")) }
+        XCTAssertEqual(sent.count, ConsoleCollapser.sessionCap + 1)
+        XCTAssertEqual(sent.filter(\.capped).count, 1)
+        XCTAssertEqual(sent.last?.capped, true)
+        XCTAssertEqual(sent.last?.level, "log", "the marker is never a failure")
+        XCTAssertTrue(c.admit(line("after the cap", at: 100, category: "z")).isEmpty)
+        XCTAssertTrue(c.expire(now: t0.addingTimeInterval(500)).isEmpty)
     }
 }

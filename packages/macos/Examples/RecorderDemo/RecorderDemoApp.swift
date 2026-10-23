@@ -33,8 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         // Debug only, and only when VITRINKA_RECORDER_URL (or the user
         // default VitrinkaRecorderURL) names a vitrinka server.
-        if var config = VitrinkaRecorderConfiguration.fromEnvironment(appID: "dev.vitrinka.recorder-demo") {
-            config.logs = .all(subsystems: [DemoLog.subsystem])
+        // The console lane takes error and fault entries of the app's own
+        // subsystem (DemoLog.subsystem equals the app id) by default.
+        if let config = VitrinkaRecorderConfiguration.fromEnvironment(appID: "dev.vitrinka.recorder-demo") {
             VitrinkaRecorder.configure(config)
         }
         #endif
