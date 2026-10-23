@@ -12,8 +12,9 @@ token). There is no third-party telemetry, no analytics SDK, and no traffic to
 any host other than that server. The wire types live in
 [`packages/expo/src/protocol`](../packages/expo/src/protocol/index.ts)
 (mirrored byte-compatibly in
-[`packages/web/src/protocol`](../packages/web/src/protocol/index.ts)) and ride
-these routes:
+[`packages/web/src/protocol`](../packages/web/src/protocol/index.ts), and in
+Swift in [`packages/macos`](../packages/macos/Sources/VitrinkaRecorderCore/Wire.swift))
+and ride these routes:
 
 ```
 GET   /api/v1/recorder/policy      workspace redaction policy + the attachments switch (session start; the web pill's flight recorder)
@@ -21,7 +22,7 @@ GET   /api/v1/recorder/me          who the token is + HUD prefs (web HUD)
 PATCH /api/v1/recorder/me          HUD prefs {size, verbose} or {sheetW, sheetH} (web HUD, linked devices)
 POST  /api/v1/sessions             create a recording session
 POST  /api/v1/sessions/:id/events  the event stream (batched)
-POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension); images a tester attached (below)
+POST  /api/v1/sessions/:id/shot    screenshot keyframes (Expo, extension, macOS); images a tester attached (below)
 POST  /api/v1/sessions/:id/chunk   rrweb DOM-stream chunks (extension, web)
 GET   /api/v1/sessions/:id         reconcile: what the server holds
 PATCH /api/v1/sessions/:id         status (recording | paused | done)
@@ -38,6 +39,13 @@ admin-minted recorder key baked into the build. The packages never inspect
 the token, they only send it as the bearer — the web recorder with
 `credentials: omit` so no cookie ever rides along. A 401 forgets a linked
 token.
+
+The **macOS recorder** (`packages/macos`, the Swift package
+`VitrinkaRecorder`) uses the same token kinds: `VITRINKA_RECORDER_TOKEN` in
+the process environment, else the user default `VitrinkaRecorderToken`,
+else a device link made from its HUD (stored in `link.json`, mode 0600). It
+sends no `Origin` header and no cookie, and its User-Agent is
+`VitrinkaRecorder/<version> (vitrinka-macos-live/1)`.
 
 **Report a problem** (the report face of `@vitrinka/web`, also served by
 vitrinka as `/vendor/report-widget-1.mjs`) speaks only the report leaves,
@@ -110,6 +118,14 @@ Only during a session you explicitly start:
   link), it keeps the page's last minute **in memory only** — nothing is
   written to storage and nothing is sent until you press Send on a report;
   a reload discards it. The host turns it off with `flightRecorder: false`.
+- **macOS recorder** (`VitrinkaRecorder`, Swift): the live code exists only
+  in Debug builds; a Release build compiles the API to empty stubs, and
+  `packages/macos/scripts/check-release-binary.sh` fails a binary that still
+  contains it. In a Debug build it is inert unless `VITRINKA_RECORDER_URL`
+  (or the user default `VitrinkaRecorderURL`) names a server. Capture runs
+  only between the tester pressing Record in the HUD (or the host calling
+  `start()`) and Stop; the HUD is visible the whole time. A recording that
+  a relaunch interrupted comes back paused and records nothing until resumed.
 - **Report a problem** (the report face, `mountReport` / `<vitrinka-report>`):
   while the widget is mounted it keeps the last minutes of the page under
   the **project's capture profile** (below) — in memory, or in this
@@ -119,18 +135,33 @@ Only during a session you explicitly start:
 
 ## What is captured (per session)
 
-| Channel | Expo recorder | Browser extension | Web recorder |
-|---|---|---|---|
-| Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`; images recorded by URL, never inlined) |
-| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) |
-| Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads |
-| Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections |
-| Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD, and images you attach to them (below) |
+| Channel | Expo recorder | Browser extension | Web recorder | macOS recorder |
+|---|---|---|---|---|
+| Screenshots | keyframes on navigation/touch (throttled) | keyframes + rrweb DOM stream | **none** — the rrweb DOM stream is the keyframe (input values always masked, all text under `maskAllText`; images recorded by URL, never inlined) | JPEG keyframes of the app's own window (with its attached sheet), never of other apps: on start, on a window, sheet or route change, 120 ms after a click (throttled to one per 700 ms), on a mark and for an annotation; private views painted black (below) |
+| Interactions | tap coordinates + pressed-element label + route | clicks, navigation | clicks (short selector, element text — never a form field's value, see Redaction — rect), navigation (pushState/replaceState/popstate or the router's pathname) | clicks (position and element rect in keyframe pixels, the element's accessibility identifier, label or title — never a field's value — and route); window lanes and routes as `nav` |
+| Keys | — | — | — (typing exists only as rrweb's masked input events) | `key {combo, target, route}` for ⌘/⌃ shortcuts and Return, Escape, Tab, arrows, Delete only; typed characters never; nothing while a secure field has focus |
+| Network | method, URL, status, duration, capped request/response headers + bodies (redacted) | API calls incl. headers + bodies (via CDP) | fetch + XHR: method, URL, status, duration, capped request/response headers + bodies (redacted); never the recorder's own uploads | none |
+| Console | errors/warnings | errors | `console.error`, uncaught errors, unhandled rejections | the app process's own unified-log error and fault entries (not `com.apple.*`, not the recorder's `dev.vitrinka.recorder`), plus every entry of subsystems the host names; 8 KiB each |
+| Notes | notes you type in the HUD | notes you type in the popup | notes and element/region annotations you type in the HUD, and images you attach to them (below) | notes and region annotations you type in the HUD (no attachments yet) |
 
 Every web session's create carries `meta.recorder` (`web/<version>`),
 `meta.platform` (`web`), `meta.userAgent`, `meta.appVersion` when the host
 passes one, and `meta.devicePixelRatio` — the scale every recorded rect is
 in, so the server renders its stills at it.
+
+Every macOS session's create carries `app` (the host's app id, the bundle id
+by default), `title`, and `meta.recorder` (`macos/<version>`),
+`meta.platform` (`macos`), `meta.appVersion`, `meta.osVersion`,
+`meta.devicePixelRatio` (the main screen's backing scale) and
+`meta.driver` (`human`). Each top-level window is one lane (`tabId`, e.g.
+`main`, `settings`); `tabHost` is `/<lane>/<route>`. A keyframe's bytes go
+to `/shot?seq=N` first and its `shot` event (payload `{route, title,
+reason, w, h, scale}`) carries the returned `blobKey`. Click rects and
+annotation rects are in that keyframe's pixels. A mark is a keyframe
+followed by a plain note on it; an annotation is a note
+`{text, rect, annotate: true, route}` followed by the frame taken before the
+marquee appeared, 1 ms later. Stop sends `PATCH {status: "done"}` and then
+reads `GET /api/v1/sessions/:id` until the board is built.
 
 ### Bug reports (web recorder)
 
@@ -391,14 +422,20 @@ conformance vectors in
   type, encrypted or not) is scrubbed wherever it appears — a body field
   under any name, a form value, a console line — even when a size cap cut
   off its END line. Certificates and public keys stay.
+- **macOS recorder**: a Swift port of the engine
+  (`packages/macos/Sources/VitrinkaRecorderCore/Redaction.swift`) that
+  passes the same `vectors.json` in its test suite (from a copy, with a test
+  that fails when the copy drifts). It scrubs click and key labels, window
+  titles, routes (after the host's `sanitizeRoute`) and console text, and
+  under `maskAllText` click and key labels are empty.
 - **Multipart uploads beyond the 64 KiB body cap record as an omission
   marker**, not a partial body: a truncated multipart body cannot be parsed
   into parts, and a partial scan would leak exactly the fields the key scrub
   protects — the recorders fail closed instead.
 
-All three clients apply this engine — Expo and web import it directly, and
-the browser extension carries a generated copy (`vendor/redact.js`, kept in
-sync by a CI drift check). The vitrinka server additionally applies the same
+All the clients apply this engine — Expo and web import it directly, the
+browser extension carries a generated copy (`vendor/redact.js`, kept in
+sync by a CI drift check), and the macOS recorder carries the Swift port. The vitrinka server additionally applies the same
 redaction at ingest for every client as a backstop. Web and extension feed
 the engine's `maskDirectives` to rrweb: input values are masked by default and,
 under `maskAllText`, all text is masked; only the explicit self-hosted
@@ -418,9 +455,14 @@ the built-in defaults above apply — **never** capture-everything. A
 serve it otherwise) restores unredacted capture.
 
 Screenshots carry real rendered pixels and are not content-filtered by
-default. Under a `maskAllText` policy Expo and extension capture keyframes at
-a strongly reduced resolution (text unreadable, layout visible; the extension
-drops a frame it cannot downscale rather than storing it raw). The web
+default. Under a `maskAllText` policy Expo, extension and macOS capture
+keyframes at a strongly reduced resolution (text unreadable, layout visible;
+the extension drops a frame it cannot downscale rather than storing it raw;
+macOS keyframes are 96 px wide). The macOS recorder paints the frames of
+views the host marks private (`.vitrinkaPrivate()`), and of every secure
+text field, black before a keyframe is encoded, leaves windows marked
+private out of every keyframe, and drops a frame when a private view on it
+cannot be located. The web
 recorder takes no screenshots at all. Until the extension's policy settles,
 its DOM masks every input and all text, and its screenshots wait or are
 dropped; transient policy failures retry without reopening capture.
@@ -447,6 +489,11 @@ predating them answers 422). Those preferences
 and the device's last five recordings (id, title, start time, length,
 status, board link) are kept in `localStorage` under `vitrinka.recorder.*`.
 
+The macOS recorder's HUD is a separate floating panel. Keyframes name the
+captured windows explicitly, so the HUD and the annotate overlay are never
+in one; the click and key lanes ignore events in them, and the console lane
+skips the recorder's own log subsystem.
+
 ## The page recorder beside the extension
 
 When a page embeds the web recorder and the browser also runs the Vitrinka
@@ -466,7 +513,8 @@ those buttons. Nothing of this goes over the network.
 
 Recorded sessions live on your vitrinka server under its access rules; the
 recorders keep only an undelivered upload tail on-device (removed once
-delivered or when the session is discarded) — for the web recorder that
+delivered or when the session is discarded; for the macOS recorder the files
+under `~/Library/Application Support/<bundle id>/VitrinkaRecorder/`) — for the web recorder that
 includes attached images waiting in IndexedDB. The web pill's flight-recorder
 buffer is never on-device storage: it lives in the page's memory for at
 most its two windows.
