@@ -470,3 +470,44 @@ final class SwiftUINodeResolveTests: XCTestCase {
         XCTAssertEqual(ElementLabels.resolve(from: hit)?.selector, "AXButton#approve")
     }
 }
+
+/// A SwiftUI sheet on macOS 26: the click's window is the main window, and
+/// the AXSheet is a child of the window element beside the content group.
+@MainActor
+final class SheetResolveTests: XCTestCase {
+    private func tree() -> (window: FakeSwiftUINode, content: FakeSwiftUINode) {
+        let window = FakeSwiftUINode("AXWindow", NSRect(x: 0, y: 0, width: 800, height: 600))
+        let content = FakeSwiftUINode("AXGroup", NSRect(x: 0, y: 0, width: 800, height: 572), parent: window)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 20, y: 20, width: 100, height: 24), label: "Show details", identifier: "show-details", parent: content)
+        let sheet = FakeSwiftUINode("AXSheet", NSRect(x: 220, y: 300, width: 360, height: 160), parent: window)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 400, y: 320, width: 70, height: 24), label: "Close", parent: sheet)
+        _ = FakeSwiftUINode("AXButton", NSRect(x: 480, y: 320, width: 80, height: 24), label: "Approve", identifier: "approve", parent: sheet)
+        return (window, content)
+    }
+
+    func testAButtonInASheetIsFoundThroughTheWindowElement() {
+        let (window, content) = tree()
+        // The content view's hit test answers the hosting group itself, and
+        // from there the sheet is out of reach (the session 11 gap).
+        XCTAssertNil(ElementLabels.resolve(from: ElementLabels.descend(from: content, to: NSPoint(x: 420, y: 330))))
+        let close = ElementLabels.resolve(inWindow: window, hits: [content], at: NSPoint(x: 420, y: 330))
+        XCTAssertEqual(close?.text, "Close")
+        XCTAssertEqual(close?.selector, "AXButton")
+        let approve = ElementLabels.resolve(inWindow: window, hits: [content], at: NSPoint(x: 500, y: 330))
+        XCTAssertEqual(approve?.text, "Approve")
+        XCTAssertEqual(approve?.selector, "AXButton#approve")
+    }
+
+    func testOutsideTheSheetTheContentStillAnswers() {
+        let (window, content) = tree()
+        let l = ElementLabels.resolve(inWindow: window, hits: [content], at: NSPoint(x: 50, y: 30))
+        XCTAssertEqual(l?.text, "Show details")
+        XCTAssertEqual(l?.selector, "AXButton#show-details")
+    }
+
+    func testWithoutAnyHitTheWindowChildrenAreSearched() {
+        let (window, _) = tree()
+        XCTAssertEqual(ElementLabels.resolve(inWindow: window, hits: [], at: NSPoint(x: 420, y: 330))?.text, "Close")
+        XCTAssertNil(ElementLabels.resolve(inWindow: window, hits: [], at: NSPoint(x: 700, y: 590)), "nothing named under the point")
+    }
+}

@@ -58,6 +58,14 @@ enum Lanes {
         for c in laneWindow.childWindows ?? [] where c.isVisible && !(c is RecorderChromeWindow) && !out.contains(where: { $0 === c }) {
             out.append(c)
         }
+        // Any other visible window of this lane (a sheet AppKit does not
+        // report as attached, a grandchild): its private views must be found,
+        // and it belongs in the lane's keyframe.
+        for w in NSApp.windows where w !== laneWindow && w.isVisible && !(w is RecorderChromeWindow)
+            && !out.contains(where: { $0 === w }) && Lanes.laneWindow(of: w) === laneWindow
+        {
+            out.append(w)
+        }
         return out
     }
 

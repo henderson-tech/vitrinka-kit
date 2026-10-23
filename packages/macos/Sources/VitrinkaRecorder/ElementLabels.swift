@@ -154,21 +154,48 @@ enum ElementLabels {
     /// to the deepest element under it, and resolve the control it belongs
     /// to. Falls back to the AppKit view under the point.
     static func label(in window: NSWindow, screenPoint: NSPoint) -> ElementLabel {
-        var best: ElementLabel?
-        if let root = window.contentView, let hit = root.accessibilityHitTest(screenPoint) {
-            let deepest = descend(from: hit, to: screenPoint)
-            if let found = resolve(from: deepest) {
-                if found.text != nil { return found }
-                best = found
-            }
-        }
+        // The window's own element first: a SwiftUI sheet is a child of the
+        // window element (AXSheet), a sibling of the content view, so a
+        // content-view hit test never reaches it.
+        var hits: [Any] = []
+        if let hit = window.accessibilityHitTest(screenPoint) { hits.append(hit) }
+        if let root = window.contentView, let hit = root.accessibilityHitTest(screenPoint) { hits.append(hit) }
+        let found = resolve(inWindow: window, hits: hits, at: screenPoint)
+        if let found, found.text != nil { return found }
         let p = window.convertPoint(fromScreen: screenPoint)
         if let root = window.contentView?.superview ?? window.contentView, let v = root.hitTest(root.convert(p, from: nil)),
-           let found = viewWalk(v, in: window)
+           let viaView = viewWalk(v, in: window)
         {
-            if found.text != nil || best == nil { return found }
+            if viaView.text != nil || found == nil { return viaView }
         }
-        return best ?? ElementLabel(text: nil, selector: nil, frame: nil)
+        return found ?? ElementLabel(text: nil, selector: nil, frame: nil)
+    }
+
+    static let overlayRoles: Set<String> = ["AXSheet", "AXDialog", "AXPopover"]
+
+    /// Resolve a click from the window's accessibility element: a sheet,
+    /// dialog or popover under the point comes first, then each hit-test
+    /// answer; each candidate is descended to the smallest element under the
+    /// point and resolved to its control. The first named result wins.
+    static func resolve(inWindow windowElement: Any, hits: [Any], at point: NSPoint) -> ElementLabel? {
+        var starts: [Any] = AXRead.children(windowElement).filter { c in
+            guard let role = AXRead.role(c), overlayRoles.contains(role), let f = AXRead.frame(c) else { return false }
+            return f.contains(point)
+        }
+        starts += hits
+        // The window's other children, when no hit test reached below a container.
+        starts += AXRead.children(windowElement)
+        var best: ElementLabel?
+        var tried = Set<ObjectIdentifier>()
+        for start in starts {
+            guard tried.insert(ObjectIdentifier(start as AnyObject)).inserted else { continue }
+            if let f = AXRead.frame(start), !f.contains(point) { continue }
+            let deepest = descend(from: start, to: point)
+            guard let found = resolve(from: deepest) else { continue }
+            if found.text != nil { return found }
+            if best == nil { best = found }
+        }
+        return best
     }
 
     /// The label of a focused view (the key lane's `target`).
