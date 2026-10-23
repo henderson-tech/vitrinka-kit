@@ -1,5 +1,13 @@
 # @vitrinka/web
 
+## 0.9.4
+
+- **Escape belongs to reporting while reporting has the focus.** A host
+  modal's document-capture Escape listener could close the app's editor
+  before the report card handled it, leaving the card open. Reporting now
+  handles its Escape at window capture, preserving its menu/settings/marking
+  steps and shortcut recording while leaving the app dialog and draft alone.
+
 ## 0.9.3
 
 - **Reporting stays in the window, not the app's modal.** The floating

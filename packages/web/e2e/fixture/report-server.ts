@@ -83,11 +83,18 @@ function page(query: string): string {
           month.focus();
         };
         document.getElementById('open-editor').onclick = window.openModal;
-        document.getElementById('close-editor').onclick = () => {
+        const closeEditor = () => {
           modal.hidden = true;
           modal.dataset.state = 'closed';
           document.body.style.pointerEvents = '';
         };
+        document.getElementById('close-editor').onclick = closeEditor;
+        document.addEventListener('keydown', (event) => {
+          if (!modal.hidden && event.key === 'Escape') {
+            event.preventDefault();
+            closeEditor();
+          }
+        }, true);
         document.addEventListener('focusin', (event) => {
           if (!modal.hidden && !modal.contains(event.target)) month.focus();
         });

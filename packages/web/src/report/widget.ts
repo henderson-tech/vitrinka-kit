@@ -910,19 +910,6 @@ export class ReportWidget {
         this.paint();
       });
     }
-    on(e.card, 'keydown', (ev) => {
-      // Marking's own Escape (the window listener) already acted on it.
-      if (ev.key !== 'Escape' || this.recordingBind || ev.defaultPrevented) return;
-      ev.preventDefault();
-      // Esc steps back one layer: an open popover, then a list or settings, then the card itself.
-      if (this.menu) {
-        const opener = this.menu === 'account' ? e.whoBtn : e.more;
-        this.menu = null;
-        this.paint();
-        opener.focus();
-      } else if (this.view !== 'describe' && this.view !== 'sent') this.show('describe');
-      else this.close();
-    });
     for (const [tool, btn] of e.toolButtons) {
       on(btn, 'click', (ev) => {
         this.tool = tool;
@@ -958,15 +945,28 @@ export class ReportWidget {
         window,
         'keydown',
         (ev) => {
-          if (this.recordingBind) return;
-          if (this.marking && ev.key === 'Escape') {
+          const inCard = ev.composedPath().includes(e.card);
+          // A modal's document-capture listener runs before a card listener.
+          // Own this Escape at window capture so it never dismisses the app's dialog.
+          if (ev.key === 'Escape' && this.isOpen && (this.marking || inCard)) {
             ev.preventDefault();
-            // Esc answers an open "Discard?" with Keep, drops a keyboard mark being placed, and only then leaves marking — keeping the marks.
-            if (this.confirming) e.keep.click();
-            else if (this.kbDraft) this.cancelDraft();
-            else this.endMarking(true);
+            ev.stopImmediatePropagation();
+            if (this.recordingBind) {
+              this.stopRecordingBind();
+            } else if (this.marking) {
+              if (this.confirming) e.keep.click();
+              else if (this.kbDraft) this.cancelDraft();
+              else this.endMarking(true);
+            } else if (this.menu) {
+              const opener = this.menu === 'account' ? e.whoBtn : e.more;
+              this.menu = null;
+              this.paint();
+              opener.focus();
+            } else if (this.view !== 'describe' && this.view !== 'sent') this.show('describe');
+            else this.close();
             return;
           }
+          if (this.recordingBind) return;
           // ⌘Z / Ctrl+Z takes the newest mark back — unless a field is being typed in, whose own undo wins.
           if (this.marking && (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === 'z' && !typing()) {
             ev.preventDefault();
