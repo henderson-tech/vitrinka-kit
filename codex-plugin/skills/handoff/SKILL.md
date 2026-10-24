@@ -27,6 +27,9 @@ everything in one transaction and returns `rendered`, the chat block:
 - `surfaces` · `buildOn` · `branch` · `worktree` · `prerequisites` ·
   `readFirst` become the next pickup's ON · BRANCH · BEFORE · READ rows.
 - `refs` (pr, board) attach; `sessionId` ends the live run.
+- `diff` is the branch's `git diff --numstat $(git merge-base origin/main
+  HEAD)` output: the server measures the work against its size prediction; the reply's
+  `observation` says hit, size_miss or no_baseline.
 
 Each pr ref carries its status, read right before the call (`gh pr view
 <url> --json state,isDraft`): `meta: {url, state: merged | open | draft |
