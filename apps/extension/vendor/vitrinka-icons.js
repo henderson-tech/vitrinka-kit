@@ -180,6 +180,9 @@
     "layout-cards": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect x=\"3\" y=\"3\" width=\"7.5\" height=\"11\" rx=\"1.5\" /><rect x=\"13.5\" y=\"3\" width=\"7.5\" height=\"11\" rx=\"1.5\" /><path d=\"M3 18.5h7.5\" /><path d=\"M13.5 18.5h7.5\" />" },
     "layout-mini": { viewBox: "0 0 24 24", stroke: "1.75", markup: "<rect x=\"3\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"9.75\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"16.5\" y=\"4\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"3\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"9.75\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" /><rect x=\"16.5\" y=\"14\" width=\"4.5\" height=\"6\" rx=\"1\" />" },
     "layout-table": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" ry=\"2\" /><line x1=\"3\" x2=\"21\" y1=\"9\" y2=\"9\" /><line x1=\"3\" x2=\"21\" y1=\"15\" y2=\"15\" /><line x1=\"9\" x2=\"9\" y1=\"9\" y2=\"21\" /><line x1=\"15\" x2=\"15\" y1=\"9\" y2=\"21\" />" },
+    "graph": { viewBox: "0 0 24 24", stroke: "2", markup: "<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /><rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\" /><path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\" /><path d=\"M12 12V8\" />" },
+    "axis-3d": { viewBox: "0 0 24 24", stroke: "2", markup: "<path d=\"M13.5 10.5 15 9\" /><path d=\"M4 4v15a1 1 0 0 0 1 1h15\" /><path d=\"M4.293 19.707 6 18\" /><path d=\"m9 15 1.5-1.5\" />" },
+    "locate": { viewBox: "0 0 24 24", stroke: "2", markup: "<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /><line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /><line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /><circle cx=\"12\" cy=\"12\" r=\"7\" />" },
   };
   function html(name, cls) {
     var g = MARKUP[name];
