@@ -13,6 +13,9 @@ repository bound to the project (Settings → Projects → Repositories) — eac
 contributing the PRs merged into its **branch** since its own window start.
 Eve writes the page from that window; **cut** freezes it and opens the next,
 each repository starting where its part ended.
+In the app, releases are markers on the project's Timeline (`list
+{kind:"change"}` for what shipped); `update {kind:"milestone", archived}`
+archives or restores one.
 
 The ONE door is `vitrinka project release` from a checkout bound to the
 project (`vitrinka.config.json` names it; `--project <slug>` otherwise);

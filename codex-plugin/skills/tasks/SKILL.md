@@ -40,9 +40,18 @@ another workspace's is `"<workspace>/<id>"`, or `workspace` beside it.
   commit`, the typed documents `transcript · conversation · brainstorm ·
   plan · handoff · decision · distill · brief · notes`, and `final`.
   `commit` and `pr` refs are attached by the GitHub App (`Vitrinka-Task:`
-  trailer, `vt-<id>` branches; `meta.merged` completes the task) — never by
-  hand. A `file` ref is a URL, never a path: `vitrinka task upload <id>
-  <files…>` streams disk, `upload_task_file` takes inline text.
+  trailer, `vt-<id>` branches) — never by hand. A PR claims a task by its
+  branch or title key, or a closing keyword in the body (a bare mention only
+  links); a newly merged claiming PR completes the task only when no open
+  checklist item or other claiming PR remains, and never an epic. A `file`
+  ref is a URL, never a path: `vitrinka task upload <id> <files…>` streams
+  disk, `upload_task_file` takes inline text.
+- **Work profile**: `complexity` (trivial · junior · medior · senior ·
+  architect · research — the reasoning, never a person) and `size` (XS–XXL
+  hand-written lines/files) are separate; "" is unestimated, never trivial.
+  `readers` are the roles a task is written for, `fields.for` whose problem
+  it solves, `audience` who should see it — a filter, never access (a wall
+  is a private project). Contract: docs `guide:estimating`.
 - **External links** name the issue a task tracks (GitHub, GitLab, Jira —
   ONE owner task per issue; a second attach answers `link_owned` with the
   owner) and the Confluence pages it refers to: `add_task_ref {kind:
@@ -181,12 +190,22 @@ or executed; an existing follow-up keeps its own prerequisites. Read
   project}` (Eve's brief and moves, needs you, gating bugs, active
   sprints); `get {kind:"cockpit", project, id}` is one sprint's panels.
   All work without Eve.
+- **Graph** answers "what is this connected to": `get {kind:"project_graph",
+  project, node: "task:12"}` is one node's recorded relations with provenance
+  (the first 100, exact `more` and `total`); nothing is inferred.
 - **History** answers "what happened": `get {kind:"history_chapter"}` is
   one chapter's spread (cover, narrative, numbers, boards, documents);
   `update` rewrites its narrative or pins its cover; `create
   {kind:"history_edition"}` exports chapters as a doc artifact. Merged work
   reaches `shipped` only through production deploy marks (`vitrinka
   project deploy-mark <env> <sha>`).
+- **Timeline** answers "what shipped" and replaces Releases and History in
+  the app: `list {kind:"change", project, f}` pages each PR merged to the
+  default branch as a change; `get`/`update {kind:"change"}` read and reword
+  one, and an edit pins its words; `create {kind:"change", project,
+  fields: {kind, title, …}}` appends one by hand, pinned. A PR body's
+  `## Changelog` section (`kind:`, `title:`, `personas:`, `Before:`/`Now:`,
+  `-` bullets, prose lede) is used as written.
 - **Rules** are typed `{trigger, conditions, actions}` documents: `create
   {kind:"rule", project, name, ast, enabled?}` (admin) creates one DISABLED
   unless `enabled: true`; ALWAYS `dry_run_rule {id, events?, ast?}` (writes

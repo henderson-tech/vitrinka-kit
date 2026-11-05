@@ -37,6 +37,8 @@ sections, summary card, walkthrough narrative, board suites.
   URL the moment the board exists. A capture push already lands on the
   `<project>-<branch>-<key>` board and prints its URL; the import is for a
   custom `--slug`/`--title`. Incremental re-runs too.
+- **A board about one PR names it**: `--pr <owner/repo#n>` on the import,
+  else `meta.pr` in the brief — the head shows its state, linked tasks gain it.
 - **Brief the agent fully** — it starts with zero context: the intent, this
   skill's base directory (it reads the intent's section and
   `references/card-kinds.md` itself), repo root + set root, what was

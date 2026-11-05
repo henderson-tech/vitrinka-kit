@@ -31,8 +31,13 @@ which answered and stop.
 `get {kind:"task", id, view:"pickup"}` — CLI `vitrinka task pickup [id|url]`
 (also says whether the branch exists on origin; `--json` puts the pickup in
 `data`). The reply is the pickup plus `rendered`, rows WHAT · LAST · DONE ·
-ON · BRANCH · RUN · LINKS · BEFORE · READ · WHO · NEXT · SKIP; empty rows are
+ON · BRANCH · RUN · PROFILE · LINKS · BEFORE · READ · WHO · NEXT · SKIP; empty rows are
 omitted, rows past the token cap are dropped whole and counted in SKIP.
+PROFILE is the work profile and its advisory route tier (never over an
+explicit routing choice); an unestimated task shows ESTIMATE instead —
+record your complexity and size prediction with `update {kind:"task", id,
+complexity, size, confidence}` BEFORE the work, against the bands it
+prints: merged work is measured against that prediction.
 LINKS names the issue the task tracks and the pages it refers to — open one
 only when the work needs it; the pickup never fetches them.
 
