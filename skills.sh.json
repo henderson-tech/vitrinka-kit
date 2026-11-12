@@ -7,20 +7,16 @@
       "description": "Boards, capture, authoring, the annotation loop.",
       "skills": [
         "publish",
-        "artifact",
         "brainstorming",
-        "listen",
-        "resolve"
+        "listen"
       ]
     },
     {
       "title": "PM",
       "description": "The task engine: pickup, hand-back, intake, triage, release boards.",
       "skills": [
-        "pickup",
-        "handoff",
-        "tasks",
-        "release"
+        "work",
+        "tasks"
       ]
     },
     {
@@ -32,13 +28,9 @@
     },
     {
       "title": "QA",
-      "description": "Recorded sessions, live pairing, exploratory user-testing, AI review.",
+      "description": "Exploratory user-testing, AI review, recorded sessions.",
       "skills": [
-        "usertest",
-        "review",
-        "sessions",
-        "pair",
-        "spot"
+        "qa"
       ]
     },
     {

@@ -27,9 +27,9 @@ board card, nested inside a fractal `doc`, and full-screen at its solo
   aggregates. Humans edit cells in place; compose canonical keyed rows, never
   positional arrays.
 - **`diagram`** — semantics only, server layout; the quality loop and import
-  paths are the artifact skill's `references/diagram.md`.
-- **`page`** — markdown truth; the round-trip vocabulary is the artifact
-  skill's `references/pages.md`.
+  paths are `references/diagram.md`.
+- **`page`** — markdown truth; the round-trip vocabulary is
+  `references/pages.md`.
 - **`mockup`** — frames of primitive trees, the cheap UI sketch; direct
   drag/resize editing on the board.
 - **`doc`** — the fractal composite: `{title?, elements:[…]}` of the kinds
@@ -57,6 +57,7 @@ board card, nested inside a fractal `doc`, and full-screen at its solo
 - **`step`** — a numbered journey step embedding its screen (`image` from a
   pushed set, or `cardId` for a live thumbnail — never re-upload a screen you
   can reference). The canonical walkthrough shape: one steps-only section.
+  `note`: a one-line GFM caption. `status`: `todo|pass|fail` (blocked: `todo`).
 - **`compare`** — two existing cards behind a wipe/ghost slider
   (`{a:{cardId}, b:{cardId}, mode}`); the element `compare` (fractal sides)
   is the docs topic of the same name in the element family.
@@ -90,6 +91,6 @@ board card, nested inside a fractal `doc`, and full-screen at its solo
 - Payload mismatches 400 with `{code, index}` naming the bad item and a `see`
   pointer into the docs tree — follow it. `undo {board}` reverts your last
   batch when the receipt reads wrong.
-- Kinds with a whole workflow of their own: `diagram` and `page` → the
-  **artifact** skill's references (quality loop, imports, round-trip, deep
-  links).
+- Kinds with a whole workflow of their own: `diagram` and `page` →
+  `references/diagram.md` and `references/pages.md` (quality loop, imports,
+  round-trip, deep links).

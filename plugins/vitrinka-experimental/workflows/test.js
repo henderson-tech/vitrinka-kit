@@ -981,7 +981,7 @@ for (let pass = 1; pass <= cap; pass++) {
     `Exploratory usertest, pass ${pass}${prep.baseUrl ? ` against ${prep.baseUrl}` : ''} on ${utLane.label}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
     (unwalked.length ? `Fixed failures to walk again — each is ONE case under exactly this title (a journey above with the same title is that case), so the run can tell the fix held:\n${JSON.stringify(rewalkCases(unwalked))}\n` : '') +
-    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start --task ${task} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
+    `Follow the vitrinka qa skill's usertest exploratory lane (Skill tool: vitrinka-qa:qa, args "usertest"; \`vitrinka qa usertest start --task ${task} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: ph, schema: USERTEST_SCHEMA })
 
   const results = (await parallel(reviews && (journeys.length || unwalked.length) ? [...shooters, tester] : shooters)).filter(Boolean)
@@ -1228,7 +1228,7 @@ const prProblem = prOut.problem
 const converged = convergedAfter({ clean, open: openFindings, unwalked, gateRed })
 
 const handback = await agent(withRunTargetPreamble(
-  `Hand task ${task} back through the vitrinka handoff skill (Skill tool: vitrinka-pm:handoff). Facts, one per line, for the summary:\n` +
+  `Hand task ${task} back through the vitrinka work skill (Skill tool: vitrinka-pm:work, args "handoff"). Facts, one per line, for the summary:\n` +
   JSON.stringify({
     runBoard: board.boardUrl,
     lanes: board.lanes,

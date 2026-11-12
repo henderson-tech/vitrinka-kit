@@ -14,9 +14,9 @@ export const meta = {
     { title: 'Review', detail: 'ui-loop: reviewers of the batches this run claimed, against the spec and the previous acceptance' },
     { title: 'Synthesize', detail: 'ui-loop: vybava ui-loop merge-review (the run holding the synth lease), then only its flagged keys and one item per app-suspect triage group → review/backlog.json' },
     { title: 'Scoreboard', detail: 'ui-loop: vybava ui-loop scoreboard, a callout per area set board' },
-    { title: 'Fix: primitives', detail: 'ui-loop: ≤ 4 lanes owning primitive dirs (vybava ui-loop lanes), then those dirs are frozen' },
-    { title: 'Fix: areas', detail: 'ui-loop: ≤ 4 area lanes, one item at a time, a checkpoint per item' },
-    { title: 'Fix: rework', detail: 'ui-loop: ≤ 4 rework lanes for the items an earlier lane deferred, each owning their needs\' dirs and their own' },
+    { title: 'Fix: primitives', detail: 'ui-loop: ≤ 4 lanes owning primitive dirs (vybava ui-loop lanes), side by side in their own slot worktrees when uiLoop.fix.parallel is above 1; then those dirs are frozen' },
+    { title: 'Fix: areas', detail: 'ui-loop: ≤ 4 area lanes, one item at a time, a checkpoint per item; each lane lands by a merge into the pass branch (vybava ui-loop lane land)' },
+    { title: 'Fix: rework', detail: 'ui-loop: ≤ 4 rework lanes for the items an earlier lane deferred, each owning their needs\' dirs and their own; two that own one dir never run together' },
     { title: 'Settle', detail: 'ui-loop: the deferred i18n strings, foreign items checkpointed, type-check, dev server green' },
     { title: 'Fix: rig', detail: 'ui-loop: one rig lane last — repairs the recipes check --labels and the pass\'s dead recipes name, validated by run --probe' },
   ],
@@ -978,8 +978,22 @@ const UILOOP_FIX_RULES = [
 // literal name the app no longer renders is what `check --labels` reports.
 const UILOOP_ACTION_STEP = 'Reach a control with the harness\'s role-first `action` step, `{action: {name: \'<its accessible name>\', role?: \'button\' | \'menuitem\' | \'link\' | \'tab\', within?: \'<container selector>\'}}`: it looks in the topmost overlay first, then the page, matches the name as a case-insensitive prefix at a word boundary, and opens the project\'s `overflow` triggers (a ⋯ sheet) when the control hides behind one. Prefer it to CSS chains, `nth=` indexes and text selectors, which break on the next layout change. Spell `name` as the app\'s label sources (its i18n catalogs, its templates) spell it, so `vybava ui-loop check --labels` finds it; a selector stays only where the control has no accessible name.'
 
-function withUiLoop(prompt, fix) {
-  const rules = fix ? [...UILOOP_RULES, ...UILOOP_FIX_RULES] : UILOOP_RULES
+// A lane in a slot worktree (contract 11) is the one writer of its slot and
+// has no dev server there: the three rules that speak of the one shared
+// checkout and its server read differently for it. Each is found by its
+// opening words, so a reworded rule fails the test instead of slipping by.
+const UILOOP_SLOT_RULES = [
+  ['Keep the shared dev server green:', () => 'The shared dev server serves the pass worktree, never your slot: your edits reach it only once your lane has landed, and Settle confirms it then. Never restart a server.'],
+  ['OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane.', (rule, opening) => 'OWNERSHIP: lanes run side by side, each in a slot worktree of its own; you are the sole writer and committer in your slot, and never one in the pass worktree.' + rule.slice(opening.length)],
+  ['After every edit the shared dev server must stay green:', () => 'Your slot has no dev server: after an edit run the repo\'s source-only check for what you touched (`devbox run -- \'<cmd>\'` from the slot); an error your edit caused is fixed at once or reverted within 5 minutes.'],
+]
+
+function withUiLoop(prompt, fix, slot) {
+  const all = fix ? [...UILOOP_RULES, ...UILOOP_FIX_RULES] : UILOOP_RULES
+  const rules = !slot ? all : all.map(rule => {
+    const swap = UILOOP_SLOT_RULES.find(([opening]) => rule.startsWith(opening))
+    return swap ? swap[1](rule, swap[0]) : rule
+  })
   return 'ui-loop rules:\n- ' + rules.join('\n- ') + '\n\n' + prompt
 }
 
@@ -1089,13 +1103,30 @@ function stallsProblem(state) {
 // The relayed lanes must account for every open item: lane keys, foreign,
 // i18n-only and already-finished items together are the backlog's open count.
 // A deferred item (contract 8) sits in a rework lane, the only lane it is in.
+// An item a started lane holds (contract 11) is in no lane: it is inFlight.
 function lanesProblem(state, lanes) {
   if (!lanes || !Array.isArray(lanes.primitives) || !Array.isArray(lanes.areas) || (lanes.rework != null && !Array.isArray(lanes.rework))) return 'prepare relayed no lanes — `vybava ui-loop lanes --json` must be returned verbatim as lanes'
   const keys = [...lanes.primitives, ...lanes.areas, ...(lanes.rework || [])].reduce((n, l) => n + (l.keys || []).length, 0)
-  const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.finished || 0)
+  const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.inFlight || []).length + (lanes.finished || 0)
   const open = state.backlog ? state.backlog.open : -1
   if (total !== lanes.open || total !== open) return `prepare relayed lanes covering ${total} items; the lanes envelope says ${lanes.open} open and the backlog ${open} — the list was cut; re-run the stage`
   return ''
+}
+
+// The lanes of a phase in waves that run side by side (contract 11): at most
+// `size` a wave, and no two lanes of a wave own one dir. A lane owns the
+// files directly inside its dirs, so only the same dir is shared; two rework
+// lanes may share one, and `lane start` refuses the second while the first
+// has not landed. Order is kept: a lane goes into the first wave that takes it.
+function laneWaves(lanes, size) {
+  const waves = []
+  for (const l of lanes) {
+    const fits = w => w.length < size && !w.some(o => (o.dirs || []).some(d => (l.dirs || []).includes(d)))
+    const wave = waves.find(fits)
+    if (wave) wave.push(l)
+    else waves.push([l])
+  }
+  return waves
 }
 
 // The admitted fix checkpoints of a pass, as one envelope: {data: {pass,
@@ -1161,7 +1192,11 @@ function recipeDriftJq(passDir, count) {
 // lane uses, and a `run --resume` or `--retake` after rig-only edits.
 // Contract 10 triages a pass's failures: `vybava ui-loop triage` writes
 // <pass>/triage.json (see UILOOP_TRIAGE_CLASSES) and state carries `triage`.
-const UILOOP_STATE_CONTRACT = 10
+// Contract 11 runs fix lanes side by side: `vybava ui-loop lane start | land |
+// abandon | retire`, each lane in a slot worktree of its own and merged into
+// the pass branch when it lands; `state.lanes` (every started lane, its slot
+// and status), `config.fix.parallel` and `lanes.inFlight`.
+const UILOOP_STATE_CONTRACT = 11
 
 // Stops a vybava below the contract with the upgrade. `reported` is the
 // `vybava --version` line Prepare relays, only diagnostic text for the message.
@@ -1205,6 +1240,13 @@ function stateProblem(state) {
   if (state.next && state.next.stage === 'verify' && only == null) return bad('next.only', only, 'the verify selection (screen ids, [] for a full reshoot)')
   const parallel = state.next && state.next.parallel
   if (parallel != null && !(Number.isInteger(parallel) && parallel >= 0)) return bad('next.parallel', parallel, 'a count of review runs')
+  // Contract 11 always prints the started lanes ([] when none) and how many
+  // fix lanes run at once: a relay that dropped the lanes would plan a round
+  // beside a lane that died, and a dropped count would run it one at a time.
+  const fixParallel = state.config.fix && state.config.fix.parallel
+  if (!Array.isArray(state.lanes) || !(Number.isInteger(fixParallel) && fixParallel >= 1)) return `prepare relayed no state.lanes or state.config.fix.parallel, which contract ${UILOOP_STATE_CONTRACT} always prints ([] when no lane is started) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  const stray = state.lanes.find(l => !l || typeof l.lane !== 'string' || typeof l.status !== 'string' || typeof l.worktree !== 'string')
+  if (stray !== undefined) return bad('lanes', stray, '{lane, status, worktree, …} as the CLI prints each started lane')
   // Contract 7 always prints the coverage gaps and notShot, their ids ([]
   // when every screen has an ok shot): a relay that dropped or cut one would
   // let a pass with never-shot screens read as covered.
@@ -1371,6 +1413,19 @@ const UILOOP_DETECT_SCHEMA = {
 // vybava omitted it.
 const UILOOP_CLI_OWNED = 'copy it verbatim from the CLI\'s output; OMIT it when the CLI did not print it — never invent a value or placeholder'
 const UILOOP_BLOCKED = { type: 'object', properties: { batch: { type: 'string' }, reason: { type: 'string' } }, required: ['batch', 'reason'] }
+// A started fix lane as `state.lanes` prints it (contract 11): its record
+// (`<pass>/lanes/<lane>.json`) with the status state judged.
+const UILOOP_STARTED_LANE = {
+  type: 'object',
+  properties: {
+    lane: { type: 'string' }, kind: { type: 'string', description: 'primitives | areas | rework' },
+    dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } },
+    slot: { type: 'integer' }, worktree: { type: 'string', description: 'the slot worktree, absolute' }, slotRoot: { type: 'string', description: 'the config root inside the slot, absolute' }, branch: { type: 'string' }, base: { type: 'string' },
+    owner: { type: 'string' }, status: { type: 'string', description: 'running | unmerged | dirty | conflict' }, ahead: { type: 'integer' },
+  },
+  required: ['lane', 'kind', 'dirs', 'keys', 'worktree', 'owner', 'status'],
+}
+
 const UILOOP_STATE = {
   type: 'object',
   description: 'the `data` of `vybava ui-loop state --json`, verbatim: copy every field the CLI printed and omit every field it did not, never inventing one',
@@ -1378,6 +1433,7 @@ const UILOOP_STATE = {
     contract: { type: 'integer', description: `the ui-loop state contract; ${UILOOP_CLI_OWNED}` },
     vybava: { type: 'string', description: `the binary's version; ${UILOOP_CLI_OWNED}` },
     recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
+    lanes: { type: 'array', description: `every fix lane started and not yet landed or abandoned (contract 11), each as printed; [] when none; ${UILOOP_CLI_OWNED}`, items: UILOOP_STARTED_LANE },
     headSha: { type: 'string' }, scoreboardBasis: { type: 'string' }, checkpointApiNotes: { type: ['array', 'null'], items: { type: 'string' } },
     reviewBasis: { type: 'string', description: `a 64-hex digest (empty before the first pass); ${UILOOP_CLI_OWNED}` },
     capturedHeadSha: { type: 'string', description: `a full commit SHA, or empty; ${UILOOP_CLI_OWNED}` },
@@ -1389,7 +1445,7 @@ const UILOOP_STATE = {
     pending: { type: ['integer', 'null'], description: `a newer pass with no shots and no running capture (state reads the newest pass with shots instead), null when none; ${UILOOP_CLI_OWNED}` },
     paused: { type: ['object', 'null'], description: `the loop's pause (\`vybava ui-loop pause\`): who paused it, when (RFC3339), why and the newest pass then; null while the loop runs; ${UILOOP_CLI_OWNED}`, properties: { by: { type: 'string' }, at: { type: 'string' }, reason: { type: 'string' }, pass: { type: 'integer' } }, required: ['by', 'at'] },
     triage: { type: ['object', 'null'], description: `the pass's failure triage (\`vybava ui-loop triage\`): its triage.json, how many groups and the groups by class; null before the pass was triaged; ${UILOOP_CLI_OWNED}`, properties: { file: { type: 'string' }, groups: { type: 'integer' }, byClass: { type: 'object', additionalProperties: { type: 'integer' } } }, required: ['file', 'groups', 'byClass'] },
-    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } } } },
+    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } }, fix: { type: 'object', description: `the fix stage's settings (contract 11); ${UILOOP_CLI_OWNED}`, properties: { parallel: { type: 'integer', description: 'fix lanes run at once; 1 is one at a time in the pass worktree' } } } } },
     shots: { type: 'integer' }, screens: { type: 'integer', description: 'the reviewable screens: those with at least one ok shot' },
     retired: { type: 'integer', description: `screens the manifest retires (dead code, plugin not installed, feature off): never shot, batched or counted; ${UILOOP_CLI_OWNED}` },
     coverageGaps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'reason'] }, description: `one {id, reason} per screen that is not retired and has no ok shot (unreachable, recipe-failed, error, blank), every one ([] when none); ${UILOOP_CLI_OWNED}` },
@@ -1482,7 +1538,7 @@ const UILOOP_PREP_SCHEMA = {
     state: UILOOP_STATE,
     doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, claimed: { type: 'array', items: UILOOP_BATCH, description: `the batches --claim leased to this run, every one ([] when other runs hold every batch left); ${UILOOP_CLI_OWNED}` }, carried: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, from: { type: 'integer' } }, required: ['screen', 'from'] }, description: `the screens carried from an earlier pass, which no batch holds, every one; ${UILOOP_CLI_OWNED}` } }, required: ['screens', 'batches', 'done', 'left'] },
-    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, rework: { type: 'array', items: UILOOP_LANE, description: `the rework lanes (rework-<n>), every one: the deferred items, each lane owning their needs' dirs and their own; ${UILOOP_CLI_OWNED}` }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
+    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, rework: { type: 'array', items: UILOOP_LANE, description: `the rework lanes (rework-<n>), every one: the deferred items, each lane owning their needs' dirs and their own; ${UILOOP_CLI_OWNED}` }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, inFlight: { type: 'array', items: { type: 'string' }, description: `the open items a started lane holds (contract 11): in no lane; ${UILOOP_CLI_OWNED}` }, open: { type: 'integer' }, finished: { type: 'integer' }, max: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     stale: { type: 'array', items: { type: 'string' }, description: 'the detail of every CHECKPOINT_STALE warning a command printed, verbatim (never in problems)' },
     // The rig lane's work, counted for the fix stage (contract 9); the lane reads the lists itself.
     labels: UILOOP_LABELS,
@@ -1590,6 +1646,9 @@ const UILOOP_LANE_SCHEMA = {
     apiChanges: { type: 'array', items: { type: 'string' }, description: 'primitive lanes: every public API addition, additive only' },
     i18n: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }, description: 'strings the fixes need: {key, <locale>: text} — also in each item\'s checkpoint' },
     treeCleanOfMine: { type: 'boolean' },
+    landed: { type: 'boolean', description: 'a lane in a slot only: `vybava ui-loop lane land` merged it into the pass branch (its data.merged)' },
+    abandoned: { type: 'boolean', description: 'a lane in a slot only: its merge conflicted and `vybava ui-loop lane abandon` gave it up' },
+    notStarted: { type: 'string', description: 'a lane in a slot only: the diagnostic code and detail `vybava ui-loop lane start` refused it with; nothing was changed' },
     paused: UILOOP_PAUSED,
     problems: { type: 'array', items: { type: 'string' } },
   },
@@ -1673,9 +1732,11 @@ const UILOOP_MAP_SCHEMA = {
 //   <out>/pass-<n>/review/backlog.json      the Synthesize agent (scoreboard contract, v1)
 //   <out>/pass-<n>/scoreboard.{json,md}     vybava ui-loop scoreboard
 //   <out>/pass-<n>/fix/lanes.json           vybava ui-loop lanes: the fix lanes by ownership
+//   <out>/pass-<n>/lanes/<lane>.json        a started fix lane in a slot worktree (vybava ui-loop lane start;
+//                                           gone once it lands or is abandoned): its recovery marker
 //   <out>/pass-<n>/fix/<key>.json           one fix item's checkpoint (never committed; a key with "/" nests
 //                                           a directory, so stages read them through `vybava ui-loop checkpoints`, never a glob)
-//   <out>/pass-<n>/locks/<name>.json        the CLI's leases: capture, synth, publish, batch-<id> (no agent touches one)
+//   <out>/pass-<n>/locks/<name>.json        the CLI's leases: capture, synth, publish, batch-<id>, lane-<lane> (no agent touches one)
 //   <out>/probe-<UTC time>/                 vybava ui-loop run --probe: the rig lane's check of its repairs, never a pass
 //                                           (its data.probe.dir names it; no stage builds the path)
 // The capture shoots the workspace's running app and nothing else starts it:
@@ -1762,19 +1823,28 @@ async function uiLoopReview(A, run = workflowRun(A)) {
   const doctorCmd = `\`vybava ui-loop doctor --for ${doctorFor}${boxPublish && asked && shootsNow(asked) ? boxFlags : ''} --json\``
   const boxWhy = ' (this run publishes from the box: its last check, box-publish, probes the Devbox guest through the capture\'s wrap)'
   const doctorBox = !boxPublish ? '' : !asked ? `, with \`${boxFlags.trim()}\` before \`--json\` when that stage is capture or verify${boxWhy}` : shootsNow(asked) ? boxWhy : ''
+  // How many fix lanes run at once (contract 11): the run's `fixParallel`,
+  // else the repo's uiLoop.fix.parallel, which only state tells. The CLI packs
+  // a phase into as many lanes as run at once by itself; an explicit count
+  // packs it the same way, and 1 keeps a phase's lanes as they were, run one
+  // at a time in the pass worktree.
+  const askedParallel = A.fixParallel == null ? 0 : Math.max(1, Math.min(UILOOP_MAX_LANES, Math.floor(A.fixParallel) || 1))
+  const lanesMax = !askedParallel ? '' : ` --max ${askedParallel > 1 ? askedParallel : UILOOP_MAX_LANES}`
   phase('Prepare')
   // The script has no clock or randomness (they break resume), so Prepare
   // mints the run's lease owner: identical runs get their own, and a resumed
   // run replays this journaled answer and keeps its leases. Only a synthesis
   // retry passes `owner`, so it re-enters the synth lease its run took.
-  const ownerStep = A.owner ? `This run's lease owner is ${A.owner}, a synthesis retry's: return it as owner` : 'Mint this run\'s lease owner once: `review-loop-` followed by the lowercase output of `uuidgen`, returned as owner'
+  // A fix continuation after a lane failed passes `owner` too: it takes that
+  // run's lanes back at once instead of waiting for their leases to run out.
+  const ownerStep = A.owner ? `This run's lease owner is ${A.owner}, the one of the run it continues: return it as owner` : 'Mint this run\'s lease owner once: `review-loop-` followed by the lowercase output of `uuidgen`, returned as owner'
   const prep = await run.agent(brief(withUiLoop(
     `Relay the ui-loop state of this checkout. Run the commands below and return their envelopes' \`data\` VERBATIM — every array element, however long; never summarize, sample or recount anything yourself. Copy every field a command printed as it is and OMIT a field it did not print: never invent a value or a placeholder. A printed field your output schema has no slot for is dropped, not reported: the schema names every field the run reads, and a strict structured output cannot carry the rest. Two free-text fields travel cut to their first 120 characters, everything else verbatim: each state.coverageGaps[].reason and each triage group's evidence. The run reads only their opening words, and the full text stays one \`vybava ui-loop state --json\` or \`<passDir>/triage.json\` read away for any agent that needs it. Change nothing beyond what the commands write.\n` +
     `1. The repo you are in (\`git rev-parse --show-toplevel\`, absolute), the branch, the devbox workspace from \`devbox url --json\` (empty when none), and the line \`vybava --version\` prints, verbatim, as vybava (empty when there is no binary). The run needs ui-loop state contract ${UILOOP_STATE_CONTRACT}; never upgrade vybava yourself — the workflow checks the contract and asks for \`brew upgrade --cask vybava\`. ${ownerStep}; every --owner below takes that same string.\n` +
     `2. \`vybava ui-loop state --json --cap ${cap}${passFlag}${primFlag}\` → its \`data\` as state (its diagnostics go to problems, except a CHECKPOINT_STALE warning — an item open again, which the fix stage takes; nothing to repair — whose detail goes to stale, from any command below too). A CONFIG_MISSING diagnostic (or no vybava.config.ts, or no \`vybava\` binary) means configured=false and you stop.\n` +
     `3. ${doctorCmd}${doctorBox} → its \`data\` as doctor, also when it exits non-zero (ok=false). When it prints no \`data\` (an older vybava without the verb, or an error before its checks), omit doctor and add each of its diagnostics to problems as "doctor <code>: <detail>".\n` +
     (batchStep ? `4. ${batchStep}: \`vybava ui-loop batches --json --pass <state.pass> --claim ${reviewers} --owner <owner>${A.batch ? ` --size ${A.batch}` : ''}\` → its \`data\` as batches, \`claimed\` included: the batches it leased to this run ([] when other runs hold every batch left). Digests travel only with the batches this run claimed (in \`claimed\` and in their \`batches\` entries); every other entry of \`batches\` is relayed as {id, area, screens} — the run never reads another run's digests, and all of them would overflow your output. Then \`vybava ui-loop triage --pass <state.pass> --json\` → its \`data\` as triage: every group with every screen id. It writes <state.passDir>/triage.json and the Failure triage section of <state.passDir>/report.md, nothing else; every diagnostic it prints but NO_PREVIOUS goes to problems verbatim as "triage <code>: <detail>" (a CAPTURE_REVISION_MISSING means recipe-drift was not judged).\n` : '') +
-    (laneStep ? `${batchStep ? 5 : 4}. ${laneStep}: \`vybava ui-loop lanes --json --pass <state.pass> --max ${UILOOP_MAX_LANES}${primFlag}\` → its \`data\` as lanes.\n` : '') +
+    (laneStep ? `${batchStep ? 5 : 4}. ${laneStep}: \`vybava ui-loop lanes --json --pass <state.pass>${lanesMax}${primFlag}\` → its \`data\` as lanes.\n` : '') +
     (rigStep ? `${4 + [batchStep, laneStep].filter(Boolean).length}. ${rigStep}: count the rig lane's work. \`vybava ui-loop check --labels --json\` → its \`data.labels\` as labels, also when it exits non-zero on LABEL_MISSING errors (omit labels when it prints none: the repo sets no uiLoop.labels.sources); \`${recipeFailedJq('<state.passDir>', true)}\` → recipeFailed; and only when <state.passDir>/triage.json exists, \`${recipeDriftJq('<state.passDir>', true)}\` → recipeDrift; and \`${checkpointsCommand('<state.pass>')} | jq -c '[.data.checkpoints[] | select(.key | startswith("rig/")) | {key, status}]'\` → rigCheckpoints, the rig lane's admitted checkpoints of the pass ([] when none).\n` : '') +
     (batchStep || laneStep ? `A PAUSED diagnostic from ${batchStep && laneStep ? 'step 4 or 5' : 'step 4'} means the loop was paused after step 2: put its detail, verbatim, in paused (not problems) and stop.\n` : '') +
     `${REVIEWER_STEP}\n`
@@ -1892,6 +1962,42 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const questions = ownerQuestions(found, null, round.questions)
     const stuck = reworkStuck(found, null, new Set(lastLane ? [recovery.lane] : []), round.stuck)
     return Object.assign(out, { stage: 'fix', ownerQuestions: questions, reworkStuck: stuck, next: { stage: clear ? 'auto' : 'fix', args: Object.assign({}, carry, { pass: state.pass, stage: clear ? 'auto' : 'fix', recovery: clear ? undefined : recovery, ownerQuestions: questions, reworkStuck: stuck }) }, receipt: completionReceipt({ problems: [...out.problems, ...((recovered && recovered.problems) || []), ...((recovered && recovered.failures) || []), clear ? 'writer recovered; read stage evidence again' : 'interrupted writer still needs recovery'], open: roundOpen(questions, stuck, false) }) })
+  }
+  // A fix lane in a slot (contract 11) that no run holds: its agent died, or
+  // its landing failed. This run's own count too (a continuation that kept
+  // its owner): a run starts lanes only after this point, so one it already
+  // holds is one its last step left. Each is recovered in its own slot, side
+  // by side, before the round plans on: its items are in flight, and its
+  // commits are not in the pass branch yet. A lane another run holds runs on.
+  const fixOwner = prep.owner
+  const laneCli = (verb, lane) => `vybava ui-loop lane ${verb} ${lane} --owner ${fixOwner} --pass ${state.pass} --json`
+  // What a lane in a slot does with its landing, and with each refusal.
+  const landSteps = lane =>
+    `LAND before you return, also when you stop early: commit every edit path-limited in the slot, then from ROOT \`${laneCli('land', lane)}\`. It refuses with a diagnostic and changes nothing until you repair what it names: LANE_DIRTY — commit path-limited, or remove your in-flight edits, and land again. LANE_FOREIGN_FILES — each file in data.foreign belongs to another writer (an i18n catalog, the spec, a frozen dir, another lane's dir): in the slot restore it to the lane's base (\`git checkout <base> -- <file>\`), commit, rewrite that item's checkpoint as "status":"deferred" with the change in its needs (a catalog string goes in the checkpoint's i18n instead), and land again. LANE_CONFLICT — never resolve it by hand: run \`${laneCli('abandon', lane)}\` (your commits are kept under its data.kept; your items return to the next round) and return abandoned=true with every key in remaining. ` +
+    `Landed (data.merged is true): data.checkpoints.unadmitted and data.checkpoints.missing name the keys whose checkpoint does not count — return each in remaining, never in done, skipped, deferred or blocked, and say why in problems. Return landed=true and treeCleanOfMine=true only after a landing or an abandon left the slot clean (\`git -C <slot> status --porcelain\` prints nothing).`
+  const adrift = (state.lanes || []).filter(l => l.status !== 'running' || l.owner === fixOwner)
+  if (adrift.length) {
+    phase('Recover')
+    const lastOf = l => l.kind === 'rework'
+    const recovered = await run.parallel(adrift.map(l => () => run.agent(brief(withUiLoop(
+      `Recover ONLY fix lane ${l.lane} (${l.kind}) of ui-loop pass ${state.pass}, which no run holds (${l.status}), in its own slot, BEFORE the round plans on. Other lanes may be running in their slots: never touch them.\n` +
+      `From the pass worktree (your working directory now; call it ROOT) run \`${laneCli('start', l.lane)}\`: it takes the lane over as it was left (data.resumed is true) and names its slot (data.lane.worktree; data.lane.slotRoot is the slot's copy of ROOT, which its dirs are under), base, dirs and keys. LEASE_HELD means another run holds it after all: change nothing and return notStarted with the code and detail, treeCleanOfMine=true, landed=false.\n` +
+      `In the slot read \`git status\`, \`git log <base>..HEAD\` and the lane's checkpoints (ROOT/${passDir}/fix/<key>.json for each of its keys). Finish or remove only its in-flight edits within its dirs (${JSON.stringify(l.dirs)}); commit source path-limited after the repo's source-only checks (\`devbox run -- '<cmd>'\` from the slot; no stack). Never revert a commit of the lane, another writer's work or edits you cannot attribute. Recheck each of its checkpoints against the slot: commit (${UILOOP_CHECKPOINT_COMMIT}, in the slot), fileDigests, API notes and reason; refresh one only after its source commit. Never edit the spec or an i18n catalog. Run every \`vybava ui-loop\` command from ROOT, never the slot.\n` +
+      (l.status === 'conflict' ? `Its merge already conflicted and was aborted: go straight to \`${laneCli('abandon', l.lane)}\` once the slot is clean, and return abandoned=true.\n` : landSteps(l.lane) + '\n') +
+      `Return in blocked {key, ask} every key of the lane whose checkpoint is now blocked, ask being its note put as the question for its owner${lastOf(l) ? '; a rework lane is an item\'s last, so likewise return in deferred {key, needs} every key whose checkpoint is now deferred' : ''}. Return lane, done (the keys whose checkpoint counts after the landing), skipped, remaining, commits, treeCleanOfMine, landed or abandoned, and problems.`
+    , true, true)), { label: `recover:${l.lane}`, phase: 'Recover', schema: UILOOP_LANE_SCHEMA })))
+    const through = r => !!r && r.treeCleanOfMine === true && (r.landed === true || r.abandoned === true)
+    const clear = recovered.every(through)
+    // Only a landed lane's checkpoints count: an abandoned one's items return
+    // to the next round, so what it blocked or deferred asks and ends nothing.
+    const landedAt = i => !!recovered[i] && recovered[i].landed === true
+    const found = adrift.map((l, i) => ({ lane: l.lane, blocked: (landedAt(i) && recovered[i].blocked) || [], deferred: (lastOf(l) && landedAt(i) && recovered[i].deferred) || [] }))
+    const questions = ownerQuestions(found, null, round.questions)
+    const stuck = reworkStuck(found, null, new Set(adrift.filter(lastOf).map(l => l.lane)), round.stuck)
+    const left = adrift.filter((_, i) => !through(recovered[i])).map(l => l.lane)
+    // A lane still adrift keeps this run's owner for the next step, which
+    // takes it back at once; a cleared round reads the stage evidence again.
+    return Object.assign(out, { stage: 'fix', ownerQuestions: questions, reworkStuck: stuck, next: { stage: clear ? 'auto' : 'fix', args: Object.assign({}, carry, { pass: state.pass, stage: clear ? 'auto' : 'fix', owner: clear ? undefined : fixOwner, ownerQuestions: questions, reworkStuck: stuck }) }, receipt: completionReceipt({ problems: [...out.problems, ...recovered.flatMap((r, i) => ((r && r.problems) || []).map(p => `${adrift[i].lane}: ${p}`)), clear ? `fix lanes ${adrift.map(l => l.lane).join(', ')} recovered; read stage evidence again` : `fix lanes ${left.join(', ')} still need recovery in their slots`], open: roundOpen(questions, stuck, false) }) })
   }
   // A round that a recovery finished (a pause before Settle, then Settle's
   // recovery) has nothing left for fix, so state routes on: this run ends the
@@ -2143,7 +2249,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       // One line per screen, never per shot: a coverage gap is one screen
       // without an ok shot, however many viewports and themes it missed.
       `The screens not captured are the pass's coverage gaps, one {id, reason} per screen: \`vybava ui-loop state --json --pass ${cap1.pass} | jq -c '.data.coverageGaps[]'\`. A gap belongs to the area its shot records name (\`.area\` of ${newDir}/shots/<id>/*.json). A retired screen is no gap and gets no line.\n` +
-      `On each area's set board (open it by the index url) upsert this pass's sections and lay out its existing shots as the listed sections, in order: one board section per entry, holding the cards whose labels it lists. Each section frame's payload carries the entry's {journey, pass} — a capture pass of that journey chain, so a review plan scopes the latest pass by structure: compose the frame with them, or \`update_cards\` it — which replaces a payload wholesale, so send the frame's whole payload (title included) with journey and pass added (an index without them, from an older vybava: journey \`<area>-<viewport>-<theme>\`, pass ${cap1.pass}). At the head of the pass's first section put a "${title}" summary callout naming the shot count and how many are not ok. Render the area's coverage gaps as ONE text card "Not captured this pass", one line \`<id> — <reason>\` per gap (never one per viewport or theme), never as images; an area without gaps gets none. Earlier passes' sections stay untouched. Replay replaces this pass's summary and gaps card instead of duplicating them. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back.\n` +
+      `On each area's set board (open it by the index url) upsert this pass's sections and lay out its existing shots as the listed sections, in order: one board section per entry, holding the cards whose labels it lists. Each section frame's payload carries the entry's {journey, pass} — a capture pass of that journey chain, so a review plan scopes the latest pass by structure: compose the frame with them, or \`update_cards\` it — its payload merges, so send journey and pass alone (an index without them, from an older vybava: journey \`<area>-<viewport>-<theme>\`, pass ${cap1.pass}). At the head of the pass's first section put a "${title}" summary callout naming the shot count and how many are not ok. Render the area's coverage gaps as ONE text card "Not captured this pass", one line \`<id> — <reason>\` per gap (never one per viewport or theme), never as images; an area without gaps gets none. Earlier passes' sections stay untouched. Replay replaces this pass's summary and gaps card instead of duplicating them. Read \`docs {topic: "kind:board"}\` first; express placement by intent and read each board back.\n` +
       `Write [{area, url, slug, section}] to ${newDir}/publish/boards.json and return it: url and slug are the set board's, server-returned; section is the title of this pass's first section (the one the summary callout heads).`
     )), { label: 'boards', phase: 'Boards', agentType: 'vitrinka:vitrinka-publisher', schema: UILOOP_BOARDS_SCHEMA })
     if (boards) { out.boards = boards.boards; out.problems.push(...(boards.problems || [])) } else out.problems.push('boards: laying the pass out on the area set boards failed — the sets are published; rerun stage capture to lay them out')
@@ -2387,12 +2493,23 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     const reworkLanes = new Set(rework.map(l => l.lane))
     const foreign = lanes.foreign || []
     const i18nItems = lanes.i18n || []
-    log(`fix: ${prim.length} primitives lanes, ${areas.length} area lanes, ${rework.length} rework lanes (${state.rework || 0} deferred items), ${lanes.frozen.length} frozen dirs, ${foreign.length} foreign, ${i18nItems.length} i18n-only, ${lanes.finished} already finished`)
+    // Contract 11: with more than one lane at once, each works in a slot
+    // worktree of its own (`vybava ui-loop lane start`) and lands by a merge
+    // into the pass branch (`lane land`); the lane record is its recovery
+    // marker. One at a time, a lane works in the pass worktree as before.
+    const par = askedParallel || Math.max(1, Math.min(UILOOP_MAX_LANES, cfg.fix.parallel))
+    const slots = par > 1
+    const inFlight = lanes.inFlight || []
+    log(`fix: ${prim.length} primitives lanes, ${areas.length} area lanes, ${rework.length} rework lanes (${state.rework || 0} deferred items), ${lanes.frozen.length} frozen dirs, ${foreign.length} foreign, ${i18nItems.length} i18n-only, ${lanes.finished} already finished${inFlight.length ? `, ${inFlight.length} in flight in another run's lanes` : ''}; ${slots ? `${par} lanes at once, each in its own slot` : 'one lane at a time'}`)
+    const writerStep = (l, kind) => (slots
+      ? `You work in a SLOT: a git worktree of your own beside the pass worktree, so other lanes run next to you. From the pass worktree (your working directory now; call it ROOT) run \`${laneCli('start', l.lane)}\`. Any refusal of \`lane start\` (PAUSED, LEASE_HELD, LANE_OVERLAP, LANE_DIRTY when no slot is usable, or any other diagnostic) starts nothing: change nothing and return notStarted with its code and detail, every key in remaining, treeCleanOfMine=true and landed=false. Its data.lane names your slot (worktree), its branch, its base and the dirs and keys you hold; data.lane.slotRoot is the slot's copy of ROOT (the same directory inside the slot), and your dirs and every repo-relative path are under it; data.resumed=true means an earlier holder left commits or edits there, so read \`git status\` and \`git log <base>..HEAD\` in the slot first and continue from them. Edit, check and commit ONLY inside the slot (\`git -C <slot> …\`, or cd there); never edit or commit in ROOT. The slot holds source only: every ${passDir}/… path of this brief is under ROOT, so read the backlog and the shots there and write each checkpoint to ROOT/${passDir}/fix/<key>.json by absolute path, and run every \`vybava ui-loop\` command from ROOT, never the slot. A checkpoint's commit and fileDigests are the slot's: \`git -C <slot> rev-parse HEAD\` and the SHA256 of the files as the slot holds them.\n` +
+        `Checks in the slot are source-only: \`devbox run -- '<the repo's type-check or lint for what you touched>'\` from the slot (its own Devbox workspace, no stack; the first run there syncs and installs). Never start a stack for the slot, and never judge the shared dev server from it: Settle confirms it after every lane has landed.\n`
+      : `Before any source edit, atomically write ${passDir}/fix/recovery.json = ${JSON.stringify({ lane: l.lane, kind, dirs: l.dirs, keys: l.keys })} (temp/fsync/rename/directory sync). It is the durable writer identity. Keep it on failure or dirty source; remove it only after all your source edits are committed and the application tree is clean outside pass output/.vitrinka.\n`)
     const laneBrief = (l, kind, apiNotes) => brief(withUiLoop(
       pauseStep(state.pass) +
       `You are fix lane ${l.lane} (${kind}) of ui-loop pass ${state.pass}, on branch ${prep.branch}. The spec is \`${cfg.spec}\` (read it first; its rules and owner decisions are final); the apps run on the devbox${prep.workspace ? ` workspace ${prep.workspace}` : ''} and stay running.\n` +
       decided('fix') +
-      `Before any source edit, atomically write ${passDir}/fix/recovery.json = ${JSON.stringify({ lane: l.lane, kind, dirs: l.dirs, keys: l.keys })} (temp/fsync/rename/directory sync). It is the durable writer identity. Keep it on failure or dirty source; remove it only after all your source edits are committed and the application tree is clean outside pass output/.vitrinka.\n` +
+      writerStep(l, kind) +
       `WHAT TO FIX: these backlog keys, in this order (worst first): ${JSON.stringify(l.keys)}.\n` +
       `Read each item's full body from ${passDir}/review/backlog.json by key (\`jq '.findings[] | select(.key=="<key>")' ${passDir}/review/backlog.json\`): title, detail, acceptance, files, screen, viewports, themes, shots. Look at its shots under ${passDir}/shots/<screen>/<viewport>.<theme>.png before and while you fix.\n` +
       `Checkpoints require basis ${state.reviewBasis}, commit (${UILOOP_CHECKPOINT_COMMIT}), fileDigests (SHA256 of every source file this item changed; a skip, block or deferral: of every in-repo file it lists except i18n catalogs, plus every needs file) and apiChanges. Missing, reverted or stale checkpoints must be reevaluated.\nYOUR DIRS — you own the files directly inside them, not their subdirectories: ${JSON.stringify(l.dirs)}. Checkpoints go to ${passDir}/fix/<key>.json with "lane":"${l.lane}". A fix that needs a file outside them is checkpointed "status":"deferred" with "needs":[{"file":"<repo-relative path>","change":"<what to change there>"}], never blocked: blocked is for a blocker outside this repo only.\n` +
@@ -2401,11 +2518,56 @@ async function uiLoopReview(A, run = workflowRun(A)) {
         : kind === 'rework'
           ? `You are a rework lane: an earlier lane deferred each of these items because its fix needs files outside that lane's dirs. Before your first edit read every one's needs and note from its deferred checkpoint, the file itself (\`jq '{status, needs, note}' ${passDir}/fix/<key>.json\`) — never through \`ui-loop checkpoints\`, which drops a deferral once a needs file changes, as this round's lanes (yours included) may do. A key whose file holds no deferred checkpoint: work out its fix from its backlog item, say so in problems, and never invent needs. Your dirs hold every needs file and the item's own, so make the whole fix here and replace the deferred checkpoint with its finishing one. ${lanes.frozen.length ? `A needs file in a primitive dir (${JSON.stringify(lanes.frozen)}) changes that primitive's public API ADDITIVELY only (nothing removed or renamed): return each addition in apiChanges and document it beside the changed primitive code and in the checkpoint's apiChanges.${apiNotes.length ? ` Additions made this round: ${JSON.stringify(apiNotes)}.` : ''} ` : ''}The rework phase is an item's last lane: a fix that still needs a file outside your dirs is checkpointed deferred again with its complete needs (the earlier ones too) and returned in deferred, which ends the round for it like a block.\n`
           : `Primitive dirs are FROZEN (the primitives lanes finished first): never edit a file in ${JSON.stringify(lanes.frozen)}.${apiNotes.length ? ` Additions they made this round: ${JSON.stringify(apiNotes)}.` : ''} An item that needs a primitive change is checkpointed deferred with that change in its needs.\n`) +
-      `Return the done/skipped/deferred/blocked keys (each deferred one with its needs, each blocked one with the question for its owner), remaining (keys not reached), commits, touched screens, apiChanges, i18n and treeCleanOfMine.`
-    , true))
+      (slots ? landSteps(l.lane) + '\n' : '') +
+      `Return the done/skipped/deferred/blocked keys (each deferred one with its needs, each blocked one with the question for its owner), remaining (keys not reached), commits, touched screens, apiChanges, i18n and treeCleanOfMine${slots ? ', and landed or abandoned' : ''}.`
+    , true, slots))
     const results = []
     const lanePhase = { primitives: 'Fix: primitives', areas: 'Fix: areas', rework: 'Fix: rework' }
+    // A phase's lanes side by side: waves of at most `par` lanes that own no
+    // dir together (laneWaves; `lane start` refuses the pair either way), one
+    // wave after another. A lane is through once it landed or was abandoned,
+    // or never started (its keys stay for the next run). One that failed
+    // stops the round after its wave: the others of the wave landed, and it
+    // stays a started lane, which the next run recovers in its own slot.
+    // Only a landing puts a lane's work in the pass branch: one abandoned
+    // counts none of what it reports (its items return to the next round),
+    // and one that failed only its dirty state, for the summary.
+    const refusals = []
+    let laneEnded = false
+    const runSlotLanes = async (ls, kind, apiNotes) => {
+      const selected = ls.slice(0, Math.max(0, run.remaining() - 1)) // reserve Settle, including calls already spent on Detect/Prepare
+      const through = r => !!r && !r.paused && r.treeCleanOfMine === true && (r.landed === true || r.abandoned === true || !!r.notStarted)
+      for (const wave of laneWaves(selected, par)) {
+        const got = await run.parallel(wave.map(l => () =>
+          run.agent(laneBrief(l, kind, apiNotes), { label: `fix:${l.lane}`, phase: lanePhase[kind], schema: UILOOP_LANE_SCHEMA })))
+        wave.forEach((l, i) => {
+          const r = got[i]
+          if (!r || r.paused) return
+          if (r.notStarted) refusals.push(r.notStarted.split(':')[0])
+          else if (r.landed === true) { results.push(r); laneEnded = true }
+          else if (through(r)) laneEnded = true
+          else results.push({ lane: l.lane, done: [], skipped: [], remaining: l.keys, commits: [], treeCleanOfMine: r.treeCleanOfMine === true })
+        })
+        for (const r of got) if (r) out.problems.push(...(r.problems || []).map(p => `${r.lane}: ${p}`))
+        for (const r of got) if (r && r.notStarted) out.problems.push(`fix lane ${r.lane} did not start: ${r.notStarted}`)
+        for (const r of got) if (r && r.abandoned) out.problems.push(`fix lane ${r.lane} conflicted with the pass branch and was abandoned: its commits are kept and its items return to the next round`)
+        const failed = wave.filter((_, i) => !through(got[i]) && !(got[i] && got[i].paused))
+        const stopped = got.find(r => r && r.paused)
+        if (!failed.length && !stopped) continue
+        if (failed.length) {
+          out.fix = laneSummary(results)
+          tally(null)
+          out.problems.push(`fix lane${failed.length > 1 ? 's' : ''} ${failed.map(l => l.lane).join(', ')} failed or did not land; the next run recovers ${failed.length > 1 ? 'each in its own slot' : 'it in its slot'}`)
+          out.adrift = failed.map(l => l.lane)
+          return false
+        }
+        out.paused = stopped.paused
+        return false
+      }
+      return true
+    }
     const runLanes = async (ls, kind, apiNotes) => {
+      if (slots) return runSlotLanes(ls, kind, apiNotes)
       const selected = ls.slice(0, Math.max(0, run.remaining() - 1)) // reserve Settle, including calls already spent on Detect/Prepare
       const batch = await run.serial(selected.map(l => () =>
         run.agent(laneBrief(l, kind, apiNotes), { label: `fix:${l.lane}`, phase: lanePhase[kind], schema: UILOOP_LANE_SCHEMA })), r => !!r && r.treeCleanOfMine === true && !r.paused)
@@ -2435,7 +2597,10 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     }
     const inRound = extra => ({ stage: 'fix', args: Object.assign({}, carry, { stage: 'fix', ownerQuestions: out.ownerQuestions, reworkStuck: out.reworkStuck }, extra) })
     const fixReceipt = (ends = false) => completionReceipt({ problems: out.problems, open: roundOpen(out.ownerQuestions || [], out.reworkStuck || [], ends) })
-    const recover = () => Object.assign(out, { next: inRound({ pass: state.pass, recovery: out.recovery }), receipt: fixReceipt() })
+    // A lane that failed in its slot stays a started lane: the continuation
+    // keeps this run's owner, so its Prepare finds the lane its own and
+    // recovers it at once, never waiting for the lease to run out.
+    const recover = () => Object.assign(out, { next: inRound(out.adrift ? { pass: state.pass, owner: fixOwner } : { pass: state.pass, recovery: out.recovery }), receipt: fixReceipt() })
     // A pause ends the round at a lane boundary (or before Settle or the rig
     // lane). Only Settle applies the strings the finished lanes' checkpoints
     // carry, so a round whose lanes changed anything resumes with Settle's
@@ -2448,6 +2613,13 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       return Object.assign(out, { next: null, resume: inRound(settleRecovery), reason: pauseReason(out.paused) })
     }
     const stop = () => (out.paused ? pausedFix() : recover())
+    // A round whose every lane `lane start` refused (no lane landed or was
+    // abandoned) would hand on the same refusals to the next run, and that
+    // run to the next: it stops instead, with the continuation as its resume.
+    // A lane another run holds lands with that run, which carries the round on.
+    const handOn = reason => (refusals.length && !laneEnded
+      ? Object.assign(out, { next: null, resume: inRound(), reason: `every fix lane this run planned was refused at \`lane start\` (${[...new Set(refusals)].join(', ')}; each in problems), and a run of the same args would be refused again: launch this result's resume once what refused them has cleared — ${reason}`, receipt: fixReceipt() })
+      : Object.assign(out, { next: inRound(), reason, receipt: fixReceipt() }))
     let wait = ''
     if (prim.length) {
       phase('Fix: primitives')
@@ -2484,6 +2656,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
         `5. Type-check what the round touched the way the repo's CLAUDE.md prescribes — on the devbox, never a full build on the Mac. An error this round's commits (${JSON.stringify(results.flatMap(r => r.commits || []))}) caused you fix and commit path-limited; one that predates them you report.\n` +
         `6. Confirm the shared dev server is green (its log in the devbox workspace).\n` +
         (prep.labels ? `7. After your last commit, \`vybava ui-loop check --labels --json\` → its \`data.labels\` as labels, also when it exits non-zero on LABEL_MISSING errors: a fix this round may have renamed a control a recipe names, and the rig lane after you repairs what it lists. It is no failure of yours.\n` : '') +
+        (slots ? `8. The lanes ran in slot worktrees beside this one and every one of them has landed here. After your last commit and checkpoint, \`vybava ui-loop state --pass ${state.pass} --json\`: when its data.lanes is [] and its data.next.stage is not "fix", the round's lanes are through and you retire the slots — \`vybava ui-loop lane retire --pass ${state.pass} --dry-run --json\` lists them; in each slot of its data.removed run \`devbox sync --pause --json\` first, then \`vybava ui-loop lane retire --pass ${state.pass} --json\`, then \`devbox retire --worktree <slot> --json\` for each slot it removed. A slot it keeps (data.kept, each with why) you report in problems and never force. Otherwise leave the slots: the next run reuses them.\n` : '') +
         `Checkpoints follow the lane rules: basis ${state.reviewBasis}, commit (${UILOOP_CHECKPOINT_COMMIT}; a foreign or i18n-only blocked item needs one too — write those after your last commit, so a later commit of yours never leaves them stale), fileDigests (SHA256 of every source file the item changed; a block: of every in-repo file it lists except i18n catalogs), apiChanges and i18n, written after the commit, never committed. Never touch the database, the devbox stack or captures; never push. Return green, what you ran, failures, commits, i18nAdded, the keys you checkpointed and the foreign ones blocked${prep.labels ? ', and labels' : ''}.`
       , true)), { label: 'settle', phase: 'Settle', schema: UILOOP_SETTLE_SCHEMA })
       if (settle && settle.paused) { out.paused = settle.paused; return pausedFix() }
@@ -2502,7 +2675,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
       return recover()
     }
     if ((results.length || foreign.length || i18nItems.length) && !settle) return recover()
-    if (wait) return Object.assign(out, { next: inRound(), reason: wait, receipt: fixReceipt() })
+    if (wait) return handOn(wait)
     const fin = finishedBy(results)
     for (const k of (settle && settle.checkpointed) || []) fin.add(k)
     // An item a primitives or area lane deferred this run is the next run's
@@ -2512,7 +2685,7 @@ async function uiLoopReview(A, run = workflowRun(A)) {
     for (const r of results) if (reworkLanes.has(r.lane)) for (const d of r.deferred || []) fin.add(d.key)
     const deferred = new Set(results.flatMap(r => (r.deferred || []).map(d => d.key)).filter(k => !fin.has(k)))
     const left = [...[...prim, ...areas, ...rework].flatMap(l => l.keys), ...foreign, ...i18nItems].filter(k => !fin.has(k) && !deferred.has(k))
-    if (left.length || deferred.size) return Object.assign(out, { next: inRound(), reason: [left.length ? `${left.length} items without a checkpoint` : '', deferred.size ? `${deferred.size} deferred items wait for the rework phase` : ''].filter(Boolean).join('; '), receipt: fixReceipt() })
+    if (left.length || deferred.size) return handOn([left.length ? `${left.length} items without a checkpoint` : '', deferred.size ? `${deferred.size} deferred items wait for the rework phase` : ''].filter(Boolean).join('; '))
     // ---- rig: the round ends with the rig lane (runRig) when Prepare
     // counted it work. It is a screen's last lane, as a rework lane is an
     // item's: its blocks join the round's owner questions and its deferrals
@@ -2563,7 +2736,7 @@ function laneSummary(results) {
 //   ui-loop mode (lib/uiloop-review.js): stage?: 'auto'|'capture'|'review'|'fix'|'verify', pass?, cap?: 6 passes, fresh?,
 //         apps?, only? (a capture state does not select), viewports?, themes?, workers?, wrap?, areas? (narrows nothing: a run with areas never shoots, and a review takes the batches it claims),
 //         publish?: 'mac' | 'box' — default 'mac' (rsync the pass back, publish it here); 'box' publishes in the Devbox guest through the wrap (`vybava ui-loop publish --box`, preflighted by `doctor --box`), and the pass still comes back for the reviewers, without publish/ and locks/; it rides every continuation,
-//         batch?: 14, reviewers?: 4 (batches a review run claims), owner? (set only by a review continuation that takes back its run's leases: never pass one to parallel runs), parallel? (set on the runs a review hands on as a fan-out: each continues as one), ownerQuestions? and reworkStuck? (set only by a continuation inside a fix round: its owner questions and the items its rework lanes deferred again or its rig lane deferred, so far), primitives?: directory prefixes (vybava ui-loop state and lanes --primitives),
+//         batch?: 14, reviewers?: 4 (batches a review run claims), owner? (set only by a review continuation that takes back its run's leases: never pass one to parallel runs), parallel? (set on the runs a review hands on as a fan-out: each continues as one), ownerQuestions? and reworkStuck? (set only by a continuation inside a fix round: its owner questions and the items its rework lanes deferred again or its rig lane deferred, so far), primitives?: directory prefixes (vybava ui-loop state and lanes --primitives), fixParallel?: 1-4 fix lanes at once, each in its own slot worktree (default: the repo's uiLoop.fix.parallel, 3; 1 runs them one at a time in the pass worktree),
 //         repo?: absolute path — every agent works there (cd first); the run stops when Detect/Prepare report another repo }
 const A = args || {}
 const run = workflowRun(A)
@@ -2713,7 +2886,7 @@ for (let pass = firstPass; pass <= Math.min(cap, firstPass); pass++) {
     `Exploratory usertest, pass ${pass}, against ${prep.baseUrl} ${utWhere}.\n` +
     `Journeys to walk:\n${JSON.stringify(journeys)}\n${A.scope ? `Focus: ${A.scope}\n` : ''}` +
     (unwalked.length ? `Fixed failures to walk again — each is ONE case on its device (the \`lane\` field) under exactly this title (a journey above with the same title is that case), so the loop can tell the fix held:\n${JSON.stringify(rewalkCases(unwalked))}\n` : '') +
-    `Follow the vitrinka usertest skill's lane 2 (\`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants or edit application source (including tests); captures and QA records are your only writes. Return the cases with verdicts and the bug task urls \`finish\` printed.`
+    `Follow the vitrinka qa skill's usertest exploratory lane (Skill tool: vitrinka-qa:qa, args "usertest"; \`vitrinka qa usertest start${task ? ` --task ${task}` : ''} --app ${type} --platform ${utPlatform} --device ${utDevice} --yes\`, then \`case\`, captures, \`verdict\`, and \`finish --bugs direct --yes\`). One case per journey per device, titled with the journey's title verbatim (a failure is tracked across passes by that title); a fail carries --note with the exact contract broken and the implementing files. Understand before judging: read the code behind a suspicious behaviour. Never touch production tenants or edit application source (including tests); captures and QA records are your only writes. Return the cases with verdicts and the bug task urls \`finish\` printed.`
   ), { label: 'usertest', phase: 'Capture', schema: USERTEST_SCHEMA })
 
   const results = (await run.parallel([...shooters, tester])).filter(Boolean).flatMap(r => r.sets || [r])

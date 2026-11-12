@@ -15,7 +15,7 @@ seen and the Sentry link. Start there; never start from Sentry's issue list.
 ## The reads
 
 - A problem: `get {kind: "task", id}` — body plus `signals`. Pick it up like
-  any task (the pickup skill) when you will fix it.
+  any task (`work pickup`) when you will fix it.
 - An old Sentry short id or a pasted id: `search {q: "FIXIT-API-7K", mode:
   "resolve"}` answers the problem it belongs to, exactly.
 - One group, handled or not: `get {kind: "signal_group", id}` (a group id or
