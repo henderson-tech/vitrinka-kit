@@ -23,10 +23,19 @@ bun run --filter '@vitrinka/expo' build   # bob build → packages/expo/build
 bun run --filter '@vitrinka/expo' test
 ```
 
+The Swift package (`packages/macos`, described by the root `Package.swift`)
+needs Xcode 15 or later on macOS 14+:
+
+```sh
+swift build && swift build -c release
+swift test
+```
+
 ### Repository layout
 
 - `packages/*` — npm packages under the `@vitrinka` scope. Each package owns
-  its `README.md`, `CHANGELOG.md`, and tests.
+  its `README.md`, `CHANGELOG.md`, and tests. `packages/macos` is the Swift
+  exception: SwiftPM reads its manifest from the repository root.
 - `apps/extension` — the Chrome extension (Manifest V3, no build step; `dist.sh`
   zips it for release). **Generated**: the product repo's `tools/export-kit`
   renders it from `vitrinka/apps/extension` and prunes anything else, so an

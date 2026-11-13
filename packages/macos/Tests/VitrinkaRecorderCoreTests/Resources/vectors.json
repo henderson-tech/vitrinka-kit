@@ -1,0 +1,327 @@
+{
+  "version": 1,
+  "description": "Language-agnostic conformance vectors for the vitrinka recorder redaction engine, ported from the server engine's table tests (vitrinka internal/redact/redact_test.go). Any implementation, in any language, must pass every case. Semantics: REDACTED = \"[redacted]\"; an implementation MAY redact more than required (superset matching), except where `exact` demands byte-identical output.",
+  "cases": [
+    {
+      "name": "default sensitive header names",
+      "surface": "headerName",
+      "sensitive": true,
+      "inputs": [
+        "Authorization", "authorization", "AUTHORIZATION",
+        "Proxy-Authorization", "Cookie", "Set-Cookie",
+        "X-Api-Key", "x-api-key", "X_API_KEY",
+        "X-Auth-Token", "X-CSRF-Token", "X-Amz-Security-Token",
+        "X-Access-Token", "X-Github-Token", "Api-Key", "ApiKey", "My-Service-Api-Key"
+      ]
+    },
+    {
+      "name": "benign header names stay benign",
+      "surface": "headerName",
+      "sensitive": false,
+      "inputs": ["Content-Type", "Accept", "X-Request-Id", "User-Agent", "ETag"]
+    },
+    {
+      "name": "header map: sensitive values redacted, benign kept",
+      "surface": "headers",
+      "policy": { "extraHeaders": ["X-Tenant-Secret"] },
+      "input": {
+        "Authorization": "Bearer sk-live-12345",
+        "Cookie": "session=abcdef",
+        "X-Tenant-Secret": "shh",
+        "Content-Type": "application/json"
+      },
+      "redactedKeys": ["Authorization", "Cookie", "X-Tenant-Secret"],
+      "keptEntries": { "Content-Type": "application/json" }
+    },
+    {
+      "name": "JSON body: nested objects and arrays scrub key-wise",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"user\":{\"name\":\"lukas\",\"password\":\"hunter2\",\"cards\":[{\"card_number\":\"4111111111111111\",\"cvv\":\"123\",\"label\":\"main\"}]},\"items\":[{\"token\":\"tok_x\"},{\"note\":\"ok\"}],\"accessToken\":\"at\"}",
+      "mustNotContain": ["hunter2", "4111111111111111", "\"123\"", "tok_x", "\"at\""],
+      "mustContain": ["lukas", "main", "ok"],
+      "outputIsJson": true
+    },
+    {
+      "name": "form-encoded body scrubs key-wise",
+      "surface": "body",
+      "contentType": "application/x-www-form-urlencoded; charset=utf-8",
+      "input": "username=lukas&password=hunter2&remember=1",
+      "mustNotContain": ["hunter2"],
+      "mustContain": ["username=lukas", "remember=1"]
+    },
+    {
+      "name": "semicolon separator never bypasses: query",
+      "surface": "url",
+      "input": "https://app.example.com/cb?a=1;access_token=SEMI-SECRET",
+      "mustNotContain": ["SEMI-SECRET"],
+      "mustContain": ["a=1"]
+    },
+    {
+      "name": "semicolon separator never bypasses: query, secret first",
+      "surface": "url",
+      "input": "https://app.example.com/cb?access_token=SEMI-SECRET;x=1",
+      "mustNotContain": ["SEMI-SECRET"]
+    },
+    {
+      "name": "semicolon separator never bypasses: mixed separators",
+      "surface": "url",
+      "input": "https://app.example.com/cb?a=1;access_token=SEMI-SECRET&b=2",
+      "mustNotContain": ["SEMI-SECRET"],
+      "mustContain": ["a=1"]
+    },
+    {
+      "name": "semicolon separator never bypasses: fragment",
+      "surface": "url",
+      "input": "https://app.example.com/cb#access_token=FRAG-SECRET;type=bearer",
+      "mustNotContain": ["FRAG-SECRET"],
+      "mustContain": ["type=bearer"]
+    },
+    {
+      "name": "semicolon separator never bypasses: form body",
+      "surface": "body",
+      "contentType": "application/x-www-form-urlencoded",
+      "input": "y=1;password=FORM-SECRET",
+      "mustNotContain": ["FORM-SECRET"],
+      "mustContain": ["y=1"]
+    },
+    {
+      "name": "benign semicolon query stays byte-identical",
+      "surface": "url",
+      "input": "https://app.example.com/list?a=1;b=2",
+      "exact": "https://app.example.com/list?a=1;b=2"
+    },
+    {
+      "name": "unparseable URL still scrubs query",
+      "surface": "url",
+      "input": "https://app.example.com/a\u0000b?token=CTRL-SECRET&ok=1",
+      "mustNotContain": ["CTRL-SECRET"],
+      "mustContain": ["ok=1"]
+    },
+    {
+      "name": "unparseable URL still scrubs fragment",
+      "surface": "url",
+      "input": "https://app.example.com/a\u0000b#access_token=CTRL-FRAG",
+      "mustNotContain": ["CTRL-FRAG"]
+    },
+    {
+      "name": "unparseable URL still scrubs semicolon pairs",
+      "surface": "url",
+      "input": "https://app.example.com/a\u0000b?x=1;token=CTRL-SEMI",
+      "mustNotContain": ["CTRL-SEMI"],
+      "mustContain": ["x=1"]
+    },
+    {
+      "name": "plain prose body left alone",
+      "surface": "body",
+      "contentType": "text/plain",
+      "input": "plain text mentioning password words but not a form",
+      "exact": "plain text mentioning password words but not a form"
+    },
+    {
+      "name": "multipart/form-data: sensitive field loses its value, benign parts survive",
+      "surface": "body",
+      "contentType": "multipart/form-data; boundary=b123",
+      "input": "--b123\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nlukas\r\n--b123\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nMULTI-SECRET\r\n--b123\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\nPNGBYTES\r\n--b123--\r\n",
+      "mustNotContain": ["MULTI-SECRET"],
+      "mustContain": ["[redacted]", "lukas", "PNGBYTES", "--b123"]
+    },
+    {
+      "name": "multipart/form-data: policy extra body keys apply (normalized match)",
+      "surface": "body",
+      "policy": { "extraBodyKeys": ["internalId"] },
+      "contentType": "multipart/form-data; boundary=b123",
+      "input": "--b123\r\nContent-Disposition: form-data; name=\"internal_id\"\r\n\r\nEXTRA-SECRET\r\n--b123--\r\n",
+      "mustNotContain": ["EXTRA-SECRET"]
+    },
+    {
+      "name": "truncated multipart FAILS CLOSED — the body is omitted, never half-scanned",
+      "surface": "body",
+      "contentType": "multipart/form-data; boundary=b123",
+      "input": "--b123\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nTRUNC-SECRET\r\n--b123\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\nPNGBYTES\r\n--b1",
+      "mustNotContain": ["TRUNC-SECRET", "PNGBYTES"],
+      "mustContain": ["[multipart body omitted:"]
+    },
+    {
+      "name": "hash-route fragment: nested query key is inspected (set-only key)",
+      "surface": "url",
+      "policy": { "extraBodyKeys": ["internalId"] },
+      "input": "https://app.example.com/#/reset?internal_id=NESTED-SECRET",
+      "mustNotContain": ["NESTED-SECRET"]
+    },
+    {
+      "name": "hash-route fragment: nested magic-link token is scrubbed",
+      "surface": "url",
+      "input": "https://app.example.com/#/reset?token=FRAG-ROUTE-SECRET",
+      "mustNotContain": ["FRAG-ROUTE-SECRET"]
+    },
+    {
+      "name": "truncated JSON: escaped key spellings cannot evade the fallback",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"note\":\"x\",\"pass\\u0077ord\":\"ESCAPED-LEAK\",\"blob\":\"aaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mustNotContain": ["ESCAPED-LEAK"]
+    },
+    {
+      "name": "form body: benign-keyed JWT credential is still text-scanned (CT path is a superset)",
+      "surface": "body",
+      "contentType": "application/x-www-form-urlencoded",
+      "input": "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&client_assertion=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.SFlKc2VjcmV0U2ln",
+      "mustNotContain": ["eyJhbGciOiJIUzI1NiJ9"],
+      "mustContain": ["grant_type="]
+    },
+    {
+      "name": "multipart: benign part carrying a Bearer header line is text-scanned",
+      "surface": "body",
+      "contentType": "multipart/form-data; boundary=b123",
+      "input": "--b123\r\nContent-Disposition: form-data; name=\"payload\"\r\n\r\nAuthorization: Bearer sk_live_ABC123SECRET\r\n--b123--\r\n",
+      "mustNotContain": ["sk_live_ABC123SECRET"]
+    },
+    {
+      "name": "multipart: benign part carrying embedded JSON with a sensitive key is scanned",
+      "surface": "body",
+      "contentType": "multipart/form-data; boundary=b123",
+      "input": "--b123\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n{\"access_token\":\"sk_live_SECRET\"}\r\n--b123--\r\n",
+      "mustNotContain": ["sk_live_SECRET"]
+    },
+    {
+      "name": "truncated JSON still scrubs known keys (cap is never a bypass)",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"note\":\"x\",\"password\":\"hunter2\",\"refresh_token\":\"rt-abc\",\"blob\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mustNotContain": ["hunter2", "rt-abc"]
+    },
+    {
+      "name": "URL: OAuth code callback keeps state, loses access_token",
+      "surface": "url",
+      "input": "https://app.example.com/cb?code=abc&access_token=AT-1&state=xyz",
+      "mustNotContain": ["AT-1"],
+      "mustContain": ["state=xyz", "/cb"]
+    },
+    {
+      "name": "URL: SAS token suffix rule",
+      "surface": "url",
+      "input": "https://acct.blob.core.windows.net/c/b.png?sv=1&sig=SAS&sas_token=SAS2",
+      "mustNotContain": ["SAS2"],
+      "mustContain": ["sv=1"]
+    },
+    {
+      "name": "URL: magic link token",
+      "surface": "url",
+      "input": "https://app.example.com/magic?token=MAGIC",
+      "mustNotContain": ["MAGIC"]
+    },
+    {
+      "name": "URL: implicit-grant fragment token",
+      "surface": "url",
+      "input": "https://app.example.com/cb#access_token=FRAG&type=bearer",
+      "mustNotContain": ["FRAG"],
+      "mustContain": ["type=bearer"]
+    },
+    {
+      "name": "benign URL stays byte-identical: encoded query",
+      "surface": "url",
+      "input": "https://api.example.com/v1/items?page=2&q=caf%C3%A9",
+      "exact": "https://api.example.com/v1/items?page=2&q=caf%C3%A9"
+    },
+    {
+      "name": "benign URL stays byte-identical: relative path",
+      "surface": "url",
+      "input": "/relative/path?ok=1",
+      "exact": "/relative/path?ok=1"
+    },
+    {
+      "name": "benign URL stays byte-identical: SPA fragment route",
+      "surface": "url",
+      "input": "https://app.example.com/#/spa/route",
+      "exact": "https://app.example.com/#/spa/route"
+    },
+    {
+      "name": "url-keyed strings inside JSON bodies get URL scrubbing",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"callback\":{\"href\":\"https://x.example/cb?api_key=KEY-1\"}}",
+      "mustNotContain": ["KEY-1"]
+    },
+    {
+      "name": "policy extensions: extra body key (normalized) + inline pattern",
+      "surface": "body",
+      "policy": { "extraBodyKeys": ["internalId"], "patterns": ["vk[a-z]?_[A-Za-z0-9]{8,}"] },
+      "contentType": "application/json",
+      "input": "{\"internal_id\":\"sek\",\"note\":\"key vkb_abcdefgh12 inline\"}",
+      "mustNotContain": ["sek", "vkb_abcdefgh12"]
+    },
+    {
+      "name": "policy patterns run over benign header values",
+      "surface": "headers",
+      "policy": { "patterns": ["vk[a-z]?_[A-Za-z0-9]{8,}"] },
+      "input": { "X-Debug": "saw vkb_abcdefgh12 here" },
+      "redactedKeys": [],
+      "valueMustNotContain": { "X-Debug": ["vkb_abcdefgh12"] }
+    },
+    {
+      "name": "a bad regex pattern is skipped, defaults still apply",
+      "surface": "body",
+      "policy": { "patterns": ["("] },
+      "contentType": "application/json",
+      "input": "{\"password\":\"hunter2\",\"note\":\"ok\"}",
+      "mustNotContain": ["hunter2"],
+      "mustContain": ["ok"]
+    },
+    {
+      "name": "a PEM private key is scrubbed by value under a benign JSON key",
+      "surface": "body",
+      "contentType": "application/json",
+      "input": "{\"name\":\"deploy\",\"keyPem\":\"-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo\\n4lgOEePzNm0tRgeLezV6ffAt0gunVTLw\\n-----END RSA PRIVATE KEY-----\\n\"}",
+      "mustNotContain": ["MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo", "4lgOEePzNm0tRgeLezV6ffAt0gunVTLw"],
+      "mustContain": ["\"name\":\"deploy\"", "\"keyPem\":\"[redacted]\\n\""],
+      "outputIsJson": true
+    },
+    {
+      "name": "free-text PEM private keys are scrubbed, including one cut off before its END line",
+      "surface": "body",
+      "contentType": "text/plain",
+      "input": "ssh key loaded: -----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END OPENSSH PRIVATE KEY----- done\nretry with -----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkq",
+      "mustNotContain": ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmU", "MIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkq"],
+      "mustContain": ["ssh key loaded: [redacted] done", "retry with [redacted]"]
+    },
+    {
+      "name": "a form-encoded PEM private key loses its value",
+      "surface": "body",
+      "contentType": "application/x-www-form-urlencoded",
+      "input": "name=deploy&keyPem=-----BEGIN+PRIVATE+KEY-----%0AMIIEvQIBADANBgkqhkiG9w0BAQEFAASC%0A-----END+PRIVATE+KEY-----",
+      "mustNotContain": ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"],
+      "mustContain": ["name=deploy", "keyPem=[redacted]"]
+    },
+    {
+      "name": "BEGIN in prose, a certificate and a public key stay byte-identical",
+      "surface": "body",
+      "contentType": "text/plain",
+      "input": "BEGIN the rollout. PRIVATE KEY rotation is next week.\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUbW9jayBjZXJ0\n-----END CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----",
+      "exact": "BEGIN the rollout. PRIVATE KEY rotation is next week.\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUbW9jayBjZXJ0\n-----END CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----"
+    },
+    {
+      "name": "fullFidelity: headers pass through untouched",
+      "surface": "headers",
+      "policy": { "fullFidelity": true },
+      "input": { "Authorization": "Bearer x" },
+      "redactedKeys": [],
+      "keptEntries": { "Authorization": "Bearer x" }
+    },
+    {
+      "name": "fullFidelity: body passes through untouched",
+      "surface": "body",
+      "policy": { "fullFidelity": true },
+      "contentType": "application/json",
+      "input": "{\"password\":\"hunter2\"}",
+      "exact": "{\"password\":\"hunter2\"}"
+    },
+    {
+      "name": "fullFidelity: URL passes through untouched",
+      "surface": "url",
+      "policy": { "fullFidelity": true },
+      "input": "https://app.example.com/cb?access_token=AT-1",
+      "exact": "https://app.example.com/cb?access_token=AT-1"
+    }
+  ]
+}
