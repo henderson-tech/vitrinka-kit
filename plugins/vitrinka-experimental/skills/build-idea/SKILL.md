@@ -37,7 +37,7 @@ asks mid-run.
    changed route once at 1440×810@2, walks the journey once and publishes
    `<branch>-quick-check`: one section, a shot and a works/broken card per
    route, a summary card. No reviewer, no findings.
-4. **Ship** — `prm` opens a DRAFT PR; `vitrinka-pm:handoff` (`hand_back`)
+4. **Ship** — `prm` opens a DRAFT PR; `vitrinka-pm:work handoff` (`hand_back`)
    closes the run with the board, the app url, the parked state and what to
    poke at; `next` holds two steps: look, then `/vitrinka-experimental:test`.
 

@@ -1,7 +1,7 @@
 # Intent: board — boards born organized (+ testing-journey suites)
 
 **Delegation:** this intent's creation + composition work runs in the
-`vitrinka:vitrinka-publisher` agent — see the Delegation section in
+`vitrinka:vitrinka-publisher` agent — see "Delegate composition" in
 `../SKILL.md`. Brief it with this file's path so it follows these contracts
 itself.
 
@@ -56,7 +56,9 @@ part of creation.
 3. **Structure template-first**: `get_templates` ONCE, start from the matching
    skeleton (QA session, decision map, dashboard, deck, journey suite …) in
    one `compose_board` call per coherent unit — intent not coordinates; a
-   single card is a batch of one, anchored by relation. Save a recurring
+   single card is a batch of one, anchored by relation. A beside anchor and
+   `section` exclude each other; a section beside another is a section card
+   with its own beside `anchor` and `children` (docs `sections`). Save a recurring
    structure of your own with `save_template` (a `rare` door — callable by
    name) and instantiate via `compose_board {template, params}`. `undo
    {board}` reverts your last batch.

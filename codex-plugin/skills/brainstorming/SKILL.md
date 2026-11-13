@@ -5,11 +5,9 @@ metadata:
   vitrinka-contract: "2026-09-15"
 ---
 
-# Decision-Led Brainstorming
+# brainstorming
 
-Claude maps the decisions as rich multiple-choice with recommendations and previews; the user steers scope, direction and architecture. Output: a short committed decision log plus a **feature brief** the next session or a subagent builds from directly.
-
-Procedure: `docs {topic: "guide:brainstorm-flow"}` (CLI `vitrinka docs guide:brainstorm-flow`). Board mechanics and payload shapes: `references/board.md`; brief template and caps: `references/brief.md`.
+Output: a committed decision log and a feature brief the next session builds from. Procedure: `docs {topic: "guide:brainstorm-flow"}` (CLI `vitrinka docs guide:brainstorm-flow`). Board mechanics and payload shapes: `references/board.md`; brief template and caps: `references/brief.md`.
 
 <HARD-GATE>
 Do NOT write code, scaffold, or invoke implementation skills until the decision map's questions are answered (or the user explicitly says "just build it"). A truly trivial task still gets a 1-2 question map.
@@ -17,67 +15,56 @@ Do NOT write code, scaffold, or invoke implementation skills until the decision 
 
 ## Laws
 
-- **Bind scope before filing**: resume the project's explicit harness-session binding. Unknown asks for an active sprint or **No sprint**; persist the choice before creating the feature. Children and required follow-ups inherit approved scope. Never infer scope from dates or the sole active sprint.
-- **Two levels, ONE flow, the SAME artifacts** (log · brief · Plan chapter). `default` spends 1–3 rounds; the argument word `deep` lifts the limits, keeps the board on from the start and forces the architectural path. Prototype code under `deep` is labelled throwaway and never lands on the branch.
-- **Classify first, out loud** — spike / bounded / architectural — so the user can override it. The ratchet is one-way: hidden complexity upgrades the path, nothing downgrades; when in doubt, take the heavier path.
-- **The map is WRITTEN OUT, always** — visible assistant text, a message of its own, before any `AskUserQuestion` call. Never carry the map inside the question text or option labels. A map that is not printed does not exist; simple means a 1–2 question map, not no map.
-- **The user edits the map before any question is asked.** Their cuts are final; their additions go in. Only decisions with real alternatives make the map; one sane answer given the codebase is a stated assumption in the log.
-- **Up to 4 questions per `AskUserQuestion` call**, always the frontier; done only when the frontier is empty. Facts are your job, only decisions go to the user; never re-litigate settled answers.
-- **Question design**: recommendation first ("(Recommended)" suffix, the description says WHY); every option's description carries its tradeoffs; `preview` for anything structural; the engine auto-appends "Other" — never hard-block an off-map answer.
-- **The feature epic is the record** and **the feature has ONE worktree**, created when the epic exists; the log and the brief are its first commits, the build continues on the same branch. A docs-only PR for the log is NEVER opened; a second worktree for the code is never created.
-- **The brief is written before code.** Whatever the exit, do NOT write a separate implementation plan (`docs/plans/*-implementation.md`, phased WP documents) — the brief's work packages are the plan; a committed plan document is not.
-- **A session that is mostly spent never recommends "Build here."** The closing question opens with the context-window reading (tokens and percent) because only the agent can see it.
-- **Principles**: user leads, Claude maps · don't ask what the codebase already answers · YAGNI ruthlessly · tailored, never generic · speed is a feature.
+- Bind scope before filing: resume the project's explicit session binding; unknown asks for an active sprint or **No sprint** and persists the choice before the feature is created.
+- Children and required follow-ups inherit approved scope; never infer scope from dates or the sole active sprint.
+- `default` spends 1–3 rounds; the argument `deep` lifts the limits, puts the board on from the start and forces the architectural path; both produce the same log, brief and Plan chapter.
+- Prototype code under `deep` is labelled throwaway and never lands on the branch.
+- Classify out loud first (spike, bounded, architectural) so the user can override; hidden complexity upgrades the path, nothing downgrades it.
+- Write the map out as visible assistant text, in a message of its own, before any `AskUserQuestion` call; never carry it inside question text or option labels.
+- The user edits the map before any question; their cuts are final, their additions go in.
+- Only decisions with real alternatives make the map; a single sane answer is a stated assumption in the log.
+- Up to 4 questions per `AskUserQuestion` call, always the frontier; done when the frontier is empty.
+- Facts are your job; only decisions go to the user; never re-litigate a settled answer; never ask what the codebase answers.
+- Recommendation first (suffix "(Recommended)", the description says why); every option's description carries its tradeoffs; `preview` for anything structural; never hard-block an off-map answer.
+- The feature epic is the record; the feature has ONE worktree, created when the epic exists; the log and the brief are its first commits and the build continues on that branch.
+- Never open a docs-only PR for the log; never create a second worktree for the code.
+- Write the brief before code; never write a separate implementation plan (`docs/plans/*-implementation.md`, phased WP documents): the brief's work packages are the plan.
 
-## Decision log — template
+## Decision log
 
-`YYYY-MM-DD-<topic>-decisions.md` in the project's spec directory, committed:
+- File `YYYY-MM-DD-<topic>-decisions.md` in the project's spec directory with sections Summary (2–3 sentences), Decisions (`| # | Decision | Call | Why |`), Assumptions, Architecture notes (only what a fresh session needs), Open questions.
+- Attach it to the epic: `upload_task_file {kind: "decision", filename: "<topic>-decisions.md", source: {ref: "<repo path of the log>.md", rev: "<git sha>"}}`; a later pass uploads the next VERSION of the same filename, never a second lineage.
+- Cite a decision in source as `(vitr:dec/…)` from the upload's `rowCites`, after a self-contained sentence; never a bare `(Dn)`.
+- A parser `warning` never creates a replacement edge; `get {kind: "cite", codes: [...]}` resolves a code, `create {kind: "cite", target}` mints one (`docs {topic: "guide:cite"}`).
 
-```markdown
-# <Topic> — Decisions
+## Feature brief
 
-## Summary
-2-3 sentences: the problem and the shape of the solution.
+- `compose_brief {id: <epic>}` (CLI `vitrinka task brief <id>`) is the ONE door to the skeleton; fill its `<!-- skill -->` placeholders under the caps in `references/brief.md`; trim to the cap, never append past it.
+- Name real files and routes, never descriptions of them.
+- Upload with the server's lineage: `versionOf: <ref.id>`, `filename: <ref.meta.filename>` (CLI `vitrinka task upload <epic> <file> --kind brief --version-of <ref.id>`); never the topic or dated filename, which forks a second lineage.
+- A trivial map with no epic has no brief; the log's Architecture notes are the hand-off.
+- `404 no_brainstorm_board` from compose: write the whole brief from `references/brief.md` and upload it under the same name with `kind: "brief"`.
 
-## Decisions
-| # | Decision | Call | Why |
-|---|----------|------|-----|
+## Closing question
 
-## Assumptions
-Things not asked because one answer was sane — stated so they're contestable.
+- The last `AskUserQuestion` is "In which style to implement?", opening with this session's context reading (tokens and percent).
+- A mostly spent session never recommends Build here.
+- **Build here**: this session, the feature worktree, the whole remaining budget.
+- **Fresh session**: after the hand-back, run `vitrinka qa session launch '<task url>' '<feature worktree abs path>'` (it runs `$VITRINKA_SESSION_LAUNCHER`; never wrap that variable in `sh -c`); exit 0: print its receipt line and stop; non-zero: print `/continue <task url>` and stop.
+- **Subagents**: fresh native agents (never `fork`), one per ordered `Work package` with disjoint files, `model` set on each call, one reviewer agent after each phase.
+- A spike ends in its recommendation instead.
+- On a bound task finish with `work handoff`.
 
-## Architecture notes
-Only what a fresh session needs to build correctly: key components, data flow, integration points. A few lines or one diagram — not a spec.
+## Board
 
-## Open questions
-Deferred decisions, if any.
-```
-
-Attached to the epic with `upload_task_file {kind: "decision", filename: "<topic>-decisions.md", source: {ref: "<repo path of the log>.md", rev: "<git sha>"}}`; a later pass on the same topic uploads the next VERSION of the same filename, never a second lineage.
-
-**Citing a decision**: the upload's reply carries `rowCites` (`{"D12": "vitr:dec/…"}`) and parser `warnings` for doubtful replacement claims; a warning never creates a replacement edge. A source comment cites with that token — `(vitr:dec/…)` after a self-contained sentence of what was decided — never a bare `(Dn)`; `get {kind: "cite", codes: [...]}` resolves one, `create {kind: "cite", target}` mints any other (`docs {topic: "guide:cite"}`).
-
-## Feature brief — contracts
-
-- `compose_brief {id: <epic>}` (CLI `vitrinka task brief <id>`) is the ONE door to the skeleton; its deterministic sections come from the picks, its `<!-- skill -->` placeholders are filled under the hard caps in `references/brief.md`. Trim to the cap, never append past it. Real files and routes, not descriptions of them.
-- **The lineage name is the SERVER's** — upload with `versionOf: <ref.id>` and `filename: <ref.meta.filename>` from the compose reply (`<epic-slug>-brief.md`; CLI `vitrinka task upload <epic> <file> --kind brief --version-of <ref.id>`), never the topic or the dated spec filename; a different name forks a second lineage and `vitrinka-pm:pickup` reads the stale skeleton.
-- A trivial map with no epic has no brief: the log's Architecture notes are its hand-off. A terminal-only brainstorm gets `404 no_brainstorm_board` from compose: write the whole brief from `references/brief.md` and upload it under the same name and `kind: "brief"`.
-
-## Closing question — ALWAYS the last `AskUserQuestion`
-
-"In which style to implement?" with three exits — **Build here** (this session, the feature worktree, the whole remaining budget) · **Fresh session** (after the hand-back, run `vitrinka qa session launch '<task url>' '<feature worktree abs path>'`: exit 0 → print its receipt line and stop; non-zero → print `/continue <task url>` and stop) · **Subagent-driven** (forks on the brief's ordered `Work packages`, disjoint files, one package per fork, ≤ 4 per phase, a context-inheriting fork reviewer after each phase). A spike ends in its recommendation instead. Before the hand-back on a bound task, run the `handoff` skill (`hand_back`) — the chat block is its `rendered` output.
-
-## Visual surface: vitrinka brainstorm boards
-
-An authenticated service (`vitrinka auth login`; self-hosted deployments set `VITRINKA_URL`). No throwaway server: the board outlives the session.
-
-- **An existing canvas meant for Studio is converted, never recreated**: `set_board_meta {slug, board_type:"brainstorm"}` preserves cards, questions and staged picks/notes; conversion never releases them. Subgroup alone does not select Studio.
-- **Board vs terminal**: the board is for 2-3 *different visual takes* — layouts, design directions, flows — or an explicit ask; plain preference questions stay in `AskUserQuestion`. Offer just-in-time, once; on decline stay text-only.
-- **A take of an in-app surface renders with the app's `app.css` and its real components, never a private kit.**
-- **Until the board actually exists** (created, composed, URL handed over), terminal mode is in force and the written-out map is mandatory. With a board, the FULL map lives on it — one CHAPTER section per decision — and the terminal map is shortened to its titles, never skipped.
-- **The board owns its decisions**: once the URL is handed over, never open `AskUserQuestion` for a decision that has a chapter — print the titles and the URL, listen, end the turn. The terminal keeps only questions deliberately left off the board and the closing question. Doubting delivery is never a reason to mirror: announce the listening rung; only the user's explicit ask moves the remaining questions to the terminal, and they are then retracted from the board, never asked in both.
-- **A decision settled in the terminal closes its board question**: `update {kind:"question", id, answer, note}` — released and delivered, no Send; a 409 names a different board pick — ask which stands.
-- **A dropped direction is cancelled, never left Active**: `update {kind:"brainstorm", board, action:"plan"}` is the dry run (its tasks, their epic and its open children, each to its project's cancelled state; rows another live brainstorm links start unselected); apply `action:"cancel", rows` with the rows the user leaves selected; `reopen` undoes it. An epic-less brainstorm is closed with `finish`; one with an epic finishes when the epic is done.
-- **Every payload shape in `references/board.md` is exact** — read it before composing anything on a board.
-- **A board session listens**: once the URL is handed over, use the highest rung of `docs {topic: "guide:listening"}` (`vitrinka:listen`). Without a background wake path, drain once and end on idle; name the host command for continuous delivery. Never loop empty MCP waits through the model.
-- **Report the spend**: `usage: {tokens, effort}` on every `create {kind:"board"}`, `compose_board` and `update_cards`.
+- An existing canvas meant for Studio is converted, never recreated: `set_board_meta {slug, board_type:"brainstorm"}`; subgroup alone never selects Studio.
+- Use the board for 2–3 different visual takes (layouts, directions, flows) or on an explicit ask; plain preference questions stay in `AskUserQuestion`; offer it once, just in time; on decline stay text-only.
+- A take of an in-app surface renders with the app's `app.css` and real components, never a private kit.
+- Until the board exists and its URL is handed over, the written-out terminal map is mandatory; with a board, the full map lives on it (one chapter section per decision) and the terminal map shrinks to its titles.
+- Once the URL is handed over, never open `AskUserQuestion` for a decision that has a chapter: print the titles and the URL, listen, end the turn.
+- Move board questions to the terminal only on the user's explicit ask, retracting them from the board; never ask in both.
+- A decision settled in the terminal closes its board question: `update {kind:"question", id, answer, note}`; a 409 names a different board pick: ask which stands.
+- A dropped direction is cancelled, never left Active: `update {kind:"brainstorm", board, action:"plan"}` dry-runs, then `action:"cancel", rows` with the rows the user keeps selected; `reopen` undoes it.
+- Close an epic-less brainstorm with `finish`; one with an epic finishes when the epic is done.
+- Read `references/board.md` before composing anything on a board; every payload shape there is exact.
+- A board session listens per the `listen` skill; without a background wake path drain once and end on idle; never loop empty MCP waits through the model.

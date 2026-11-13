@@ -1,214 +1,110 @@
 ---
 name: listen
-description: "Use when a session should service a vitrinka annotation board live — '/vitrinka:listen [board-slug]' from the app's repo, 'listen to the board', 'watch the annotations'; a backlog is resolve."
+description: "Use to work a vitrinka board's annotation queue from the app's repo — 'listen to the board', 'watch the annotations' (live); 'resolve the board', 'work through the annotations' (listen resolve); 'pair with me while I test', 'fix while I test' (listen pair)."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
 
-# listen — the listening session
+# listen
 
-You are the **worker half of an audit loop**: the user annotates their app's
-screens on a vitrinka board; you fix each annotation in THIS repository,
-attach visual proof, and go back to listening. A human invokes it as
-`/listen` (`/vitrinka:listen` when another command claims the name; `$listen`
-in Codex).
+Modes: `listen [board]` services new annotations live; `listen resolve [board]` works an accumulated backlog; `listen pair` fixes a recorder session while a human tests.
 
-`vitrinka work watch` is a persistent process that long-polls the work queue,
-leases the scope, and prints ONE line per NEW item. `docs {topic:
-"guide:listening"}` (CLI `vitrinka docs guide:listening`) is the ONE ladder
-every listening skill follows — a native background Monitor on `exec
-vitrinka work watch`, the `vitrinka work listen --harness <name>` host, or
-one scoped drain — with the exact Monitor call, the rung-picking order and
-the one-line announcement. Pick the highest rung this harness offers,
-announce it once; the rest of this file applies unchanged on every rung. A
-"monitor line" below means the line however it reaches you.
+## Scope
 
-Argument: an optional board slug (`/vitrinka:listen acme-audit`). **Without
-a board it AUTO-SCOPES to this repo + branch** — the project inferred from
-the repo (the main worktree's name, the same derivation `vitrinka board push`
-uses) and the current git branch.
+- Without a board, scope to this repo + branch (project from the main worktree's name, as `vitrinka board push` derives it; the current git branch).
+- Scope flags: `--board <slug>`, `--project <p> --branch <b>`; `--all` claims no scope and is only for a read-only overview, never to work another session's items.
+- Pass the listener's exact scope to every drain: `{board}` for a board, `{project, branch}` for the repo.
+- Never call `list {kind:"work"}` or `wait_for_work` unscoped.
+- Run from the app repository the board's screenshots come from (`git rev-parse --show-toplevel` works, the project matches); otherwise say so and stop.
+- Missing MCP tools (`wait_for_work`, `set_status`, `reply`, `attach_after`, `get {kind:"capsule"}`) or `vitrinka` binary: run `vitrinka setup` (`vitrinka doctor` names what is missing); never hand-write a registration.
 
-## One listener per scope (the multi-session model)
+## Arm the listener (live and pair)
 
-The server enforces **at most one live listener per scope** — the same board
-(or the same project+branch) cannot be listened to twice:
+- Follow `docs {topic: "guide:listening"}` (CLI `vitrinka docs guide:listening`): pick the highest rung, announce its one line once, never mix rungs.
+- Rung 1, a `Monitor` tool: arm `exec vitrinka work watch --keepalive 0` (`--board <slug>` for a board); the `exec` is load-bearing, never drop it.
+- Rung 2, `VITRINKA_LISTEN_HOST` set: the host already leases the scope; arm nothing.
+- Rung 3, neither: drain once with `wait_for_work {…scope, timeoutSec: 1}`, end on idle, name `vitrinka work listen --harness <name>` as the continuous path.
+- Never claim a listener is active when none is armed.
+- Arm, announce and END THE TURN in the same turn: never loop, poll or sleep.
+- One live listener per scope; the `vitrinka work watch` long-poll is the lease.
+- A same-machine claim displaces the older session; if YOUR monitor prints `⚠ listener for <scope> taken over by <actor>@<session> — standing down`, acknowledge in one line and never re-arm.
+- `⚠ listener already active (live, another machine)` (exit 2): tell the user which session holds it and stop; never steal a cross-machine live lease.
+- `--takeover` steals only an expired lease; `vitrinka doctor` shows who holds a scope.
+- Never re-arm on each notification; never disarm and re-arm to refresh.
 
-- The listener *leases* its scope through the `vitrinka work watch` long-poll
-  — that long-poll IS the heartbeat. A clean stop (the monitor torn down, the
-  host interrupted, the session exiting) releases the lease immediately and
-  reverts any work it had claimed; a killed process's lease lapses on its
-  TTL. The watch self-terminates when orphaned (it watches its own parent).
-  The lease records the harness and the rung, shown beside the board's
-  listening indicator.
-- **Newest wins (same machine):** if another session ON THIS MACHINE holds
-  the scope, your `vitrinka work watch` claim displaces it automatically —
-  no 409, nothing to surface. The displaced session's monitor emits one `⚠
-  listener for <scope> taken over by <actor>@<session> — standing down` line
-  and exits. **If YOUR monitor emits that line**, acknowledge in one line
-  ("listener moved to <session> — standing down") and do NOT re-arm.
-- Scope held live by a session on a **different machine**: `vitrinka work
-  watch` prints `⚠ listener already active (live, another machine): …` and
-  exits (code 2). Tell the user which session holds it and stop — a
-  cross-machine live lease is never stolen.
-- `--takeover` steals only an **expired** lease (a crashed/hard-killed
-  session). Same-machine live leases need no flag; cross-machine live ones
-  can never be stolen. `vitrinka doctor` shows who holds a scope.
+## On a monitor line
 
-Scope flags (all optional): `--board <slug>` (one board), `--project <p>
---branch <b>` (override the inferred repo scope), `--all` (the firehose —
-claims no scope; only for a read-only overview session, never to work items
-another session owns).
+- `№<id> [<intent>] <board>: <prompt…>` is a new annotation: drain `wait_for_work({…scope, timeoutSec: 1})` (NOT 50) until `{"idle":true}`, working each capsule serially, oldest first.
+- On idle end the turn on every rung.
+- `№<id> [answer] <board>: <question> → <answer>` is an answered board question in `choices[]`: record the decision (answer, `note`, per-pick `notes`) per the `brainstorming` skill in this turn; re-read via `get {kind:"questions", board}` if lost.
+- `№<id> [ask] <board>: <question> → <prompt>` is an ask in `asks[]`: service it FIRST with `answer_ask {id, text, partial:true}` in 2–4 sentence chunks, the last without `partial`, grounded in this repo's code, never a code change.
+- `№<id> [session] <project>: testing session started — …` is a recorder session in `sessions[]`: the № is a session id (`get {kind:"session", id}`, never `get {kind:"annotation"}`); run `listen pair`.
+- `· keepalive <scope>` is not work: do nothing and end the turn; batched with real lines, drain normally.
+- Keepalive interval is `vitrinka work watch --keepalive <sec>` (default `0`, off); never enable it to keep an idle model busy.
+- `⚠ vitrinka unreachable for <n>s — listener degraded`: tell the user and keep the listener armed; it prints `✓ vitrinka reachable again`; on rung 3 report the failed drain and end the turn.
+- `update available X → Y · run: vitrinka update`: relay it once and offer `vitrinka update`; never run it unprompted.
 
-All scope resolves *within the session's workspace* (the repo binding) — `wait_for_work` /
-`list {kind:"work"}` scoping by `{board}` or `{project, branch}` only ever
-sees that workspace's work; another workspace of the organisation is
-`<workspace>/<slug>` or `<workspace>/<project>`.
+## Work one item
 
-## Preconditions — check once, then arm
+- Claim: `set_status {id, status: "working"}` before touching code; a 409 (cancelled or already claimed) means skip silently.
+- `reply` ONE terse plan line; at most one `reply` per meaningful moment, never "still working".
+- Pass `agent` (`claude-code`, `codex`, …) on `reply` and `attach_after`.
+- See the region with `get_card_image {annotation: id}`; each attachment A<n> with `get_card_image {annotation: id, attachment: n}`; `get {kind:"capsule", id}` re-fetches the brief after user edits.
+- Fix the annotated ask only, in this repo's worktree; no drive-by refactors.
+- Commit with a conventional message referencing №id.
+- Prove it: push a new set the way this repo captures, then `attach_after {id, project, branch, selector, file, commit}` on the fixed screen.
+- Report: `reply` 1–3 lines (what changed, commit, what to eyeball), then `set_status {id, status: "in_review"}`.
+- Never `set_status resolved`: only the user accepts, on the board.
+- Needs the user's input: `reply` the question, `set_status {status: "open"}`, go back to listening; their thread reply re-queues it (only `@eve` turns go to Eve).
+- Another defect on the screen: measure with `get_card_image {board, cardId}`, file `annotate {board, agent, items:[{key, cardId, cardVersion, region, image:{width,height}, summary, …}]}` with `image` = the size that read returned, read `covers`; it lands `staged`; never a document card, never `highlight`.
+- 409 "cancelled" on any call: revert that item's working-tree changes only, never reply to it, mention it in your output, move on.
+- Context unwieldy after many fixes: finish the current item, tell the user to restart the listener, stop.
 
-1. You are in the app repository the board's screenshots come from (`git
-   rev-parse --show-toplevel` works and the project matches what capsules
-   will reference). Clearly not an app repo → say so and stop.
-2. The `vitrinka` MCP tools are available (`wait_for_work`, `set_status`,
-   `reply`, `attach_after`, `get {kind:"capsule"}`) and the `vitrinka`
-   binary is on PATH. Either missing → `vitrinka setup` registers both
-   (`vitrinka doctor` names what is missing); never hand-write a
-   registration.
-3. Your rung, per `guide:listening`: the `Monitor` tool exists → rung 1;
-   `VITRINKA_LISTEN_HOST` is set → rung 2 (the host already leases the
-   scope — arm nothing); otherwise rung 3 (drain once with `wait_for_work
-   {…scope, timeoutSec: 1}`, end on idle, name `vitrinka work listen
-   --harness <name>` as the continuous path). Never claim a listener is
-   active when none is armed.
+## Stop listening
 
-Arm it exactly as the guide shows (rung 1: `exec vitrinka work watch
---keepalive 0`, `--board <slug>` for a board — **the `exec` is
-load-bearing**), announce the rung's one line in the SAME turn and **END
-THE TURN**: do not loop, do not poll, do not sleep. If the watch's FIRST
-output line is `⚠ listener already active (live, another machine) …` (exit
-2), surface which session owns it and stop.
+- On the user's ask: rung 1 `TaskStop` the monitor, rung 2 Ctrl-C the host; each releases the lease and re-queues claimed items.
+- Stop the monitor on every stop path of this session; never just stop paying attention, the lease outlives it.
+- Exiting the harness with the monitor listed: recommend `Exit anyway` unless the user wants the queue held (`Move to background and exit`).
 
-## On a work line — drain the queue
+## listen resolve [board]
 
-A monitor line is `№<id> [<intent>] <board>: <prompt…>` — one per new
-annotation. Other line shapes:
+- Phase 0: ONE `list {kind:"work", board, status: "open"}` (or `{project, branch, status: "open"}`); never work a `staged`, `resolved`, `in_review` or another session's `working` item.
+- Never loop `get {kind:"annotation"}` over the queue; never `scrape_board` a backlog (only per `section` when an item concerns journey order).
+- Phase 1, triage every item from its prompt: self-contained (names files or routes) needs nothing; ambiguous target needs its crop; `⌖E…` refs need `get {kind:"annotation"}` (refs outrank the crop); a thread needs `get {kind:"capsule"}`; an upload needs `get_card_image {annotation, attachment: n}`.
+- `fix`, `refactor`, `redesign` change code (`redesign` invokes the repo's design skills); `investigate` is an ANSWER via `reply`, code only for a real defect, answer first.
+- `reshoot` changes NO code: re-capture and `attach_after`, zero diffs.
+- Phase 2, group by root cause, component or subsystem, never board order: one block per repeated pattern, shared token or component, flow, and server vs client vs other repo; 3–8 items per block, cross-cutting blocks first.
+- Flag other-repo items to the user; never edit this repo to compensate.
+- Record the block map (annotation ids per block) in your task tracker.
+- Enrich all flagged items in ONE subagent (`model` on the call) that reads crops via `get_card_image {annotation: "<workspace>/<id>"}` or `{board, cardId, region}` and returns TEXT only; never a crop image in your context, never a crop fetched by URL.
+- Phase 3, per block: claim each item with `set_status working`, one coherent commit (or server and client halves), the repo's checks once per block.
+- Read an exemplar the prompt names and reuse it; never re-implement beside it.
+- Verify an `investigate` claim against code AND data (tables, logs).
+- Spatial question to the user: `highlight` a rectangle on the card, then `reply` and `set_status {status: "open"}`, and list it in the summary.
+- Phase 4: capture proof of every changed surface; md5-guard consecutive captures and stop when two hash identical (the app is stuck); verify one probe frame via a subagent first.
+- ONE verifier subagent per batch of shots returns PASS/FAIL with quoted visible text; never read the shots yourself.
+- Journey screens re-capture as a NEW pass (`compose_board {board, journey, pass: "next", …}`), never over the reviewed section.
+- Close per block right after its verification, never at session end: `attach_after`, `reply` 1–3 lines (for `investigate` the answer), `set_status in_review`.
+- An item from an Eve review job (`jobId`, `judgmentIndex`): `review_verify {job, cardId, cardVersion, judgmentIndex}` with a newer version, then `review_judge {board, journey}` re-reads the pass and `review_judgments {board}` reads the verdicts.
+- STOP when: 10+ edits with no item `in_review`; your context holds a crop image; you are working a `staged` or foreign `working` item.
 
-- `№<id> [answer] <board>: <question> → <answer>` — an ANSWERED BOARD
-  QUESTION (a "Send to Claude" dispatch): `wait_for_work` returns it in
-  `choices[]` alongside `work[]`; record the decision (answer + any `note`,
-  or a multi-select's per-pick `notes`) per the brainstorming skill, not as
-  a code-fix item. Choices are delivered exactly once — act on the drained
-  `choices[]` in this turn (or re-read via `get {kind:"questions", board}`,
-  the durable record, if lost).
-- `№<id> [session] <project>: testing session started — …` — the user began
-  a RECORDER SESSION on your project (the `sessions[]` lane): the № is a
-  session id (`get {kind:"session"}`, not `get {kind:"annotation"}`), and
-  the move is `vitrinka-qa:pair`'s preflight and loop; there is no
-  annotation to service yet.
-- `№<id> [ask] <board>: <question> → <prompt>` — an ASK-AI INFO REQUEST, in
-  `wait_for_work`'s `asks[]`. Service asks FIRST (a ● working popover is
-  open on their screen): stream `answer_ask {id, text, partial:true}` in 2-4
-  sentence chunks, final chunk without `partial` — grounded in this repo's
-  actual code when the ask is about behavior, popover-sized, never a code
-  change.
+## listen pair
 
-When re-invoked by a line (or a batch):
-
-1. **Drain via MCP, SCOPED THE SAME WAY.** `wait_for_work({ …scope,
-   timeoutSec: 1 })`, looped until it returns `{"idle":true}`, working each
-   returned capsule serially, oldest first. Pass the SAME scope the listener
-   uses: `{ board }` for a board listener, `{ project, branch }` for the
-   auto-scoped repo listener. `timeoutSec: 1` (NOT 50) — the watch is what
-   waits. Rung 3 performs only the scoped drain.
-2. On idle, **end the turn on every rung** — an armed monitor stays
-   armed (`persistent`), the host keeps its loop. Never disarm it yourself.
-
-Do NOT re-arm the listener on each notification.
-
-## Keepalive heartbeats
-
-A `· keepalive <scope>` line is NOT work — a presence-gated heartbeat the
-watch emits while the user has a scope board open and this session has been
-idle for about one prompt-cache TTL; the wake itself re-warms the cache. On
-a keepalive line, **do nothing**: no `wait_for_work`, no replies, no text —
-end the turn immediately. Batched with real work lines, drain normally. The
-interval is `vitrinka work watch --keepalive <sec>` (default `0`, disabled).
-Opting in deliberately causes model wakeups; the watch emits none while
-nobody is viewing a board. Never enable it just to keep an idle model busy.
-
-## Working one item
-
-1. **Claim it**: `set_status {id, status: "working"}` — the board pin flips
-   amber live. A 409 (cancelled / already claimed) → skip silently.
-2. **Announce the plan**: `reply` with ONE terse line.
-3. **Understand**: the capsule has the ask, the region, and a crop — see it
-   with `get_card_image {annotation: id}` if the region matters. `get
-   {kind:"capsule", id}` re-fetches the latest brief after user edits.
-4. **Fix it in this repo.** The annotated ask only — no drive-by refactors.
-   Commit with a conventional message referencing №id.
-5. **Prove it**: regenerate the screen(s) and push a new set the way this
-   repo does it (its CLAUDE.md / `vitrinka board capture` / journey script).
-   Then `attach_after {id, project, branch, selector, file, commit}` pointing
-   at the fixed screen inside the set you just pushed.
-6. **Report**: `reply` with 1-3 lines (what changed, commit, anything to
-   eyeball), then `set_status {id, status: "in_review"}`.
-
-At most one `reply` per meaningful moment (plan, pushed vN); never "still
-working". Pass `agent` on `reply` and `attach_after` (`claude-code` /
-`codex` / …) so the thread shows `agent:<runtime>` beside your verified
-identity.
-
-Something ELSE wrong on the screen (not the annotated ask)? Don't widen the
-fix — file it: `get_card_image {board, cardId}` to measure, then `annotate
-{board, agent, items:[{key, cardId, cardVersion, region,
-image:{width,height}, summary, …}]}` with `image` = the size that read
-returned; read `covers` in the receipt — the text under the filed region. It
-lands `staged`; the user accepts it into the queue. Never a document card,
-never `highlight` for a finding (docs topic `annotation`).
-
-## Cancels
-
-Any vitrinka tool returning **409 "cancelled"** for an item means the user
-withdrew it mid-flight:
-
-1. Revert the working-tree changes you made FOR THAT ITEM (surgical).
-2. Do not reply to the cancelled annotation (writes bounce); mention the
-   cancellation in your session output only.
-3. Move on to the next ready item.
-
-## Degraded / down
-
-A work line `⚠ vitrinka unreachable for <n>s — listener degraded`: tell the
-user vitrinka looks down and the listener is retrying — **keep the listener
-armed** (it self-recovers and prints `✓ vitrinka reachable again`). Do not
-disarm or re-arm. On rung 3 report a failed drain and end the turn; there is
-no background listener to claim is retrying.
-
-## Stopping the listener
-
-- **The user asks to stop listening** → rung 1: `TaskStop` the monitor; rung
-  2: Ctrl-C in the host's terminal; rung 3: no listener was armed.
-  Each releases the lease at once and re-queues anything claimed. Never just
-  "stop paying attention" — the lease outlives your attention.
-- **The user is exiting the harness** and its exit dialog lists the monitor:
-  `Exit anyway` stops it (the lease is released); `Move to background and
-  exit` keeps it leasing and answering the board with no session attached.
-  If asked which to pick: `Exit anyway` unless they specifically want the
-  queue held.
-- **Never disarm and re-arm** to "refresh" it.
-
-## Rules
-
-- **Never `set_status resolved`** — only the user accepts, on the board.
-- Statuses are the UI: claim before touching code, in_review only after the
-  after-shot is attached.
-- One item at a time; the queue is FIFO — oldest first.
-- A fix that genuinely needs the user's input: `reply` with the question,
-  `set_status {status: "open"}` to put it back, and go back to listening —
-  any plain reply in the thread re-queues the item and wakes you again
-  (annotation threads route to the listening agent by default; only explicit
-  `@eve` turns go to Eve, vitrinka's AI reviewer).
-- Context grown unwieldy after many fixes: finish the current item, tell the
-  user to restart the listener, and stop.
-- `update available X → Y · run: vitrinka update` on stderr: relay it ONCE
-  and offer `vitrinka update`; never run it unprompted.
+- Preflight: read the repo-root `vitrinka.config.json` (schema: the `vitrinka-qa:qa` skill's `references/project.md`); map a missing `run` section with the user and commit it.
+- Mark HMR/Metro stacks `"hot": true` (`pair restart` does nothing for them); give every stack a `ready` probe.
+- Work in a worktree `.worktrees/pair-<yyyy-mm-dd>` from `origin/main`; every fix is a commit on that one branch, one PR for the run.
+- From that worktree run `vitrinka qa pair run` (`status`, `logs`, `stop`); hand the user each stack's URL; re-running is safe.
+- Never point a stack at an e2e `DATA_DIR` and never wipe one.
+- Arm the listener with project scope from the worktree.
+- On a `[session]` line: run the preflight if not done, `get {kind: "session", id}`, then narrate `board_working {board, status: "◉ paired — watching your session"}` once the board exists.
+- Per `[fix]` snap or `[note]`: `set_status working`, narrate `board_working {board, status: "⟳ fixing №<id> — <short cause>"}` (under a dozen words), smallest correct fix committed on the pair branch.
+- Get it live: hot stack nothing; otherwise `vitrinka qa pair restart <stack>` and wait for ready.
+- `reply {id, text}` in one or two sentences ending "it's live — reload if the page didn't", then `set_status in_review`: the live app is the proof.
+- `attach_after` only when the fix is visual and a re-shot costs nothing extra; never let screenshots stall the loop.
+- Advance the narration, or `board_working {board, status: ""}` when drained.
+- A panel report arrives as dispatched work; a panel reply re-queues like a thread reply.
+- `vitrinka qa pair relay` streams assistant text to the panel only when the user starts it.
+- Too big for the loop (a schema change, a refactor): say so in `reply`, estimate, `set_status open`, keep pace.
+- Wrap up when the recording ends: run the tests for what you touched (unit tests always, the `vitrinka.config.json` `e2e` runner for affected journeys), open the pair branch's PR through the repo's flow, `reply` on the last item (or a `publish` summary card) with the PR and the №ids fixed or handed back.
+- Leave the app running as supervised; report each stack's URL, the board and the PR.
+- On a bound task finish with `work handoff`.

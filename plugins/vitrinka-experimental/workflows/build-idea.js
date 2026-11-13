@@ -848,7 +848,7 @@ const pr = await agent(withRunTargetPreamble(
 log(`build-idea: draft PR ${pr && pr.pr ? pr.pr : 'not opened'}`)
 
 const handback = await agent(withRunTargetPreamble(
-  `Hand task ${A.task} back through the vitrinka handoff skill (Skill tool: vitrinka-pm:handoff). Facts, one per line, for the summary:\n` +
+  `Hand task ${A.task} back through the vitrinka work skill (Skill tool: vitrinka-pm:work, args "handoff"). Facts, one per line, for the summary:\n` +
   JSON.stringify({
     brief: A.brief,
     slices: built.map(b => ({ slice: b.slice, done: b.done.length, left: b.left.length })),

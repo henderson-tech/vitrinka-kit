@@ -462,8 +462,22 @@ const UILOOP_FIX_RULES = [
 // literal name the app no longer renders is what `check --labels` reports.
 const UILOOP_ACTION_STEP = 'Reach a control with the harness\'s role-first `action` step, `{action: {name: \'<its accessible name>\', role?: \'button\' | \'menuitem\' | \'link\' | \'tab\', within?: \'<container selector>\'}}`: it looks in the topmost overlay first, then the page, matches the name as a case-insensitive prefix at a word boundary, and opens the project\'s `overflow` triggers (a ⋯ sheet) when the control hides behind one. Prefer it to CSS chains, `nth=` indexes and text selectors, which break on the next layout change. Spell `name` as the app\'s label sources (its i18n catalogs, its templates) spell it, so `vybava ui-loop check --labels` finds it; a selector stays only where the control has no accessible name.'
 
-function withUiLoop(prompt, fix) {
-  const rules = fix ? [...UILOOP_RULES, ...UILOOP_FIX_RULES] : UILOOP_RULES
+// A lane in a slot worktree (contract 11) is the one writer of its slot and
+// has no dev server there: the three rules that speak of the one shared
+// checkout and its server read differently for it. Each is found by its
+// opening words, so a reworded rule fails the test instead of slipping by.
+const UILOOP_SLOT_RULES = [
+  ['Keep the shared dev server green:', () => 'The shared dev server serves the pass worktree, never your slot: your edits reach it only once your lane has landed, and Settle confirms it then. Never restart a server.'],
+  ['OWNERSHIP: lanes run sequentially in this same checkout; you are the sole writer and committer during your lane.', (rule, opening) => 'OWNERSHIP: lanes run side by side, each in a slot worktree of its own; you are the sole writer and committer in your slot, and never one in the pass worktree.' + rule.slice(opening.length)],
+  ['After every edit the shared dev server must stay green:', () => 'Your slot has no dev server: after an edit run the repo\'s source-only check for what you touched (`devbox run -- \'<cmd>\'` from the slot); an error your edit caused is fixed at once or reverted within 5 minutes.'],
+]
+
+function withUiLoop(prompt, fix, slot) {
+  const all = fix ? [...UILOOP_RULES, ...UILOOP_FIX_RULES] : UILOOP_RULES
+  const rules = !slot ? all : all.map(rule => {
+    const swap = UILOOP_SLOT_RULES.find(([opening]) => rule.startsWith(opening))
+    return swap ? swap[1](rule, swap[0]) : rule
+  })
   return 'ui-loop rules:\n- ' + rules.join('\n- ') + '\n\n' + prompt
 }
 
@@ -573,13 +587,30 @@ function stallsProblem(state) {
 // The relayed lanes must account for every open item: lane keys, foreign,
 // i18n-only and already-finished items together are the backlog's open count.
 // A deferred item (contract 8) sits in a rework lane, the only lane it is in.
+// An item a started lane holds (contract 11) is in no lane: it is inFlight.
 function lanesProblem(state, lanes) {
   if (!lanes || !Array.isArray(lanes.primitives) || !Array.isArray(lanes.areas) || (lanes.rework != null && !Array.isArray(lanes.rework))) return 'prepare relayed no lanes — `vybava ui-loop lanes --json` must be returned verbatim as lanes'
   const keys = [...lanes.primitives, ...lanes.areas, ...(lanes.rework || [])].reduce((n, l) => n + (l.keys || []).length, 0)
-  const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.finished || 0)
+  const total = keys + (lanes.foreign || []).length + (lanes.i18n || []).length + (lanes.inFlight || []).length + (lanes.finished || 0)
   const open = state.backlog ? state.backlog.open : -1
   if (total !== lanes.open || total !== open) return `prepare relayed lanes covering ${total} items; the lanes envelope says ${lanes.open} open and the backlog ${open} — the list was cut; re-run the stage`
   return ''
+}
+
+// The lanes of a phase in waves that run side by side (contract 11): at most
+// `size` a wave, and no two lanes of a wave own one dir. A lane owns the
+// files directly inside its dirs, so only the same dir is shared; two rework
+// lanes may share one, and `lane start` refuses the second while the first
+// has not landed. Order is kept: a lane goes into the first wave that takes it.
+function laneWaves(lanes, size) {
+  const waves = []
+  for (const l of lanes) {
+    const fits = w => w.length < size && !w.some(o => (o.dirs || []).some(d => (l.dirs || []).includes(d)))
+    const wave = waves.find(fits)
+    if (wave) wave.push(l)
+    else waves.push([l])
+  }
+  return waves
 }
 
 // The admitted fix checkpoints of a pass, as one envelope: {data: {pass,
@@ -645,7 +676,11 @@ function recipeDriftJq(passDir, count) {
 // lane uses, and a `run --resume` or `--retake` after rig-only edits.
 // Contract 10 triages a pass's failures: `vybava ui-loop triage` writes
 // <pass>/triage.json (see UILOOP_TRIAGE_CLASSES) and state carries `triage`.
-const UILOOP_STATE_CONTRACT = 10
+// Contract 11 runs fix lanes side by side: `vybava ui-loop lane start | land |
+// abandon | retire`, each lane in a slot worktree of its own and merged into
+// the pass branch when it lands; `state.lanes` (every started lane, its slot
+// and status), `config.fix.parallel` and `lanes.inFlight`.
+const UILOOP_STATE_CONTRACT = 11
 
 // Stops a vybava below the contract with the upgrade. `reported` is the
 // `vybava --version` line Prepare relays, only diagnostic text for the message.
@@ -689,6 +724,13 @@ function stateProblem(state) {
   if (state.next && state.next.stage === 'verify' && only == null) return bad('next.only', only, 'the verify selection (screen ids, [] for a full reshoot)')
   const parallel = state.next && state.next.parallel
   if (parallel != null && !(Number.isInteger(parallel) && parallel >= 0)) return bad('next.parallel', parallel, 'a count of review runs')
+  // Contract 11 always prints the started lanes ([] when none) and how many
+  // fix lanes run at once: a relay that dropped the lanes would plan a round
+  // beside a lane that died, and a dropped count would run it one at a time.
+  const fixParallel = state.config.fix && state.config.fix.parallel
+  if (!Array.isArray(state.lanes) || !(Number.isInteger(fixParallel) && fixParallel >= 1)) return `prepare relayed no state.lanes or state.config.fix.parallel, which contract ${UILOOP_STATE_CONTRACT} always prints ([] when no lane is started) — relay \`vybava ui-loop state\` verbatim; rerun the stage`
+  const stray = state.lanes.find(l => !l || typeof l.lane !== 'string' || typeof l.status !== 'string' || typeof l.worktree !== 'string')
+  if (stray !== undefined) return bad('lanes', stray, '{lane, status, worktree, …} as the CLI prints each started lane')
   // Contract 7 always prints the coverage gaps and notShot, their ids ([]
   // when every screen has an ok shot): a relay that dropped or cut one would
   // let a pass with never-shot screens read as covered.
@@ -855,6 +897,19 @@ const UILOOP_DETECT_SCHEMA = {
 // vybava omitted it.
 const UILOOP_CLI_OWNED = 'copy it verbatim from the CLI\'s output; OMIT it when the CLI did not print it — never invent a value or placeholder'
 const UILOOP_BLOCKED = { type: 'object', properties: { batch: { type: 'string' }, reason: { type: 'string' } }, required: ['batch', 'reason'] }
+// A started fix lane as `state.lanes` prints it (contract 11): its record
+// (`<pass>/lanes/<lane>.json`) with the status state judged.
+const UILOOP_STARTED_LANE = {
+  type: 'object',
+  properties: {
+    lane: { type: 'string' }, kind: { type: 'string', description: 'primitives | areas | rework' },
+    dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } },
+    slot: { type: 'integer' }, worktree: { type: 'string', description: 'the slot worktree, absolute' }, slotRoot: { type: 'string', description: 'the config root inside the slot, absolute' }, branch: { type: 'string' }, base: { type: 'string' },
+    owner: { type: 'string' }, status: { type: 'string', description: 'running | unmerged | dirty | conflict' }, ahead: { type: 'integer' },
+  },
+  required: ['lane', 'kind', 'dirs', 'keys', 'worktree', 'owner', 'status'],
+}
+
 const UILOOP_STATE = {
   type: 'object',
   description: 'the `data` of `vybava ui-loop state --json`, verbatim: copy every field the CLI printed and omit every field it did not, never inventing one',
@@ -862,6 +917,7 @@ const UILOOP_STATE = {
     contract: { type: 'integer', description: `the ui-loop state contract; ${UILOOP_CLI_OWNED}` },
     vybava: { type: 'string', description: `the binary's version; ${UILOOP_CLI_OWNED}` },
     recovery: { type: 'object', properties: { lane: { type: 'string' }, kind: { type: 'string' }, dirs: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, required: ['lane', 'kind', 'dirs', 'keys'] },
+    lanes: { type: 'array', description: `every fix lane started and not yet landed or abandoned (contract 11), each as printed; [] when none; ${UILOOP_CLI_OWNED}`, items: UILOOP_STARTED_LANE },
     headSha: { type: 'string' }, scoreboardBasis: { type: 'string' }, checkpointApiNotes: { type: ['array', 'null'], items: { type: 'string' } },
     reviewBasis: { type: 'string', description: `a 64-hex digest (empty before the first pass); ${UILOOP_CLI_OWNED}` },
     capturedHeadSha: { type: 'string', description: `a full commit SHA, or empty; ${UILOOP_CLI_OWNED}` },
@@ -873,7 +929,7 @@ const UILOOP_STATE = {
     pending: { type: ['integer', 'null'], description: `a newer pass with no shots and no running capture (state reads the newest pass with shots instead), null when none; ${UILOOP_CLI_OWNED}` },
     paused: { type: ['object', 'null'], description: `the loop's pause (\`vybava ui-loop pause\`): who paused it, when (RFC3339), why and the newest pass then; null while the loop runs; ${UILOOP_CLI_OWNED}`, properties: { by: { type: 'string' }, at: { type: 'string' }, reason: { type: 'string' }, pass: { type: 'integer' } }, required: ['by', 'at'] },
     triage: { type: ['object', 'null'], description: `the pass's failure triage (\`vybava ui-loop triage\`): its triage.json, how many groups and the groups by class; null before the pass was triaged; ${UILOOP_CLI_OWNED}`, properties: { file: { type: 'string' }, groups: { type: 'integer' }, byClass: { type: 'object', additionalProperties: { type: 'integer' } } }, required: ['file', 'groups', 'byClass'] },
-    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } } } },
+    config: { ...UILOOP_CONFIG, properties: { ...UILOOP_CONFIG.properties, lint: { type: 'object', description: `the effective lint values; ${UILOOP_CLI_OWNED}`, properties: { grid: { type: 'integer' }, touchTarget: { type: 'integer' } } }, fix: { type: 'object', description: `the fix stage's settings (contract 11); ${UILOOP_CLI_OWNED}`, properties: { parallel: { type: 'integer', description: 'fix lanes run at once; 1 is one at a time in the pass worktree' } } } } },
     shots: { type: 'integer' }, screens: { type: 'integer', description: 'the reviewable screens: those with at least one ok shot' },
     retired: { type: 'integer', description: `screens the manifest retires (dead code, plugin not installed, feature off): never shot, batched or counted; ${UILOOP_CLI_OWNED}` },
     coverageGaps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'reason'] }, description: `one {id, reason} per screen that is not retired and has no ok shot (unreachable, recipe-failed, error, blank), every one ([] when none); ${UILOOP_CLI_OWNED}` },
@@ -966,7 +1022,7 @@ const UILOOP_PREP_SCHEMA = {
     state: UILOOP_STATE,
     doctor: UILOOP_DOCTOR,
     batches: { type: 'object', description: 'the `data` of `vybava ui-loop batches --json`, verbatim — only when asked for', properties: { size: { type: 'integer' }, screens: { type: 'integer' }, batches: { type: 'array', items: UILOOP_BATCH }, done: { type: 'array', items: { type: 'string' } }, left: { type: 'array', items: { type: 'string' } }, claimed: { type: 'array', items: UILOOP_BATCH, description: `the batches --claim leased to this run, every one ([] when other runs hold every batch left); ${UILOOP_CLI_OWNED}` }, carried: { type: 'array', items: { type: 'object', properties: { screen: { type: 'string' }, from: { type: 'integer' } }, required: ['screen', 'from'] }, description: `the screens carried from an earlier pass, which no batch holds, every one; ${UILOOP_CLI_OWNED}` } }, required: ['screens', 'batches', 'done', 'left'] },
-    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, rework: { type: 'array', items: UILOOP_LANE, description: `the rework lanes (rework-<n>), every one: the deferred items, each lane owning their needs' dirs and their own; ${UILOOP_CLI_OWNED}` }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, open: { type: 'integer' }, finished: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
+    lanes: { type: 'object', description: 'the `data` of `vybava ui-loop lanes --json`, verbatim — only when asked for', properties: { primitives: { type: 'array', items: UILOOP_LANE }, areas: { type: 'array', items: UILOOP_LANE }, rework: { type: 'array', items: UILOOP_LANE, description: `the rework lanes (rework-<n>), every one: the deferred items, each lane owning their needs' dirs and their own; ${UILOOP_CLI_OWNED}` }, frozen: { type: 'array', items: { type: 'string' } }, foreign: { type: 'array', items: { type: 'string' } }, i18n: { type: 'array', items: { type: 'string' } }, inFlight: { type: 'array', items: { type: 'string' }, description: `the open items a started lane holds (contract 11): in no lane; ${UILOOP_CLI_OWNED}` }, open: { type: 'integer' }, finished: { type: 'integer' }, max: { type: 'integer' } }, required: ['primitives', 'areas', 'frozen', 'foreign', 'open', 'finished'] },
     stale: { type: 'array', items: { type: 'string' }, description: 'the detail of every CHECKPOINT_STALE warning a command printed, verbatim (never in problems)' },
     // The rig lane's work, counted for the fix stage (contract 9); the lane reads the lists itself.
     labels: UILOOP_LABELS,
@@ -1074,6 +1130,9 @@ const UILOOP_LANE_SCHEMA = {
     apiChanges: { type: 'array', items: { type: 'string' }, description: 'primitive lanes: every public API addition, additive only' },
     i18n: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }, description: 'strings the fixes need: {key, <locale>: text} — also in each item\'s checkpoint' },
     treeCleanOfMine: { type: 'boolean' },
+    landed: { type: 'boolean', description: 'a lane in a slot only: `vybava ui-loop lane land` merged it into the pass branch (its data.merged)' },
+    abandoned: { type: 'boolean', description: 'a lane in a slot only: its merge conflicted and `vybava ui-loop lane abandon` gave it up' },
+    notStarted: { type: 'string', description: 'a lane in a slot only: the diagnostic code and detail `vybava ui-loop lane start` refused it with; nothing was changed' },
     paused: UILOOP_PAUSED,
     problems: { type: 'array', items: { type: 'string' } },
   },
@@ -1241,7 +1300,7 @@ const terrain = await run.agent(withPreamble(
   (scope === 'idea' ? `Idea requirements:\n${requirements}\n\n` : '') +
   `Produce: the route inventory (deduplicated, every entry with a file), the journeys, the extend points (where the idea/pass should build on what exists), the duplication risks (an existing thing the idea would re-implement), and the open questions a brainstorm must settle.\n` +
   (push
-    ? `Then push it as a vitrinka artifact page titled "Terrain — ${scope === 'idea' ? (requirements.slice(0, 60) || 'idea') : 'app'}" following the vitrinka artifact skill (Skill tool: vitrinka:artifact)${task ? `, attached to task ${task}` : ''}${project ? `, project ${project}` : ''}; the page holds the same content as readable sections with file references. Return the server-returned artifact url as terrainUrl and its board as boardUrl.`
+    ? `Then push it as a vitrinka artifact page titled "Terrain — ${scope === 'idea' ? (requirements.slice(0, 60) || 'idea') : 'app'}" following the vitrinka publish skill in mode "artifact standalone" (Skill tool: vitrinka:publish)${task ? `, attached to task ${task}` : ''}${project ? `, project ${project}` : ''}; the page holds the same content as readable sections with file references. Return the server-returned artifact url as terrainUrl and its board as boardUrl.`
     : 'Do not push anything; return the terrain only.')
 ), { label: 'terrain', phase: 'Synthesize', schema: TERRAIN_SCHEMA })
 

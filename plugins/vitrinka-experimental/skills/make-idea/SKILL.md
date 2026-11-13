@@ -36,7 +36,7 @@ Workflow tool: `{name: "vitrinka-experimental:build-idea", args: {brief:
 this worktree, runs the repo's gates, does ONE quick "does it work" check
 (every changed route once at desktop, the main journey once, published as
 `<branch>-quick-check`), opens a DRAFT PR through `prm` and hands the task
-back through `vitrinka-pm:handoff` with the running app url, the parked
+back through `vitrinka-pm:work handoff` with the running app url, the parked
 state and what to poke at. No device matrix, no review loop, no code loop:
 `cap`, `severity`, `matrix` and `lanes` are refused — a device pass is not
 a build decision.
