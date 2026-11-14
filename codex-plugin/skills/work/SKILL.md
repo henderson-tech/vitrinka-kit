@@ -17,6 +17,7 @@ Modes: `work pickup <id|url>` starts a task; `work handoff` ends it with `hand_b
 - A decision is asked now while a human is in the session and its answer recorded in `summary`, never filed as `Decide:`; a `human` gate or `decide: true` is only for a run nobody attends (a Workflow, a headless or scheduled run).
 - Never decide a human's call silently in code.
 - Print every `url` and `rendered` exactly as returned; never hand-compose a task URL.
+- Time stated by hand (`{kind:"work_entry"}`, `docs guide:work-time`) is the person's: write it only when they ask, never to log your own time (the hooks and runs measure it); in a task-bound checkout `vitrinka me time start` times the bound task with no argument.
 - The vitrinka-pm hooks run `vitrinka hook-context <verb>`: SessionStart `start` binds the session to the checkout's `vt-<id>` as a live run and prints the pickup, PreToolUse `touch` fires `path` todos, SessionEnd `task-end` ends the run, Stop `stop` gates the hand-back; Codex gets them from `vitrinka setup` (trusted once in `/hooks`); `vitrinka doctor` repairs them.
 
 ## work pickup <id|url>
