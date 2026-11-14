@@ -4,8 +4,9 @@
  * 'org_42', label: 'Turena'}}`. The contract is frozen and the server checks
  * the same limits: at most 8 keys; a key is 1 to 32 characters of
  * [a-z0-9_]; a value is a string of 1 to 100 characters, or `{id, label?}`
- * with an id of 1 to 100 characters and a label of at most 100. Characters
- * are Unicode code points, never UTF-16 units.
+ * with an id of 1 to 100 characters and a label of at most 100. A value, id
+ * and label are trimmed first and the trimmed text is sent. Characters are
+ * Unicode code points, never UTF-16 units.
  *
  * What the host passes here is CLAIMED (unverified). The same map in the
  * `ctx` claim of the identity token the host's server signed is VERIFIED and
@@ -32,9 +33,9 @@ const KEY = /^[a-z0-9_]{1,32}$/;
 const VALUE_MAX = 100;
 
 const KEY_RULE = 'a key is 1 to 32 characters of [a-z0-9_]';
-const VALUE_RULE = `a value is a string of 1 to ${VALUE_MAX} characters, or {id, label?}`;
-const ID_RULE = `an id is 1 to ${VALUE_MAX} characters`;
-const LABEL_RULE = `a label is at most ${VALUE_MAX} characters`;
+const VALUE_RULE = `a value is a string of 1 to ${VALUE_MAX} characters after trimming, or {id, label?}`;
+const ID_RULE = `an id is 1 to ${VALUE_MAX} characters after trimming`;
+const LABEL_RULE = `a label is at most ${VALUE_MAX} characters after trimming`;
 const COUNT_RULE = `a context holds at most ${CONTEXT_MAX_KEYS} keys`;
 
 /** Code points, as the contract counts characters (an emoji is one, not two UTF-16 units). */
@@ -50,17 +51,26 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-/** A clean copy of one value, or the rule it breaks. */
+/**
+ * A clean copy of one value, or the rule it breaks. A value, an id and a
+ * label are trimmed first, then counted, and the trimmed text is what is
+ * sent: the server holds the same rule, and a whitespace-only value it once
+ * refused with a 422 for the whole report is dropped here instead (vt-9515).
+ */
 function cleanValue(v: unknown): ReportContextValue | { broken: string } {
   if (typeof v === 'string') {
-    const n = chars(v);
-    return n >= 1 && n <= VALUE_MAX ? v : { broken: VALUE_RULE };
+    const s = v.trim();
+    const n = chars(s);
+    return n >= 1 && n <= VALUE_MAX ? s : { broken: VALUE_RULE };
   }
   if (!isPlainObject(v)) return { broken: VALUE_RULE };
-  const { id, label } = v;
-  if (typeof id !== 'string' || chars(id) < 1 || chars(id) > VALUE_MAX) return { broken: ID_RULE };
-  if (label === undefined) return { id };
-  if (typeof label !== 'string' || chars(label) > VALUE_MAX) return { broken: LABEL_RULE };
+  if (typeof v.id !== 'string') return { broken: ID_RULE };
+  const id = v.id.trim();
+  if (chars(id) < 1 || chars(id) > VALUE_MAX) return { broken: ID_RULE };
+  if (v.label === undefined) return { id };
+  if (typeof v.label !== 'string') return { broken: LABEL_RULE };
+  const label = v.label.trim();
+  if (chars(label) > VALUE_MAX) return { broken: LABEL_RULE };
   // Only id and label leave: anything else on the host's object is not part of the contract.
   return { id, label };
 }

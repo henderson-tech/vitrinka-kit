@@ -8,7 +8,8 @@
   organization: {id: 'org_42', label: 'Turena'}}`) that the next report
   carries as `context` on `POST /api/v1/reports`. At most 8 keys of
   `[a-z0-9_]` (1 to 32 characters); each value a string of 1 to 100
-  characters or `{id, label?}`. `setContext` replaces the whole map, and
+  characters or `{id, label?}`, trimmed before it is counted and sent
+  trimmed. `setContext` replaces the whole map, and
   `{}` or null clears it; an empty map sends nothing. An invalid key or
   value is dropped and warned about once in the console, naming it and the
   limit, never thrown. What you pass is claimed; the same map in your

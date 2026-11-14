@@ -67,6 +67,6 @@ test('an invalid entry is dropped and warned about by name, never thrown; the re
 
   expect(creates()[0]!.context).toEqual({ environment: 'demo' });
   expect(warnings.filter((w) => w.includes('setContext dropped'))).toEqual([
-    'vitrinka: setContext dropped "Bad-Key" (a key is 1 to 32 characters of [a-z0-9_]); "note" (a value is a string of 1 to 100 characters, or {id, label?}). The report goes without them.',
+    'vitrinka: setContext dropped "Bad-Key" (a key is 1 to 32 characters of [a-z0-9_]); "note" (a value is a string of 1 to 100 characters after trimming, or {id, label?}). The report goes without them.',
   ]);
 });

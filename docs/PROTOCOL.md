@@ -295,7 +295,8 @@ optional marks drawn on the page.
   `setContext(map)` (replacing the whole map; `{}` or null clears it) names
   where the report came from, at most 8 keys of `[a-z0-9_]{1,32}`, each a
   string of 1 to 100 characters or `{id, label?}` (id 1 to 100, label at
-  most 100 characters). The widget drops an invalid entry with a console
+  most 100 characters), each trimmed before it is counted and sent trimmed,
+  so a whitespace-only value or id is invalid. The widget drops an invalid entry with a console
   warning naming it and sends the rest as `context`; nothing else of the
   page is added. It is claimed; the same map in the signed token's `ctx`
   claim is verified and wins for a key in both, and the widget forwards the

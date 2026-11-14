@@ -58,7 +58,7 @@ export interface ReportOptions extends ReportScriptOptions {
   identity?: IdentifyInput;
   /**
    * Claimed context the report carries (vt-9515): at most 8 keys of [a-z0-9_]{1,32}, each a string of
-   * 1 to 100 characters or {id, label?}. The same map in the signed token's `ctx` claim is verified and wins.
+   * 1 to 100 characters or {id, label?}, each trimmed before it is counted. The same map in the signed token's `ctx` claim is verified and wins.
    */
   context?: ReportContextInput;
   /** Where the element goes (default `document.body`). */

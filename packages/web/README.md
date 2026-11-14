@@ -421,7 +421,9 @@ in memory only; pass it on every load.
 **Context.** Tell vitrinka where a report came from: a small map the report
 carries as `context`, at most 8 keys of `[a-z0-9_]` (1 to 32 characters),
 each value a string of 1 to 100 characters or `{id, label?}` (an id of 1 to
-100 characters, a label of at most 100). The key `environment` also sets the
+100 characters, a label of at most 100). Values, ids and labels are trimmed
+before they are counted, and the trimmed text is sent, so a whitespace-only
+value is dropped. The key `environment` also sets the
 filed task's environment, over the project's host rule.
 
 ```ts

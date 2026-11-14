@@ -46,18 +46,31 @@ describe('a context map', () => {
     });
     expect(context).toEqual({ at_limit: 'x'.repeat(100), empty_label: { id: 'org', label: '' } });
     expect(dropped).toEqual([
-      '"empty" (a value is a string of 1 to 100 characters, or {id, label?})',
-      '"long" (a value is a string of 1 to 100 characters, or {id, label?})',
-      '"no_id" (an id is 1 to 100 characters)',
-      '"long_id" (an id is 1 to 100 characters)',
-      '"long_label" (a label is at most 100 characters)',
-      '"number" (a value is a string of 1 to 100 characters, or {id, label?})',
-      '"list" (a value is a string of 1 to 100 characters, or {id, label?})',
+      '"empty" (a value is a string of 1 to 100 characters after trimming, or {id, label?})',
+      '"long" (a value is a string of 1 to 100 characters after trimming, or {id, label?})',
+      '"no_id" (an id is 1 to 100 characters after trimming)',
+      '"long_id" (an id is 1 to 100 characters after trimming)',
+      '"long_label" (a label is at most 100 characters after trimming)',
+      '"number" (a value is a string of 1 to 100 characters after trimming, or {id, label?})',
+      '"list" (a value is a string of 1 to 100 characters after trimming, or {id, label?})',
     ]);
   });
 
   it('counts characters as code points: 100 emoji fit, 101 do not', () => {
     expect(cleanContext({ a: '😀'.repeat(100), b: '😀'.repeat(101) }).context).toEqual({ a: '😀'.repeat(100) });
+  });
+
+  it('trims a value, id and label before counting, and sends the trimmed text', () => {
+    const padded = `  ${'x'.repeat(100)}  `;
+    const { context, dropped } = cleanContext({ environment: ' demo ', at_limit: padded, organization: { id: ' org_42 ', label: ' Turena ' } });
+    expect(context).toEqual({ environment: 'demo', at_limit: 'x'.repeat(100), organization: { id: 'org_42', label: 'Turena' } });
+    expect(dropped).toEqual([]);
+  });
+
+  it('drops a value or id that is empty after trimming', () => {
+    const { context, dropped } = cleanContext({ plan: ' ', organization: { id: '  ' }, ok: 'y' });
+    expect(context).toEqual({ ok: 'y' });
+    expect(dropped).toEqual(['"plan" (a value is a string of 1 to 100 characters after trimming, or {id, label?})', '"organization" (an id is 1 to 100 characters after trimming)']);
   });
 
   it('holds at most 8 keys: the first eight valid ones in the host’s order, the rest dropped by name', () => {
@@ -98,6 +111,12 @@ describe('setContext’s warning', () => {
     expect(normalizeContext(bad)).toEqual({ fine: 'ok' });
     expect(normalizeContext(bad)).toEqual({ fine: 'ok' });
     expect(warnings).toEqual(['vitrinka: setContext dropped "Warned_once" (a key is 1 to 32 characters of [a-z0-9_]). The report goes without it.']);
+  });
+
+  it('warns once about a whitespace-only value, naming the key and the rule', () => {
+    expect(normalizeContext({ blank_plan: ' ', fine: 'ok' })).toEqual({ fine: 'ok' });
+    expect(normalizeContext({ blank_plan: ' ', fine: 'ok' })).toEqual({ fine: 'ok' });
+    expect(warnings).toEqual(['vitrinka: setContext dropped "blank_plan" (a value is a string of 1 to 100 characters after trimming, or {id, label?}). The report goes without it.']);
   });
 
   it('a valid map warns about nothing', () => {
