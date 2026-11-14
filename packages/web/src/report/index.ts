@@ -8,6 +8,7 @@
  *   const report = mountReport({ key: 'vkb_…', base: 'https://vitrinka.example', locale: 'cs' });
  *   report.identify({ token });   // a token your server signed
  *   report.setLocale('en');       // live, the draft survives
+ *   report.setContext({ environment: 'demo', organization: { id: 'org_42', label: 'Turena' } }); // the next report carries it
  *
  * Or the tag: call `defineReportElement()` once, then `<vitrinka-report key=… base=…>`.
  * rrweb (a peer dependency) loads lazily, when the project's profile records
@@ -17,6 +18,7 @@ import type { RecordFn } from '../recorder/capture/rrweb-lane';
 import { defineReportElement as define, type Faces, mountReport as mount, type ReportHandle, type ReportOptions } from './element';
 
 export type { CaptureClass, CaptureNarrowing, CaptureProfile, CaptureStorage } from './profile';
+export type { ReportContext, ReportContextInput, ReportContextValue } from './context';
 export type { Locale } from './i18n';
 export type { IdentifyInput, Identity } from './identity';
 export type { Marker, MarkerShape, WireMarker } from './markers';

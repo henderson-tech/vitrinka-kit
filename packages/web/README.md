@@ -377,10 +377,11 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 | `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link). A linked member also switches in place: **The face switch** below |
 | `capture` | narrow the capture profile: `{storage: 'memory', windowSec, maxBytes, classes}` |
 | `identity` | as `identify()` below |
+| `context` | as `setContext()` below: **Context** |
 | `appVersion`, `sanitizeUrl` | as on the recorder |
 
 The handle (and the element) has `open()`, `close()`, `identify()`,
-`setLocale()` and `face`, the face on screen (`recorder` while a member has
+`setContext()`, `setLocale()` and `face`, the face on screen (`recorder` while a member has
 switched to the pill); the handle also `unmount()`s. For the tag from npm, call
 `defineReportElement()` once. Closing the card hands focus back to whatever
 had it when the card opened (your control, the field the shortcut fired in),
@@ -416,6 +417,28 @@ report.identify(null);                      // anonymous: held until approved
 on the page; a widget's own `identify()` wins (`null` makes that widget
 anonymous, `undefined` hands it back to the page-wide one). Identity lives
 in memory only; pass it on every load.
+
+**Context.** Tell vitrinka where a report came from: a small map the report
+carries as `context`, at most 8 keys of `[a-z0-9_]` (1 to 32 characters),
+each value a string of 1 to 100 characters or `{id, label?}` (an id of 1 to
+100 characters, a label of at most 100). Values, ids and labels are trimmed
+before they are counted, and the trimmed text is sent, so a whitespace-only
+value is dropped. The key `environment` also sets the
+filed task's environment, over the project's host rule.
+
+```ts
+import { mountReport, type ReportContext } from '@vitrinka/web/report';
+
+const report = mountReport({ key: 'vkb_…', context: { environment: 'demo' } });
+const context: ReportContext = { environment: 'demo', organization: { id: 'org_42', label: 'Turena' } };
+report.setContext(context);                 // replaces the whole map for the next report
+report.setContext(null);                    // clears it ({} too): nothing is sent
+```
+
+What you pass here is claimed. Put the same map in your signed token's `ctx`
+claim to have it verified: for a key in both, the signed value wins. An
+invalid key or value is dropped from what is sent and warned about once in
+the console, naming the key and the limit; nothing is thrown.
 
 **The account and the menu.** The header's chip shows the reporter's
 initials and first name — the person your token names (the name as

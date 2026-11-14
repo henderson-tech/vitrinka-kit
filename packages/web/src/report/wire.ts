@@ -28,7 +28,7 @@
  *
  * OPTIONAL FIELDS NEVER COST THE REPORT: a vitrinka older than a field refuses
  * it by name (400, `unknown field "<name>"`), and the create goes again without
- * each optional field it names — `type`, `memberToken` — once. `memberToken`
+ * each optional field it names — `type`, `memberToken`, `context` — once. `memberToken`
  * proves this browser's vitrinka member link (vt-8020), so the member co-owns
  * the report; `memberError` says the server did not take it, and the report
  * files regardless.
@@ -36,6 +36,7 @@
 import { api, type ApiTarget, permanentStatus, uploadTo, VitrinkaApiError } from '../recorder/api';
 import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } from './engine';
 import type { Locale, ReportKind } from './i18n';
+import type { ReportContext } from './context';
 import type { Identity } from './identity';
 import type { WireMarker } from './markers';
 
@@ -64,6 +65,8 @@ export interface ReportEnvelope {
   type?: ReportKind;
   /** The vitrinka member link this browser holds for the widget's base (face.ts memberTokenFor), absent without one: the member co-owns the report. */
   memberToken?: string;
+  /** The host's claimed context (context.ts, vt-9515), already validated; absent when the map is empty. */
+  context?: ReportContext;
 }
 
 export interface SubmitReply {
@@ -221,7 +224,7 @@ export class ReportJob {
   /**
    * The create leg, answering with the member link the accepted body carried
    * ('' none). A vitrinka older than an optional field refuses it by name;
-   * the reporter's word (`type`) and the member link (`memberToken`) are
+   * the reporter's word (`type`), the member link (`memberToken`) and the host's context (`context`) are
    * optional, the report is not, so it goes again without each field named,
    * once. A refusal naming nothing still in the body fails the leg.
    */
@@ -240,6 +243,11 @@ export class ReportJob {
         } else if (field === 'memberToken' && body.memberToken !== undefined) {
           console.warn('vitrinka: this server takes no member link yet — sending the report without it');
           const { memberToken: _dropped, ...rest } = body;
+          body = rest;
+        } else if (field === 'context' && body.context !== undefined) {
+          // The host's claimed context is optional like the rest (vt-9515); a signed `ctx` claim rides the token and is not dropped.
+          console.warn('vitrinka: this server takes no report context yet; sending the report without it');
+          const { context: _dropped, ...rest } = body;
           body = rest;
         } else {
           throw e;
