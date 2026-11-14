@@ -13,23 +13,27 @@ The verbs are the MCP generic verbs (`list · get · create · update · delete 
 
 - State groups `backlog · unstarted · started · completed · cancelled` are universal; a project's states are keys inside them and `status` derives from the group.
 - `list {kind:"state"}` before writing `state`; `list {kind:"field"}` before writing `fields`.
-- Types `task · bug · story · epic · todo · qa · journey · meeting · watch` are ONE generated enum; engineering work is a `task`.
-- An `epic` is the feature's whole record (children by `parentId`; preset `outcome · non_goals · gates · decisions · ledger_state · waiting_on · next_action`).
+- Types `task · bug · story · epic · todo · qa · journey · meeting · watch · initiative` are ONE generated enum; engineering work is a `task`.
+- An `initiative` sits above epics (top level or under another initiative; an epic may sit under one, or anywhere it could before): preset `budget · budget_currency`; its direct dated non-epic children are its checkpoints, its refs its documents.
+- A Roadmap milestone is a task under an initiative with `dueAt`; `create {kind:"milestone"}` makes a release. `template: <key>` on `create {kind:"task"}` fills what you omit from a project template (`get {kind:"project_settings"}` lists them).
+- An `epic` is the feature's whole record (children by `parentId`, or a whole list in one write as `children: [{title, children?}]` on create or update, ≤50 lines, ≤3 deep; preset `outcome · non_goals · gates · decisions · ledger_state · waiting_on · next_action`).
 - A `qa` task is the feature's test plan (`scope · roles · verdict · coverage`); a `journey` is one user path in it (`key · role · route · flow · steps · expected · verdict · test`); author `flow`, never `steps`.
 - A `meeting` is promoted from the diary; a `todo` is the `me` skill's shape.
 - Tick a gate (`gates`, `decisions`) `done` WITH `evidence`, never bare; `kind` says who resolves it: `human` (waits on `who`, else assignee, else reporter), `action`, `date` (auto-ticked at `at`).
 - `labels` on `create {kind:"task"}` sets, on `update {kind:"task"}` REPLACES; `label_task {add, remove}` increments when another agent may be labelling.
+- `update {kind:"label", project, label, name | colour}` renames or recolours one label project-wide (its tasks keep it); `delete {kind:"label"}` strips it from every task; both need `label.manage` (Product manager and above); never rename into or out of `eve-*`.
 - `eve-*` labels fire Eve flows and spend credit; never use them for bookkeeping.
 - Refs are evidence: `session · shot · board · file · pr · run · commit`, typed documents `transcript · conversation · brainstorm · plan · handoff · decision · distill · brief · notes`, and `final`.
 - Never attach `commit` or `pr` refs by hand: the GitHub App attaches them (`Vitrinka-Task:` trailer, `vt-<id>` branches).
 - A PR claims a task by branch or title key or a closing keyword in its body (a bare mention only links); a merged claiming PR completes a task only when no open checklist item or other claiming PR remains, never an epic.
-- A `file` ref is a URL, never a path: `vitrinka task upload <id> <files…>` streams disk, `upload_task_file` takes inline text.
+- A `file` ref is a URL, never a path: `vitrinka task upload <id> <files…>` streams disk, `upload_task_file` takes inline text `content` or a public https `url` the server downloads (any type); a file that lives only in the chat is dropped on the task's `url` by its person.
 - `complexity` (trivial · junior · medior · senior · architect · research — the reasoning, never a person) and `size` (XS–XXL) are separate; "" is unestimated, never trivial (docs `guide:estimating`).
 - `readers` are the roles a task is written for, `fields.for` whose problem it solves, `audience` who should see it: a filter, never access.
+- `environment` is where a task was seen (dev, demo, production or a host); a report or session fills it from the project's domain rules, `f.environments` narrows by it.
 - ONE owner task per external issue (GitHub, GitLab, Jira); a second attach answers `link_owned`; attach with `add_task_ref {kind: "external", ref: <url>}`, `vitrinka task links add <id> <url>` or `links` at creation (`docs {topic: "guide:external-links"}`).
 - Before filing for an issue run `vitrinka task find <url>` (or `search {q: <url>, mode:"resolve"}`); it is exact, never a ranked guess.
 - Before filing anything run `search {mode:"similar", project, q: <draft title>}` and link, extend or follow a match instead of filing a twin.
-- Attachments are versioned, never replaced: the same filename is the next version, `versionOf` names the lineage, a `distill` carries `derivedFrom`; never delete a version to clean up.
+- Attachments are versioned, never replaced: the same filename is the next version, `versionOf` names the lineage, a `distill` carries `derivedFrom`; never delete a version to clean up. `delete {kind:"task_ref", id, ref}` removes a wrong attachment.
 - Write a `hint` on everything you attach; `meta.tokens` tells the next reader the price.
 - Bodies reference by grammar, never URL: `<PREFIX>-<id>`, `vt-<id>`, `#<id>`, `owner/repo#123`, a repo path (`internal/web/foo.go:64`), an attachment's filename.
 - An unknown argument is a 400 naming the key and the accepted set: fix the call, never retry the same shape.
@@ -48,10 +52,10 @@ The verbs are the MCP generic verbs (`list · get · create · update · delete 
 - Never file a task and a draft for the same finding.
 - Never accept your own drafts unless the user asked you to triage; withdraw a moot one with `intake_verdict {verdict: "decline"}` from the same credential.
 - Plan proposals (`list {kind:"intake", group:"plan"}`, `proposal_verdict`) follow the same rules.
-- Read counts with `summarize_tasks`; rows with `list {kind:"task", f}` (states, groups, types, categories, origins, admission, priorities, assignees, labels, sprint, milestone, parent, intake, due · start · created · updated spans, text, fields, order, sort `[{key, dir}]`) or `ask` (Eve compiles it into `f`; page on with `compiled` as `f`).
-- `search {kind:"task"}` narrows by type, state, parent or `epic` (any depth), `within` for one task's tree; `search {board}` with no q for the tasks a board belongs to; `search {q, across: true}` for every workspace.
+- Read counts with `summarize_tasks`; rows with `list {kind:"task", f}` (states, groups, types, categories, origins, admission, priorities, assignees, reporters, labels, environments, sprint, milestone, parent (+`descendants`), intake, due · start · created · updated spans, text, fields, order, sort `[{key, dir}]`) or `ask` (Eve compiles it into `f`; page on with `compiled` as `f`).
+- `search {kind:"task"}` narrows by type, state, parent or `epic` (any depth), `within` for one task's tree; `get {kind:"task", id, include:["tree"]}` reads an epic's whole workspace in one call (every level, rank order, `parentId` per row); `search {board}` with no q for the tasks a board belongs to; `search {q, across: true}` for every workspace.
 - `get {kind:"brief"}` before planning anything in a project.
-- `read_task_ref` under a `budget` or with a `question`; never a transcript blind.
+- `read_task_ref` under a `budget` or with a `question`; a picture answers as an image fitted to the budget, another binary as a diagnosis naming the task's `url`; never a transcript blind.
 - `ask_task {id, question}` for a cited answer over one task, `ask_task {project, question}` for an open question; it spends AI credits, never use it to find ONE task.
 - The feature lifecycle hangs on the epic: `brainstorming` files it; at merge the QA plan is drafted as ONE family (a `qa` draft and its `journey` drafts) in one `propose_tasks` batch.
 - One open plan per epic: a newer draft supersedes the pending one; a live plan takes new journeys as drafts under it; a second plan beside it is refused.
@@ -63,9 +67,9 @@ The verbs are the MCP generic verbs (`list · get · create · update · delete 
 - Sprint transition: read bounded members → `create {kind:"sprint_transition_preview"}` with the chosen carry → apply that exact preview with a stable `requestId` (`create {kind:"sprint_transition"}`); a stale version means reread; no implicit carry or deletion.
 - Readiness (`get {kind:"scope_readiness"}`): Before/Ship obligations block shipment, After obligations block closure; deferral needs an owner and a typed trigger.
 - Cite evidence with `create {kind:"candidate_evidence", verified: false}`; never verify it or declare shipment; a cut release is not a deployment.
-- `get {kind:"overview", project}` answers what is built and building (`after`, `chapters: <chaptersNext>` page on); `get {kind:"copilot", project}` what needs doing; `get {kind:"cockpit", project, id}` one sprint; `get {kind:"roadmap", project}` when each epic lands.
+- `get {kind:"overview", project}` answers what is built and building (`after`, `chapters: <chaptersNext>` page on); `get {kind:"copilot", project}` what needs doing; `get {kind:"cockpit", project, id}` one sprint; `get {kind:"roadmap", project}` when each initiative and epic lands.
 - Bugs: `list {kind:"bug", project?, q, sort, state, source, filed: "me"}`; a tester's verdict is `create {kind:"retest", id, verdict, note?}`, never `update {kind:"task"}`.
-- `get {kind:"project_graph", project, node: "task:12"}` reads one node's recorded relations (first 100, `more`, `total`); nothing is inferred.
+- `get {kind:"project_graph", project, node: "task:12"}` reads one node's recorded relations (first 100, `more`, `total`); nothing is inferred. `lens: "work"` reads the mind map: work items, `person:<id>` assignees and reporters, and `fields` values; `states`/`types`/`people` filter.
 - `get {kind:"history_chapter"}` reads a chapter; `update` rewrites its narrative or pins its cover; `create {kind:"history_edition"}` exports chapters; merged work reaches `shipped` only through `vitrinka project deploy-mark <env> <sha>`.
 - `list {kind:"change", project, f}` pages each PR merged to the default branch; `get`/`update {kind:"change"}` read and reword one (an edit pins it); `create {kind:"change", project, fields: {kind, title, …}}` appends one; a PR body's `## Changelog` section is used as written.
 - Rules: `create {kind:"rule", project, name, ast, enabled?}` creates it DISABLED unless `enabled: true`; ALWAYS `dry_run_rule {id, events?, ast?}` and show what would have fired before enabling.
@@ -74,8 +78,8 @@ The verbs are the MCP generic verbs (`list · get · create · update · delete 
 - Transfer: `transfer_project {project, to, dryRun}` (`vitrinka project transfer --to <workspace> [--dry-run]`); dry-run first, show the report and the `merge` renames (`docs {topic: "project-transfer"}`).
 - Never recreate a task in another project: `update {kind:"task", id, project}` moves one, `bulk_update_tasks {ids, patch: {project}}` up to 200; the target must exist (422); the subtree moves along; keys remap; `project` applies first.
 - `merge_project {project, into}` folds a project into another of the SAME workspace; a missing `dryRun` IS a dry run; read the report; the apply is an owner's call (agent token → 403): hand them `vitrinka project merge <old> --into <new> --apply`.
-- Favorites: `my_favorites {scope?, folder?}` reads the caller's bookmarks; `favorite` / `unfavorite {entityType, entityId | entityKey, scope?, folder?}`; star only what the user asked to keep close (CLI `vitrinka fav list|add|rm`).
-- Comments: `create {kind:"comment", id, body}` (`@name` reaches that person, `@eve` asks Eve, `parentId` replies in a thread); `list {kind:"comment", id}` pages them; `get {kind:"inbox"}` is what happened to my tasks.
+- Favorites: `my_favorites {scope?, folder?}` reads the caller's bookmarks; `favorite` / `unfavorite {entityType, entityId | entityKey, scope?, folder?, at?}`; folders are kind `favorite_folder` on create · update · delete; contract `docs {topic: "guide:favorites"}`. Star only what the user asked to keep close (CLI `vitrinka fav list|add|rm`, `vitrinka fav folder add|rename|mv|rm`).
+- Comments: `create {kind:"comment", id, body}` (`@name` reaches that person, `@eve` asks Eve, `parentId` replies in a thread); `list {kind:"comment", id}` pages them; `update {kind:"comment", id, body}` and `delete {kind:"comment", id}` act on your own (an admin on any); `get {kind:"inbox", why?: "mentioned"|"held", before?: <nextBefore>}` is what happened to my tasks; `update {kind:"follow", id, following}` follows a task or stops (a card's `follows: true` is one only followed).
 
 ## Release (`/tasks release [status|refresh|cut|notes]`)
 
