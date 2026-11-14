@@ -23,6 +23,7 @@ Modes: `qa usertest` tests like a user; `qa review [board] [journey] [eve]` file
 - Never require a reporter, plugin or test change: JUnit alone covers Selenium, Cypress, Maestro, Detox, Jest, Go and home-grown harnesses.
 - Shots reach the board when the runner writes them (Playwright `screenshot: "on"`, allure png) or through `VITRINKA_RUN_ID`, `VITRINKA_RUN_DIR`, `VITRINKA_RUN_STARTED_AT`, `VITRINKA_SHOTS=always`; `shotMeta[<file>].step` pins one to a step.
 - The MCP twin is `publish_run {id, manifest}`; never the publisher agent, never a hand-written manifest, never `qa run publish` after `run`, never double-written verdicts or bugs the run covered.
+- A journey verdict set by `update {kind: "task", fields: {verdict}}` records its own one-journey run (yours an agent's, a person's by hand); never publish a run to repeat it. Read results with `get {kind: "task", id, view: "qa"}`: a plan's journeys with their newest verdicts, or a journey's results across runs (`cursor` pages); pass and fail count journeys, a result's tally counts cases.
 - Exploratory lane: `vitrinka qa usertest start` (`--task`, `--app`, `--platform`, `--device`), `case "<title>"` (`--key`), `vitrinka board capture` shots, `verdict pass|fail|skip [--note …]`, `finish [--pr …] [--bugs intake|direct|none]`; `status` shows the open session.
 - A `fail` carries `--note`: it becomes the bug draft's first line.
 - Build the role matrix first from the app's seeds, fixtures or docs; every multi-role feature gets a cross-role case (created as role A, seen by role B only as permitted).
