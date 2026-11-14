@@ -255,12 +255,13 @@ optional marks drawn on the page.
      appVersion, locale (the browser's)}, console: [{level, ts, text}],
      network: [{method, path, status, ms}], identity?, markers: [{n, shape,
      rect: {x, y, w, h}, note?, head?}], locale (the widget's: cs | en),
-     notify?, type?, memberToken?}` — at most 500 console and 500 network
+     notify?, type?, memberToken?, context?}` — at most 500 console and 500 network
      entries; `type` is the reporter's own word (`bug` · `suggestion` ·
      `question` · `other`), sent only when one is picked; `memberToken` is
      the browser's member link for this `base` (above), sent only when it
-     holds one. A server that refuses either field by name gets the report
-     again without it; a `memberError` in the answer (the link revoked,
+     holds one. `context` is the host's claimed context (below), sent
+     only when the map holds a key. A server that refuses any of these three
+     fields by name gets the report again without it; a `memberError` in the answer (the link revoked,
      another workspace's, its person no longer a member) still files the
      report, and a revoked link, or one whose person left, is forgotten;
   2. the files the reporter attached, one `/attachment?name=` leg each —
@@ -290,6 +291,16 @@ optional marks drawn on the page.
   reporter (quarantined until approved); nothing at all is anonymous and
   quarantined. The widget never reads the token's claims. `notify` ("Email
   me when it's fixed") is offered only to an identified reporter.
+- **Context** is the host's word too (vt-9515): `context` at mount or
+  `setContext(map)` (replacing the whole map; `{}` or null clears it) names
+  where the report came from, at most 8 keys of `[a-z0-9_]{1,32}`, each a
+  string of 1 to 100 characters or `{id, label?}` (id 1 to 100, label at
+  most 100 characters). The widget drops an invalid entry with a console
+  warning naming it and sends the rest as `context`; nothing else of the
+  page is added. It is claimed; the same map in the signed token's `ctx`
+  claim is verified and wins for a key in both, and the widget forwards the
+  token untouched. The key `environment` also sets the filed task's
+  environment.
 - **My reports** for a signed reporter: the widget trades the host's token
   once for a short-lived reporter session (`POST /api/v1/report/session`),
   held in memory and dropped when the host identifies someone else, and

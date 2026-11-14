@@ -37,6 +37,7 @@ import { listen } from '../recorder/hud/listen';
 import { forgetLink } from '../recorder/link';
 import { RECORDER_VERSION } from '../recorder/version';
 import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
+import { contextField, type ReportContext } from './context';
 import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
 import { memberLinked, memberLinkGone, memberTokenFor, rememberDisplayMode, watchMemberLink } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
@@ -74,6 +75,8 @@ export interface WidgetOptions {
   /** CSS selector of the host's own control(s) that open the card. */
   openSelector?: string | null;
   identity?: IdentifyInput;
+  /** The host's claimed context, already validated by element.ts (context.ts, vt-9515). */
+  context?: ReportContext;
   appVersion?: string;
   capture?: CaptureNarrowing;
   sanitizeUrl?: (url: string) => string;
@@ -526,6 +529,8 @@ export class ReportWidget {
   private openSelector: string | null;
   /** This widget's own word: undefined defers to the page-wide identity; null is anonymous. */
   private identity: Identity | null | undefined;
+  /** What the next report carries as `context` (vt-9515): replaced whole by setContext, empty sends none. */
+  private context: ReportContext;
   private keybind: Keybind | null;
 
   private isOpen = false;
@@ -627,6 +632,7 @@ export class ReportWidget {
     this.button = opts.button;
     this.openSelector = opts.openSelector ?? null;
     this.identity = opts.identity === undefined ? undefined : normalizeIdentity(opts.identity);
+    this.context = opts.context ?? {};
     this.keybind = loadKeybind();
     this.hud = createHudHost();
     this.e = buildDom(this.hud.mount);
@@ -737,6 +743,11 @@ export class ReportWidget {
     // null (or a malformed identity) is this widget going anonymous; undefined hands it back to the page-wide one.
     this.identity = input === undefined ? undefined : normalizeIdentity(input);
     this.whoChanged();
+  }
+
+  /** Replace what the next report carries as `context` (vt-9515); element.ts has validated it. A report already created keeps what it was created with. */
+  setContext(context: ReportContext): void {
+    this.context = context;
   }
 
   unmount(): void {
@@ -1789,6 +1800,7 @@ export class ReportWidget {
       ...(this.kind ? { type: this.kind } : {}),
       // A member linked on this base co-owns the report; the `vkb_` key stays the bearer.
       ...(member ? { memberToken: member } : {}),
+      ...contextField(this.context),
     };
   }
 

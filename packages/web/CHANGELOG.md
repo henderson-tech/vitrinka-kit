@@ -1,5 +1,22 @@
 # @vitrinka/web
 
+## 0.10.0
+
+- **A report says where it came from.** Report a problem takes a
+  `context` option and a `setContext(map)` method on the handle and the
+  element: a small map your app declares (`{environment: 'demo',
+  organization: {id: 'org_42', label: 'Turena'}}`) that the next report
+  carries as `context` on `POST /api/v1/reports`. At most 8 keys of
+  `[a-z0-9_]` (1 to 32 characters); each value a string of 1 to 100
+  characters or `{id, label?}`. `setContext` replaces the whole map, and
+  `{}` or null clears it; an empty map sends nothing. An invalid key or
+  value is dropped and warned about once in the console, naming it and the
+  limit, never thrown. What you pass is claimed; the same map in your
+  signed token's `ctx` claim is verified and wins for a key in both. The
+  key `environment` also sets the filed task's environment. A vitrinka
+  that takes no context yet gets the report without it. Types:
+  `ReportContext`, `ReportContextValue`, `ReportContextInput`.
+
 ## 0.9.4
 
 - **Escape belongs to reporting while reporting has the focus.** A host

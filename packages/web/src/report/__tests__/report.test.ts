@@ -174,6 +174,27 @@ describe('a member link on the report wire (vt-8020)', () => {
   });
 });
 
+describe('the host’s context on the report wire (vt-9515)', () => {
+  const HOST_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJjdHgiOnsiZW52aXJvbm1lbnQiOiJwcm9kIn19.c2lnbmVk';
+  const context = { environment: 'demo', organization: { id: 'org_42', label: 'Turena' } };
+  const carriesContext = (body: unknown): boolean => typeof body === 'object' && body !== null && 'context' in body;
+
+  it('the create carries the context as a top-level field beside the identity token, untouched', async () => {
+    const job = new ReportJob(EMPTY_CAPTURE, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    await job.run({ ...envelope('August is listed twice'), identity: { token: HOST_TOKEN }, context });
+    expect(seen[0]).toMatchObject({ method: 'POST', path: '/api/v1/reports', body: { identity: { token: HOST_TOKEN }, context } });
+  });
+
+  it('a vitrinka that takes no context yet gets the report again without it, once, keeping the token and the reporter’s word', async () => {
+    answer = (method, path, body) => (method === 'POST' && path === '/api/v1/reports' && carriesContext(body) ? unknownField('context') : undefined);
+    const job = new ReportJob(EMPTY_CAPTURE, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    expect(await job.run({ ...envelope('August is listed twice'), identity: { token: HOST_TOKEN }, type: 'bug', context })).toEqual({ status: 'filed', reportUrl: REPORT_URL });
+    const creates = seen.filter((c) => c.path === '/api/v1/reports');
+    expect(creates.map((c) => carriesContext(c.body))).toEqual([true, false]);
+    expect(creates[1]!.body).toMatchObject({ identity: { token: HOST_TOKEN }, type: 'bug' });
+  });
+});
+
 describe('the capture under its deadline', () => {
   it('a capture still preparing at its deadline is dropped: the report files with its words, and the late build changes nothing', async () => {
     let finish: (c: BuiltCapture) => void = () => undefined;

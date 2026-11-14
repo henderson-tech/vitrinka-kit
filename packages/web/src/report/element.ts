@@ -20,6 +20,7 @@
  * except while the pill records or starts to.
  */
 import { listen } from '../recorder/hud/listen';
+import { normalizeContext, type ReportContext, type ReportContextInput } from './context';
 import type { RecordLoader } from './engine';
 import { memberLinked, pillRecording, rememberFace, startFace, watchMemberLink } from './face';
 import { type Locale, parseLocale } from './i18n';
@@ -55,6 +56,11 @@ export interface ReportOptions extends ReportScriptOptions {
   openSelector?: string;
   /** Who reports: a token your server signed, or an asserted email. */
   identity?: IdentifyInput;
+  /**
+   * Claimed context the report carries (vt-9515): at most 8 keys of [a-z0-9_]{1,32}, each a string of
+   * 1 to 100 characters or {id, label?}. The same map in the signed token's `ctx` claim is verified and wins.
+   */
+  context?: ReportContextInput;
   /** Where the element goes (default `document.body`). */
   parent?: Element;
 }
@@ -66,6 +72,8 @@ export interface ReportHandle {
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
+  /** Replace the whole context the next report carries; `{}` or null clears it. Invalid entries are dropped and warned about. */
+  setContext(next: ReportContextInput): void;
   setLocale(locale: Locale | string): void;
   unmount(): void;
 }
@@ -80,6 +88,8 @@ export interface VitrinkaReportElement extends HTMLElement {
   open(): void;
   close(): void;
   identify(who: IdentifyInput): void;
+  /** Replace the whole context the next report carries; `{}` or null clears it. */
+  setContext(next: ReportContextInput): void;
   setLocale(locale: Locale | string): void;
 }
 
@@ -139,6 +149,8 @@ export function defineReportElement(faces: Faces): void {
     private warnedRecording = false;
     private offLink: (() => void) | null = null;
     private pendingIdentity: IdentifyInput | undefined = undefined;
+    /** Validated once here, so a remount never warns again; survives a face switch like the identity. */
+    private context: ReportContext = {};
 
     get face(): ReportFace {
       return this.shown ?? 'report';
@@ -184,6 +196,11 @@ export function defineReportElement(faces: Faces): void {
     identify(who: IdentifyInput): void {
       this.pendingIdentity = who;
       this.widget?.identify(who);
+    }
+
+    setContext(next: ReportContextInput): void {
+      this.context = normalizeContext(next);
+      this.widget?.setContext(this.context);
     }
 
     setLocale(locale: Locale | string): void {
@@ -265,6 +282,7 @@ export function defineReportElement(faces: Faces): void {
         button: this.getAttribute('button') !== 'false',
         openSelector: this.getAttribute('open-selector'),
         identity: this.pendingIdentity,
+        context: this.context,
         appVersion: this.options.appVersion,
         capture: this.options.capture,
         sanitizeUrl: this.options.sanitizeUrl,
@@ -340,6 +358,7 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
   el.options = { appVersion: opts.appVersion, capture: opts.capture, sanitizeUrl: opts.sanitizeUrl };
   // null is a choice (anonymous, whatever the page-wide identity); only undefined defers.
   if (opts.identity !== undefined) el.identify(opts.identity);
+  if (opts.context !== undefined) el.setContext(opts.context);
   (opts.parent ?? document.body).append(el);
   return {
     get face() {
@@ -348,6 +367,7 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
     open: () => el.open(),
     close: () => el.close(),
     identify: (who) => el.identify(who),
+    setContext: (next) => el.setContext(next),
     setLocale: (l) => el.setLocale(l),
     unmount: () => el.remove(),
   };
@@ -375,6 +395,7 @@ function mountRecorder(opts: ReportOptions, faces: Faces): ReportHandle {
     open: inert,
     close: inert,
     identify: inert,
+    setContext: inert,
     setLocale: inert,
     unmount: () => {
       gone = true;
