@@ -37,6 +37,7 @@ const VALUE_RULE = `a value is a string of 1 to ${VALUE_MAX} characters after tr
 const ID_RULE = `an id is 1 to ${VALUE_MAX} characters after trimming`;
 const LABEL_RULE = `a label is at most ${VALUE_MAX} characters after trimming`;
 const COUNT_RULE = `a context holds at most ${CONTEXT_MAX_KEYS} keys`;
+const UNREADABLE_RULE = 'reading it threw in the host app';
 
 /** Code points, as the contract counts characters (an emoji is one, not two UTF-16 units). */
 function chars(s: string): number {
@@ -88,15 +89,29 @@ export interface CleanedContext {
  */
 export function cleanContext(input: unknown): CleanedContext {
   if (input === null || input === undefined) return { context: {}, dropped: [] };
-  if (!isPlainObject(input)) return { context: {}, dropped: ['the whole context (a context is a plain object of keys to values)'] };
+  // The map and its entries are the host's objects: an accessor or a proxy trap
+  // of theirs may throw. That costs the entry it guards (or the map), named in
+  // the warning like any other drop, never the host's render or the report.
+  let keys: string[];
+  try {
+    if (!isPlainObject(input)) return { context: {}, dropped: ['the whole context (a context is a plain object of keys to values)'] };
+    keys = Object.keys(input);
+  } catch {
+    return { context: {}, dropped: [`the whole context (${UNREADABLE_RULE})`] };
+  }
   const kept: [string, ReportContextValue][] = [];
   const dropped: string[] = [];
-  for (const key of Object.keys(input)) {
+  for (const key of keys) {
     if (!KEY.test(key)) {
       dropped.push(`${JSON.stringify(key)} (${KEY_RULE})`);
       continue;
     }
-    const value = cleanValue(input[key]);
+    let value: ReportContextValue | { broken: string };
+    try {
+      value = cleanValue(input[key]);
+    } catch {
+      value = { broken: UNREADABLE_RULE };
+    }
     if (typeof value === 'object' && 'broken' in value) {
       dropped.push(`${JSON.stringify(key)} (${value.broken})`);
       continue;

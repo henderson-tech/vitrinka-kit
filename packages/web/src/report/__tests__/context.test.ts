@@ -98,6 +98,27 @@ describe('a context map', () => {
     }
   });
 
+  it('an accessor that throws in the host app drops its own entry and keeps its siblings', () => {
+    const unavailable = (): never => {
+      throw new Error('unavailable');
+    };
+    const input = {
+      environment: 'demo',
+      get organization(): string {
+        return unavailable();
+      },
+      team: { get id(): string { return unavailable(); } },
+      plan: { id: 'pro', get label(): string { return unavailable(); } },
+      region: 'eu',
+    };
+    expect(cleanContext(input)).toEqual({
+      context: { environment: 'demo', region: 'eu' },
+      dropped: ['"organization" (reading it threw in the host app)', '"team" (reading it threw in the host app)', '"plan" (reading it threw in the host app)'],
+    });
+    const hostile = new Proxy({}, { ownKeys: unavailable });
+    expect(cleanContext(hostile)).toEqual({ context: {}, dropped: ['the whole context (reading it threw in the host app)'] });
+  });
+
   it('a `__proto__` key stays a key, never the copy’s prototype', () => {
     const { context } = cleanContext(JSON.parse('{"__proto__": "x"}'));
     expect(Object.getPrototypeOf(context)).toBe(Object.prototype);
