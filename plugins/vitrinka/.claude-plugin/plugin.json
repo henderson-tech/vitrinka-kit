@@ -1,6 +1,6 @@
 {
   "name": "vitrinka",
-  "version": "5.29.0",
+  "version": "5.30.0",
   "displayName": "Vitrinka",
   "description": "The vitrinka experience: capture UI work as journeys and walkthroughs, author documents, pages and diagrams, brainstorm on a decision board, and service a board's annotation queue — live, as a backlog, or paired with a human testing the app. Registers nothing itself — `vitrinka setup` adds the MCP endpoint.",
   "author": {
