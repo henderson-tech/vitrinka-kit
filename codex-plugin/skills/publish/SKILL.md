@@ -1,6 +1,6 @@
 ---
 name: publish
-description: "Use to put work on vitrinka — capture UI ('publish', 'screenshot', 'journey', 'walkthrough', a testing-suite board) or author a document, page, diagram or docs board ('artifact', 'vitrinka this', 'publish this report', 'make this a diagram', 'document this repo')."
+description: "Use to put work on vitrinka: screenshots, journeys and walkthroughs of UI, or a document, page, diagram or docs board."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

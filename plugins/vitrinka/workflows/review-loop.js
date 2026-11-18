@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-loop',
-  description: 'Shoot every route on every device, review the board, fix what it files, reshoot what changed — until a pass is clean or the cap is hit. In a repo with a uiLoop section it drives the Výbava ui-loop polish loop, one stage per run',
-  whenToUse: 'A responsivity or UX pass over an app surface, or the verify stage of build-idea. Unattended: findings at or above the severity threshold are accepted and fixed; the rest stay staged on the board. When vybava.config.ts carries uiLoop (or args.mode is "ui-loop") it drives `vybava ui-loop` instead: one stage per run (capture | review | fix | verify, default auto from the pass files), each returning the `next` args to chain.',
+  description: 'UI review loop',
+  whenToUse: 'Use for a responsivity or UX pass or build-idea\'s verify stage: shoot every route on every device, review, fix and reshoot until clean; drives vybava ui-loop where uiLoop is configured.',
   phases: [
     { title: 'Detect', detail: 'ui-loop or routes mode (skipped when args decide)' },
     { title: 'Prepare', detail: 'branch, app, matrix, task binding — ui-loop: vybava ui-loop state (+ batches and triage | lanes) relayed verbatim' },
@@ -83,9 +83,23 @@ function adoptReviewer(input, reviewer) {
   if (!input.sidekick && reviewer === 'codex') input.sidekick = 'codex'
   return input.sidekick || ''
 }
+// Every agent runs at effort high. A run whose lane is auth, security,
+// payments, data integrity or hard logic passes `effort: 'xhigh'`; a call site
+// naming its own effort (a low relay) keeps it.
+const RUN_EFFORTS = ['high', 'xhigh']
+function runEffort(input) {
+  if (input.effort === undefined) return 'high'
+  if (!RUN_EFFORTS.includes(input.effort)) throw new Error(`workflow: effort ${JSON.stringify(input.effort)} is not one of ${RUN_EFFORTS.join(' | ')}; omit it for high, pass xhigh only for an auth, security, payments, data-integrity or hard-logic lane`)
+  return input.effort
+}
+function withEffort(options, effort) {
+  const o = options || {}
+  return o.effort ? o : Object.assign({}, o, { effort })
+}
 // The runtime journals agent returns. Keep accounting deterministic on replay,
 // share the allowance with child workflows, and bound every fan-out to four.
 function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
+  const effort = runEffort(input)
   const supplied = input.agentBudget || { limit: 10, used: 0 }
   const limit = supplied.limit
   let used = supplied.used
@@ -102,13 +116,13 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, options))
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, withEffort(options, effort)))
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
-      // A child inherits the run's sidekick and ui-loop publish mode unless its own args name them.
+      // A child inherits the run's sidekick, ui-loop publish mode and effort unless its own args name them.
       const inherited = {}
-      for (const k of ['sidekick', 'publish']) if (input[k]) inherited[k] = input[k]
+      for (const k of ['sidekick', 'publish', 'effort']) if (input[k]) inherited[k] = input[k]
       const result = await callWorkflow(name, Object.assign(inherited, args, { agentBudget: { limit, used } }))
       if (!result || !result.agentBudget || result.agentBudget.limit !== limit || !Number.isInteger(result.agentBudget.used) || result.agentBudget.used < used || result.agentBudget.used > limit) {
         throw new Error(`workflow: ${name} returned no valid shared agent-budget receipt`)
@@ -2730,6 +2744,17 @@ function laneSummary(results) {
     dirty: results.filter(r => !r.treeCleanOfMine).map(r => r.lane),
   }
 }
+// Routes mode shoots every route on every device, reviews the board, fixes what
+// it files and reshoots what changed, one pass per run, until a pass is clean or
+// the cap is hit. Unattended: findings at or above the severity threshold are
+// accepted and fixed; the rest stay staged on the board. One reviewer judges
+// every device and lens of a pass and re-checks the previous pass's fixes
+// (regressList); a run cannot keep an agent alive, so each pass's reviewer
+// receives the earlier findings.
+// When vybava.config.ts carries uiLoop (or args.mode is 'ui-loop') it drives
+// `vybava ui-loop` instead: one stage per run (capture | review | fix | verify,
+// default auto from the pass files), each returning the `next` args to chain.
+// effort?: 'xhigh' for an auth, security, payments, data-integrity or hard-logic surface (default high).
 // args: { mode?: 'routes' | 'ui-loop' — default ui-loop when no routes are passed and vybava.config.ts has a uiLoop section,
 //   routes mode: routes?, journeys?, projectType?, matrix?, cap?: 3, severity?: 'minor'|'major'|'blocker',
 //         task?, project?, board?, base?, scope?: string (what to test, prose)

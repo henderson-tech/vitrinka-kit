@@ -1,9 +1,9 @@
 export const meta = {
   name: 'code-loop',
-  description: 'Native code review with fixes applied, gated by the test suites, until the diff reviews clean — then the PR',
-  whenToUse: 'After the UI and functional fixes of a branch have converged and before its PR; the last stage of build-idea. Unattended: findings the reviewer can fix are applied and gated, the rest become PR comments for the human.',
+  description: 'Code review loop',
+  whenToUse: 'Use after a branch\'s UI and functional fixes converge, before its PR: review, apply fixes gated by the suites, repeat until clean.',
   phases: [
-    { title: 'Review', detail: '/code-review high --fix, then the gates' },
+    { title: 'Review', detail: 'one reviewer: every lens, fixes, gates, re-checks its fixes each pass' },
     { title: 'PR', detail: 'open through prm; the human merges' },
   ],
 }
@@ -69,9 +69,23 @@ function adoptReviewer(input, reviewer) {
   if (!input.sidekick && reviewer === 'codex') input.sidekick = 'codex'
   return input.sidekick || ''
 }
+// Every agent runs at effort high. A run whose lane is auth, security,
+// payments, data integrity or hard logic passes `effort: 'xhigh'`; a call site
+// naming its own effort (a low relay) keeps it.
+const RUN_EFFORTS = ['high', 'xhigh']
+function runEffort(input) {
+  if (input.effort === undefined) return 'high'
+  if (!RUN_EFFORTS.includes(input.effort)) throw new Error(`workflow: effort ${JSON.stringify(input.effort)} is not one of ${RUN_EFFORTS.join(' | ')}; omit it for high, pass xhigh only for an auth, security, payments, data-integrity or hard-logic lane`)
+  return input.effort
+}
+function withEffort(options, effort) {
+  const o = options || {}
+  return o.effort ? o : Object.assign({}, o, { effort })
+}
 // The runtime journals agent returns. Keep accounting deterministic on replay,
 // share the allowance with child workflows, and bound every fan-out to four.
 function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
+  const effort = runEffort(input)
   const supplied = input.agentBudget || { limit: 10, used: 0 }
   const limit = supplied.limit
   let used = supplied.used
@@ -88,13 +102,13 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, options))
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, withEffort(options, effort)))
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
-      // A child inherits the run's sidekick and ui-loop publish mode unless its own args name them.
+      // A child inherits the run's sidekick, ui-loop publish mode and effort unless its own args name them.
       const inherited = {}
-      for (const k of ['sidekick', 'publish']) if (input[k]) inherited[k] = input[k]
+      for (const k of ['sidekick', 'publish', 'effort']) if (input[k]) inherited[k] = input[k]
       const result = await callWorkflow(name, Object.assign(inherited, args, { agentBudget: { limit, used } }))
       if (!result || !result.agentBudget || result.agentBudget.limit !== limit || !Number.isInteger(result.agentBudget.used) || result.agentBudget.used < used || result.agentBudget.used > limit) {
         throw new Error(`workflow: ${name} returned no valid shared agent-budget receipt`)
@@ -409,7 +423,11 @@ const PR_STATE_SCHEMA = {
   },
   required: ['url'],
 }
-// args: { cap?: 2, base?: 'main', pr?: boolean (default true), draft?: boolean (a PR it opens is a draft; an adopted one keeps its state), task?, title?: string }
+// Unattended: one reviewer covers every lens for the whole change and stays
+// alive across its passes. It applies and gates the findings it can fix,
+// re-checks its own fixes in the next pass, and stops at the first clean pass
+// or the cap. The findings it could not apply become one PR comment for the human.
+// args: { cap?: 2 passes, base?: 'main', pr?: boolean (default true), draft?: boolean (a PR it opens is a draft; an adopted one keeps its state), task?, title?: string, effort?: 'xhigh' for an auth, security, payments, data-integrity or hard-logic change (default high) }
 const A = args || {}
 const run = workflowRun(A)
 const cap = Math.max(1, Math.min(4, A.cap || 2))
@@ -418,6 +436,7 @@ const base = A.base || 'main'
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
+    passes: { type: 'array', items: { type: 'object', properties: { pass: { type: 'integer' }, startHeadSha: { type: 'string' }, findings: { type: 'integer' }, applied: { type: 'integer' }, remaining: { type: 'integer' }, green: { type: 'boolean' } }, required: ['pass', 'startHeadSha', 'findings', 'applied', 'remaining', 'green'] } },
     findings: { type: 'integer' },
     applied: { type: 'integer' },
     remaining: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, line: { type: 'integer' }, summary: { type: 'string' }, why: { type: 'string' } }, required: ['file', 'summary'] } },
@@ -426,7 +445,7 @@ const REVIEW_SCHEMA = {
     startSourceUnchanged: { type: 'boolean' },
     gate: Object.assign({}, GATE_SCHEMA, { properties: Object.assign({}, GATE_SCHEMA.properties, { sourceUnchanged: { type: 'boolean' } }), required: [...GATE_SCHEMA.required, 'sourceUnchanged'] }),
   },
-  required: ['findings', 'applied', 'remaining', 'startHeadSha', 'startSourceUnchanged', 'gate'],
+  required: ['passes', 'findings', 'applied', 'remaining', 'startHeadSha', 'startSourceUnchanged', 'gate'],
 }
 
 const rounds = []
@@ -435,27 +454,32 @@ let remaining = []
 let converged = false
 let headSha = ''
 let gate = null
-run.ensureBudget(cap + (A.pr === false ? 0 : 1))
+run.ensureBudget(1 + (A.pr === false ? 0 : 1))
 phase('Review')
-for (let round = 1; round <= cap; round++) {
-  const review = await run.agent(withPreamble(
-    `Round ${round} of the code loop on this branch against ${base}.\n` +
-    `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead && round === 1 ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Inspect staged, unstaged and untracked application source against startHeadSha, allowing only .vitrinka/ and the configured uiLoop.out artifacts. Return startSourceUnchanged=false and a failed gate immediately if source is dirty; do not review, fix or commit someone else's uncommitted work. Read the code-review guidance when available, then review the branch diff INLINE with high confidence: check correctness, contracts, failure paths and the linked acceptance criteria; validate claims against current code and primary documentation. Fix confirmed defects in this same agent. Never invoke a review skill that spawns its own agents. Then commit what it applied (one commit, message "fix(review): round ${round} — <n> findings"). Findings it could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. In THIS SAME agent, run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures introduced by this round, report earlier failures. Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. After gates, compare staged/unstaged/untracked application source and the tested Devbox source against the final committed HEAD again, with the same artifact exclusions; sourceUnchanged=true only when both match. Dirty source fails the gate. Return counts, remaining, commits, startSourceUnchanged and gate {green, ran, testsExecuted, failures, repaired, headSha, sourceUnchanged}; headSha is git rev-parse HEAD AFTER every repair and verification.`
-  ), { label: `review:${round}`, phase: 'Review', schema: REVIEW_SCHEMA })
-  if (!review) { log(`code-loop: round ${round} review failed`); break }
-
-  if (A.expectedHead && round === 1 && review.startHeadSha !== A.expectedHead) throw new Error('code-loop: continuation revision changed before review')
+const review = await run.agent(withPreamble(
+  `You are the ONE reviewer of this branch's change against ${base}: every lens, the whole diff, up to ${cap} passes in THIS agent.\n` +
+  `FIRST read git rev-parse HEAD as startHeadSha.${A.expectedHead ? ` It MUST equal ${A.expectedHead}; otherwise return no changes with a failed gate, since the continuation is stale.` : ''} Inspect staged, unstaged and untracked application source against startHeadSha, allowing only .vitrinka/ and the configured uiLoop.out artifacts. Return startSourceUnchanged=false and a failed gate immediately if source is dirty; do not review, fix or commit someone else's uncommitted work. Read the code-review guidance when available. Never invoke a review skill that spawns its own agents.\n` +
+  `Each pass: read git rev-parse HEAD as that pass's startHeadSha. Pass 1 reviews the whole branch diff INLINE with high confidence across every lens: correctness, contracts, failure paths, security, tests and the linked acceptance criteria; validate claims against current code and primary documentation. A later pass re-checks the previous pass's fixes and gate repairs (its startHeadSha..HEAD diff) and confirms each earlier finding is resolved. Fix confirmed defects yourself and commit what the pass applied (one commit, message "fix(review): pass <n> — <count> findings"). Findings you could not apply — a design call, a trade-off, an uncertain one — are \`remaining\` with why. Then run the repo's type/build/test gates where CLAUDE.md prescribes; repair and commit failures this pass introduced, report earlier failures. Stop after the first pass with zero findings, no commits and no repair, after a pass that applied nothing and committed no gate repair, or after pass ${cap}.\n` +
+  `Report testsExecuted from the runner counts; an expected suite that executed zero tests fails. After the last gates, compare staged/unstaged/untracked application source and the tested Devbox source against the final committed HEAD again, with the same artifact exclusions; sourceUnchanged=true only when both match. Dirty source fails the gate. Return passes [{pass, startHeadSha, findings, applied, remaining (a count), green (that pass's gates passed)}], the LAST pass's findings and applied, remaining (the unresolved findings at the end), every commit, the first pass's startHeadSha, startSourceUnchanged and gate {green, ran, testsExecuted, failures, repaired (the last pass repaired a gate failure), headSha, sourceUnchanged} of the last pass; headSha is git rev-parse HEAD AFTER every repair and verification.`
+), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA })
+if (!review) log('code-loop: the review failed')
+else {
+  if (A.expectedHead && review.startHeadSha !== A.expectedHead) throw new Error('code-loop: continuation revision changed before review')
   gate = review.gate
   headSha = gate && gate.headSha || ''
-  rounds.push({ round, findings: review.findings, applied: review.applied, remaining: review.remaining.length, green: review.startSourceUnchanged === true && gatePassed(gate) && gate.sourceUnchanged === true })
+  const passes = review.passes.slice(0, cap)
+  const last = passes[passes.length - 1]
+  const lastGreen = review.startSourceUnchanged === true && gatePassed(gate) && !!gate && gate.sourceUnchanged === true
+  passes.forEach((x, i) => rounds.push({ round: x.pass, findings: x.findings, applied: x.applied, remaining: x.remaining, green: i === passes.length - 1 ? lastGreen : x.green === true }))
   remaining = review.remaining
   if (review.startSourceUnchanged !== true || !gate || gate.sourceUnchanged !== true) {
     sourceProblems.push('application source is dirty or its revision was not verified before review and after the gates')
-    break
+  } else {
+    // Converged only when the last pass found nothing and changed nothing:
+    // a fix or a gate repair in it was never re-checked.
+    converged = !!last && last.findings === 0 && review.findings === 0 && gatePassed(gate) && gate.headSha === last.startHeadSha && !gate.repaired && !remaining.length
   }
-  converged = review.findings === 0 && gatePassed(gate) && gate.headSha === review.startHeadSha && !gate.repaired && !remaining.length
-  log(`code-loop: round ${round} — ${review.findings} findings, ${review.applied} applied, ${review.remaining.length} remaining, gate ${gate && gate.green ? 'green' : 'RED'}`)
-  if (converged || (review.findings > 0 && review.applied === 0 && review.remaining.length === review.findings && !gate.repaired)) break
+  log(`code-loop: ${passes.length} pass(es), last ${review.findings} findings, ${review.applied} applied, ${remaining.length} remaining, gate ${gate && gate.green ? 'green' : 'RED'}`)
 }
 
 let pr = ''

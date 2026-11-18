@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Use before any creative work — a new feature, component, capability or behaviour change — and on 'brainstorm', 'design this', 'think this through with me' before code is written."
+description: "Use before any creative work (a new feature, component or behaviour change), or on 'brainstorm' or 'design this', before code is written."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---

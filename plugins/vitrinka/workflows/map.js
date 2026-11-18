@@ -1,7 +1,7 @@
 export const meta = {
   name: 'map',
-  description: 'Map the terrain an idea or a review pass stands on: routes, model and doors, components, tests — one terrain artifact on the board. In a repo with a uiLoop section it extends the ui-loop screen manifest instead',
-  whenToUse: 'Before brainstorming an idea in a big project (scope: idea) or before a full-app review pass (scope: app). make-idea and review-loop call it; run it alone to refresh the map. scope: screens (or scope: app in a repo whose vybava.config.ts carries uiLoop) produces or refreshes the typed ui-loop screen manifest — every route × tab × overlay × state with a recipe — validated by `vybava ui-loop check` and rendered by `vybava ui-loop map`, before a ui-loop review-loop pass.',
+  description: 'Terrain map',
+  whenToUse: 'Use before brainstorming in a big project (scope: idea) or a full-app review (scope: app): maps routes, model, doors, components and tests, or the ui-loop screen manifest (scope: screens).',
   phases: [
     { title: 'Detect', detail: 'ui-loop configured? (scope app/screens only)' },
     { title: 'Explore', detail: 'four readers, one per layer — screens: sequential manifest extenders' },
@@ -71,9 +71,23 @@ function adoptReviewer(input, reviewer) {
   if (!input.sidekick && reviewer === 'codex') input.sidekick = 'codex'
   return input.sidekick || ''
 }
+// Every agent runs at effort high. A run whose lane is auth, security,
+// payments, data integrity or hard logic passes `effort: 'xhigh'`; a call site
+// naming its own effort (a low relay) keeps it.
+const RUN_EFFORTS = ['high', 'xhigh']
+function runEffort(input) {
+  if (input.effort === undefined) return 'high'
+  if (!RUN_EFFORTS.includes(input.effort)) throw new Error(`workflow: effort ${JSON.stringify(input.effort)} is not one of ${RUN_EFFORTS.join(' | ')}; omit it for high, pass xhigh only for an auth, security, payments, data-integrity or hard-logic lane`)
+  return input.effort
+}
+function withEffort(options, effort) {
+  const o = options || {}
+  return o.effort ? o : Object.assign({}, o, { effort })
+}
 // The runtime journals agent returns. Keep accounting deterministic on replay,
 // share the allowance with child workflows, and bound every fan-out to four.
 function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workflow === 'function' ? workflow : null) {
+  const effort = runEffort(input)
   const supplied = input.agentBudget || { limit: 10, used: 0 }
   const limit = supplied.limit
   let used = supplied.used
@@ -90,13 +104,13 @@ function workflowRun(input = {}, callAgent = agent, callWorkflow = typeof workfl
     async agent(prompt, options) {
       reserve(1)
       used++
-      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, options))
+      return await callAgent(prompt + '\n\nWork INLINE in this agent. Never spawn subagents, workflows or background agent sessions, including from an invoked skill. The workflow script owns all delegation and the shared budget.', sidekickOptions(input, withEffort(options, effort)))
     },
     async workflow(name, args) {
       if (!callWorkflow) throw new Error('workflow: no child-workflow runtime is available')
-      // A child inherits the run's sidekick and ui-loop publish mode unless its own args name them.
+      // A child inherits the run's sidekick, ui-loop publish mode and effort unless its own args name them.
       const inherited = {}
-      for (const k of ['sidekick', 'publish']) if (input[k]) inherited[k] = input[k]
+      for (const k of ['sidekick', 'publish', 'effort']) if (input[k]) inherited[k] = input[k]
       const result = await callWorkflow(name, Object.assign(inherited, args, { agentBudget: { limit, used } }))
       if (!result || !result.agentBudget || result.agentBudget.limit !== limit || !Number.isInteger(result.agentBudget.used) || result.agentBudget.used < used || result.agentBudget.used > limit) {
         throw new Error(`workflow: ${name} returned no valid shared agent-budget receipt`)
@@ -1193,6 +1207,13 @@ const UILOOP_MAP_SCHEMA = {
   },
   required: ['ok', 'screens', 'appMap'],
 }
+// Maps the terrain an idea or a review pass stands on (routes, model and doors,
+// components, tests) into one terrain artifact on the board. make-idea and
+// review-loop call it; run it alone to refresh the map. scope: screens (or
+// scope: app in a repo whose vybava.config.ts carries uiLoop) produces or
+// refreshes the typed ui-loop screen manifest — every route × tab × overlay ×
+// state with a recipe — validated by `vybava ui-loop check` and rendered by
+// `vybava ui-loop map`, before a ui-loop review-loop pass.
 // args: { scope: 'idea' | 'app' | 'screens', requirements?: string, project?: string, task?: string, push?: boolean,
 //         screens?: false (scope app: never switch to the manifest — the terrain is wanted), areas?: string[] (screens: only these),
 //         commit?: boolean (screens: commit the manifest and app map, default true),

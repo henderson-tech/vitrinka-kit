@@ -1,6 +1,6 @@
 ---
 name: listen
-description: "Use to work a vitrinka board's annotation queue from the app's repo — 'listen to the board', 'watch the annotations' (live); 'resolve the board', 'work through the annotations' (listen resolve); 'pair with me while I test', 'fix while I test' (listen pair)."
+description: "Use to work a vitrinka board's annotation queue from the app's repo: live, as a backlog (resolve) or paired with a tester (pair)."
 metadata:
   vitrinka-contract: "2026-09-15"
 ---
