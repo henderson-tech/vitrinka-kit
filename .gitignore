@@ -29,3 +29,7 @@ AGENTS.md
 test-results/
 playwright-report/
 /.vybava/config.ts
+
+# SwiftPM (root Package.swift, packages/macos)
+.build/
+.swiftpm/
