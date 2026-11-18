@@ -10,11 +10,13 @@ metadata:
 
 A todo is a task of type `todo` in the current repository's project with the
 `moment` preset (`trigger · lead · every · context · commit · branch`). The
-CLI is the validated writer: `vitrinka me todo|schedule|agenda --help` and
-each verb's `--help` carry the flags. Without a shell the MCP twins are
+CLI is the validated writer: `vitrinka me todo|schedule|agenda|time --help` and
+each verb's `--help` carry the flags (`time` also logs time stated by hand and runs your timer). Without a shell the MCP twins are
 `create {kind:"task", type:"todo"}`, `list {kind:"task", f:{types:["todo"]}}`,
 `ripe_todos`, `complete_todo`, `create|list|update {kind:"milestone"}`
-(`reached: true` marks one) and `create|list|update|delete {kind:"agenda"}`.
+(`reached: true` marks one), `create|list|update|delete {kind:"agenda"}` and
+`create|list|get|update|delete {kind:"work_entry"}` (time stated by hand:
+`docs guide:work-time`).
 Ids are per-workspace: a bare id runs in the session's (bound) workspace,
 another workspace's is `"<workspace>/<id>"`.
 
