@@ -14,7 +14,7 @@ Modes: `work pickup <id|url>` starts a task; `work handoff` ends it with `hand_b
 - Spell another workspace's task `"<workspace>/<id>"` on every id-only call (`get`, `hand_back`, `spot`, `update`, `read_task_ref`), or pass `workspace`; if the workspace that answered is not the task's, say which answered and stop.
 - A check on your own work (a merge, a deploy confirmation, "verify X on preview", a look) is a STEP on the bound task, never a child.
 - A child task is only for work that needs its own session, PR or QA record.
-- A decision is asked now while a human is in the session and its answer recorded in `summary`, never filed as `Decide:`; a `human` gate or `decide: true` is only for a run nobody attends (a Workflow, a headless or scheduled run).
+- A decision is asked while a human is in the session (one batch, once no agent or run of yours is in flight; meanwhile do what does not depend on it) and its answer recorded in `summary`, never filed as `Decide:`; a `human` gate or `decide: true` is only for a run nobody attends (a Workflow, a headless or scheduled run).
 - Never decide a human's call silently in code.
 - Print every `url` and `rendered` exactly as returned; never hand-compose a task URL.
 - Time stated by hand (`{kind:"work_entry"}`, `docs guide:work-time`) is the person's: write it only when they ask, never to log your own time (the hooks and runs measure it); in a task-bound checkout `vitrinka me time start` times the bound task with no argument.
@@ -39,7 +39,7 @@ Modes: `work pickup <id|url>` starts a task; `work handoff` ends it with `hand_b
 - Take a child row by its own `url`; never stop after one child; never work an epic, only its children.
 - A step that outgrows one sitting is promoted with `spot {fromStep}`, never retyped.
 - LAST empty: WHAT, READ and NEXT are the whole brief; the parent is `get {kind:"task", id: parentId}`.
-- A remainder bigger than the context window goes to a fresh session after the hand-back, never from a run nobody attends: `vitrinka qa session launch '<task url>' '<worktree abs path>'`; exit 0: print its receipt line and stop; non-zero: print `/continue <task url>` and stop.
+- A remainder bigger than the context window goes to a fresh session after the hand-back, never from a run nobody attends: `vitrinka qa session launch '<task url>' '<worktree abs path>'`, the only launch route (`$VITRINKA_SESSION_LAUNCHER`, `vybava fleet continue` where Výbava is installed); exit 0: print its receipt line and stop; non-zero (unset, refused, failed): keep the work here (compact if needed); only when it cannot continue here, print `/continue <task url>` for the user to run, never type it, and stop.
 
 ## work handoff
 

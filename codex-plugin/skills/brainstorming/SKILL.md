@@ -23,7 +23,7 @@ Do NOT write code, scaffold, or invoke implementation skills until the decision 
 - Write the map out as visible assistant text, in a message of its own, before any `AskUserQuestion` call; never carry it inside question text or option labels.
 - The user edits the map before any question; their cuts are final, their additions go in.
 - Only decisions with real alternatives make the map; a single sane answer is a stated assumption in the log.
-- Up to 4 questions per `AskUserQuestion` call, always the frontier; done when the frontier is empty.
+- Up to 4 questions per `AskUserQuestion` call, always the frontier, never while an agent or run of yours is in flight; done when the frontier is empty.
 - Facts are your job; only decisions go to the user; never re-litigate a settled answer; never ask what the codebase answers.
 - Recommendation first (suffix "(Recommended)", the description says why); every option's description carries its tradeoffs; `preview` for anything structural; never hard-block an off-map answer.
 - The feature epic is the record; the feature has ONE worktree, created when the epic exists; the log and the brief are its first commits and the build continues on that branch.
@@ -50,8 +50,8 @@ Do NOT write code, scaffold, or invoke implementation skills until the decision 
 - The last `AskUserQuestion` is "In which style to implement?", opening with this session's context reading (tokens and percent).
 - A mostly spent session never recommends Build here.
 - **Build here**: this session, the feature worktree, the whole remaining budget.
-- **Fresh session**: after the hand-back, run `vitrinka qa session launch '<task url>' '<feature worktree abs path>'` (it runs `$VITRINKA_SESSION_LAUNCHER`; never wrap that variable in `sh -c`); exit 0: print its receipt line and stop; non-zero: print `/continue <task url>` and stop.
-- **Subagents**: fresh native agents (never `fork`), one per ordered `Work package` with disjoint files, `model` set on each call, one reviewer agent after each phase.
+- **Fresh session**: after the hand-back, run `vitrinka qa session launch '<task url>' '<feature worktree abs path>'`, the only launch route (it runs `$VITRINKA_SESSION_LAUNCHER`, `vybava fleet continue` where Výbava is installed; never wrap that variable in `sh -c`); exit 0: print its receipt line and stop; non-zero (unset, refused, failed): keep building here while this session can carry it, else print `/continue <task url>` for the user to run, never type it, and stop.
+- **Subagents**: fresh native agents (never `fork`), one per ordered `Work package` with disjoint files, `model` and `effort` set on each call, one long-running reviewer for the whole change, kept across phases to check the fixes.
 - A spike ends in its recommendation instead.
 - On a bound task finish with `work handoff`.
 

@@ -76,7 +76,7 @@ Modes: `listen [board]` services new annotations live; `listen resolve [board]` 
 - Phase 2, group by root cause, component or subsystem, never board order: one block per repeated pattern, shared token or component, flow, and server vs client vs other repo; 3–8 items per block, cross-cutting blocks first.
 - Flag other-repo items to the user; never edit this repo to compensate.
 - Record the block map (annotation ids per block) in your task tracker.
-- Enrich all flagged items in ONE subagent (`model` on the call) that reads crops via `get_card_image {annotation: "<workspace>/<id>"}` or `{board, cardId, region}` and returns TEXT only; never a crop image in your context, never a crop fetched by URL.
+- Enrich all flagged items in ONE subagent (`model` and `effort` on the call) that reads crops via `get_card_image {annotation: "<workspace>/<id>"}` or `{board, cardId, region}` and returns TEXT only; never a crop image in your context, never a crop fetched by URL.
 - Phase 3, per block: claim each item with `set_status working`, one coherent commit (or server and client halves), the repo's checks once per block.
 - Read an exemplar the prompt names and reuse it; never re-implement beside it.
 - Verify an `investigate` claim against code AND data (tables, logs).
