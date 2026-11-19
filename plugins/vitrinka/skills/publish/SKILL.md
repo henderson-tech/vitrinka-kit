@@ -27,7 +27,7 @@ Modes: `publish [session|journey|walkthrough|board]` captures; `publish artifact
 ## Delegate composition
 
 - Keep capture in this session: `--src`, `--state` and `--action` depend on the code you just wrote.
-- Dispatch compose-shaped work (structure pass, steps sections, summary card, walkthrough narrative, board suites, standalone doc.json, docs-board narrative) to Agent `subagent_type: "vitrinka:vitrinka-publisher"` in the background, `model` set on the call.
+- Dispatch compose-shaped work (structure pass, steps sections, summary card, walkthrough narrative, board suites, standalone doc.json, docs-board narrative) to Agent `subagent_type: "vitrinka:vitrinka-publisher"` in the background, `model` and `effort` set on the call.
 - Run the initial import yourself so the URL exists at once: `vitrinka board create` (`--journey` for a tree); it is idempotent.
 - A capture push already lands on the `<project>-<branch>-<key>` board and prints its URL; import only for a custom `--slug`/`--title`.
 - A board about one PR names it: `--pr <owner/repo#n>` on the import, else `meta.pr` in the brief.
@@ -51,7 +51,7 @@ Modes: `publish [session|journey|walkthrough|board]` captures; `publish artifact
 - Edit a pushed card through a file, never retype it: `vitrinka board cards get <board> <id> --field src --out f`, edit, `vitrinka board cards patch <board> <id> --set-file src=f --expect-revision <rev>`; artifact markup is `--set-file html=<file>`.
 - Write plain URLs, `[label](url)` or task keys (`vt-12`) in prose; `payload.inlineRefs` is server-owned, never authored.
 - A board that belongs to a task in context: `add_task_ref {id, kind:"board", ref:"<slug>"}` once, no `cardId`.
-- Share an element: `share_board {board, cardId}` or `vitrinka board share <board> --card <id>`; the link grants the whole board, so never mint one on a board carrying drafts or private cards.
+- Share an element: `share_board {board, cardId}` or `vitrinka board share <board> --card <id>` grants the whole board, so never mint one on a board carrying drafts or private cards; `scope:"document"` (`--document`) confines the link to that doc card, and `audience` (`--audience`) serves only that audience's blocks.
 - Hand a share URL over as `[<title>](<url>)`, exactly as minted.
 - Auth is `vitrinka auth login` (`VITRINKA_TOKEN` or the OS keyring; self-hosted sets `VITRINKA_URL`); never print the token.
 - Never run `vitrinka update` unprompted or repeat the offer.
@@ -83,6 +83,7 @@ Modes: `publish [session|journey|walkthrough|board]` captures; `publish artifact
 - `step.note` is a one-line caption; put the explanation in a `text` card beside it in a row `cluster`; read `clipped` after compose (docs `board:step`).
 - A live annotate→fix loop on one screen stays a real shot card (crops and face versions exist only on shot and media cards).
 - "Review these screens and annotate what's off" is `annotate` (survey with `get_card_image {cardIds}`, measure on a single-card read), never a `finding` or document card, never `highlight`; docs topic `annotation`.
+- A comment on a passage of a doc or page card is `annotate` with `selector: {quote}` instead of `region`; the server verifies the quote and fills its context.
 - End every board with ONE summary `callout` (verdict, counts, links, what was NOT covered); later passes update it, never stack a second.
 - Statuses live on the cards (`step.status`).
 - Iteration is the next pass (`pass: "next"`), never mixed takes.
@@ -97,7 +98,7 @@ Modes: `publish [session|journey|walkthrough|board]` captures; `publish artifact
 ## Walkthroughs
 
 - Write `--action`/`--title`/`--note` for the reader, in the client's language and voice: ONE intro `text` card, a `callout` per caveat.
-- A share link shares the WHOLE board; never mint one on a board with drafts the client must not see.
+- A share link shares the WHOLE board unless its scope is `document`; never mint a board-wide one on a board with drafts the client must not see.
 - Use a sandbox or demo org for any shot showing tenant data; mint-then-revoke any credential that appears on screen.
 
 ## QA plan

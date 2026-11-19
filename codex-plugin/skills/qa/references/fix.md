@@ -120,7 +120,7 @@ it" is not a skip signal — find the owning session and reconcile before any
 batch works that item. A 409 "cancelled" means the user withdrew it: drop it
 (and revert its changes, if any).
 
-Dispatch up to 4 subagents, `model` set on each call for its batch, each
+Dispatch up to 4 subagents, `model` and `effort` set on each call, each
 with a pin-pointed brief:
 
 - The batch's issues verbatim (text, routes, counts, step context, annotation
