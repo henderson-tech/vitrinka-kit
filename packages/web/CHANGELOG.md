@@ -1,5 +1,32 @@
 # @vitrinka/web
 
+## 0.10.2
+
+- **A report shows how the reporter got there.** Report a problem sent a
+  replay and one marked frame: the report's timeline in vitrinka held a
+  single step, with no page, click, console line or request before it. The
+  report face now keeps the clicks and page changes of the kept minutes
+  beside the replay (the recorder pill's click and navigation lanes, under
+  the `interactions` capture class) and sends them with the report, and each
+  network entry says when it finished (`ts`). vitrinka places all of them on
+  the report's timeline, with a frame for each click and page.
+- A click is sent as its selector, its text as the replay shows it (nothing
+  under strict masking, never a field's value), its box and its route; a page
+  change as its origin and path, never a query or a fragment, with token-shaped
+  path segments scrubbed. A profile without `interactions` keeps neither.
+- A report that goes without a replay sends no clicks or page changes: there
+  is no session for them to stand on.
+
+Upgrading:
+
+- **The server side ships in vitrinka first.** An older vitrinka ignores a
+  network entry's `ts` and files the clicks and page changes as it would any
+  staged row; its timeline shows the clicks and pages but no console or
+  network steps.
+- **The report face now wraps `history.pushState` and `replaceState`** while
+  it captures (as the recorder pill always has), and restores them when it
+  unmounts.
+
 ## 0.10.1
 
 - Rebuilt from the cleaned repository history, with no behaviour change.

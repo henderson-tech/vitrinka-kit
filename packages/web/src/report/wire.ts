@@ -132,7 +132,7 @@ export async function deadline<T>(what: string, ms: number, work: (signal: Abort
 }
 
 /** What a report carries when its capture could not be prepared. */
-export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
+export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [], journey: [] };
 
 /**
  * The capture a report sends, under its deadline like every leg (reading an
@@ -272,14 +272,14 @@ export class ReportJob {
 
   private async sendCapture(): Promise<void> {
     const id = encodeURIComponent(this.id);
-    const { chunks, truncated } = this.capture;
+    const { chunks, truncated, journey } = this.capture;
     for (const c of chunks) {
       if (this.blobKeys.has(c.seq)) continue;
       const up = await this.upload(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body);
       if (!up.blobKey) throw new Error(`vitrinka: chunk ${c.seq} came back without a blob key`);
       this.blobKeys.set(c.seq, up.blobKey);
     }
-    const rows = chunks.map((c) => ({
+    const rows: { seq: number; ts: string; tabHost: string; kind: string; payload: Record<string, unknown>; blobKey: string }[] = chunks.map((c) => ({
       seq: c.seq,
       ts: c.ts,
       tabHost: this.tabHost,
@@ -287,6 +287,12 @@ export class ReportJob {
       payload: { count: c.count, source: 'replay', truncated },
       blobKey: this.blobKeys.get(c.seq) ?? '',
     }));
+    // The journey's rows follow the replay's (vt-3094), each at its own time:
+    // vitrinka walks a report's session by time. Without a replay there is no
+    // session to walk, so they stay behind.
+    if (chunks.length) {
+      for (const j of journey) rows.push({ seq: rows.length + 1, ts: j.ts, tabHost: this.tabHost, kind: j.kind, payload: j.payload, blobKey: '' });
+    }
     while (this.rowsPosted < rows.length) {
       const batch = rows.slice(this.rowsPosted, this.rowsPosted + EVENTS_PER_POST);
       await this.call('POST', `/api/v1/reports/${id}/events`, { events: batch });

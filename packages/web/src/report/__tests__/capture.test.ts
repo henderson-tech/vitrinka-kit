@@ -29,7 +29,7 @@ import {
 import { setTabIdentity } from '../../recorder/state';
 import { type CaptureStore, openCaptureStore } from '../../recorder/storage/capture';
 import { fakeLocation } from '../../recorder/__tests__/stub';
-import { acquireEngine, releaseEngine } from '../engine';
+import { acquireEngine, journeyOf, laneKeeper, releaseEngine } from '../engine';
 import { maskingPolicy } from '../profile';
 
 const T0 = Date.parse('2026-10-16T10:00:00.000Z');
@@ -93,6 +93,43 @@ afterEach(() => {
   store?.close();
   store = null;
   setSystemTime();
+});
+
+describe('the journey before a report (vt-3094)', () => {
+  const all = { replay: true, errors: true, console: true, network: true };
+
+  it('keeps clicks and page changes with the replay, in the wire’s shapes only', () => {
+    const keep = laneKeeper(all);
+    expect(
+      keep('click', { selector: 'button.tab', text: 'Batteries', rect: { x: 10, y: 20, w: 80, h: 24 }, route: '/sites/7', value: 'never' }),
+    ).toEqual({ selector: 'button.tab', text: 'Batteries', rect: { x: 10, y: 20, w: 80, h: 24 }, route: '/sites/7' });
+    expect(keep('nav', { url: 'https://app.example.test/reset/aB3dE6gH9jK2mN5pQ8sT1vW4?token=s3cr3t#frag', route: '/reset/aB3dE6gH9jK2mN5pQ8sT1vW4', spa: true })).toEqual({
+      url: 'https://app.example.test/reset/•••',
+      route: '/reset/•••',
+      spa: true,
+    });
+  });
+
+  it('holds no journey where the profile keeps no replay', () => {
+    const keep = laneKeeper({ ...all, replay: false });
+    expect(keep('click', { selector: 'a', text: 'x', route: '/' })).toBeNull();
+    expect(keep('nav', { url: 'https://app.example.test/', route: '/' })).toBeNull();
+  });
+
+  it('a clip’s clicks and page changes become the report’s journey, oldest first', () => {
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(null, { keepLane: laneKeeper(all) }));
+    const route = { tabId: TAB, tabHost: 'app.example.test' };
+    pushFlightEvent('nav', { url: 'https://app.example.test/sites/7', route: '/sites/7', spa: true }, route);
+    setSystemTime(new Date(T0 + 1000));
+    pushFlightEvent('console', { level: 'error', text: 'boom' }, route);
+    setSystemTime(new Date(T0 + 2000));
+    pushFlightEvent('click', { selector: 'button.tab', text: 'Batteries', route: '/sites/7' }, route);
+    expect(journeyOf(takeFlightClip()!.lanes)).toEqual([
+      { kind: 'nav', ts: new Date(T0).toISOString(), payload: { url: 'https://app.example.test/sites/7', route: '/sites/7', spa: true } },
+      { kind: 'click', ts: new Date(T0 + 2000).toISOString(), payload: { selector: 'button.tab', text: 'Batteries', route: '/sites/7' } },
+    ]);
+  });
 });
 
 describe('the capture profile in browser storage', () => {

@@ -74,7 +74,7 @@ describe('the attachment leg', () => {
     globalThis.fetch = realFetch;
   });
 
-  const empty: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
+  const empty: BuiltCapture = { chunks: [], truncated: false, console: [], network: [], journey: [] };
   const envelope: ReportEnvelope = {
     description: 'The logo is cut off',
     env: { url: 'https://app.test/', ua: 'test', viewport: { w: 1280, h: 800, dpr: 1 }, appVersion: '', locale: 'en' },
