@@ -9,7 +9,8 @@
  *   classes    ⊆ errors · interactions · full · console · network
  *
  * Classes: `interactions` = the masked DOM replay (clicks, scrolls, typing
- * as masked input, each page's view); `errors` = uncaught errors, console
+ * as masked input, each page's view) and the journey beside it: each click
+ * and page change as a timeline row (vt-3094); `errors` = uncaught errors, console
  * errors and failed requests; `console` = every console level; `network` =
  * every request's method, path, status and duration; `full` = all of them.
  * Request and response bodies and headers are never part of a report.

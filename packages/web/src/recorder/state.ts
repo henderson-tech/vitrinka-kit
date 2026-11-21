@@ -97,6 +97,11 @@ export function claimCapture(face: CaptureFace, yieldTo?: () => void): string | 
   return token;
 }
 
+/** The face that runs this document's capture now; null when none does. */
+export function captureFace(): CaptureFace | null {
+  return (globalThis as OwnerGlobals)[OWNER_KEY]?.face ?? null;
+}
+
 /** Give the runtime back — only the claim that `token` names. */
 export function releaseCapture(token: string | null | undefined): void {
   const g = globalThis as OwnerGlobals;

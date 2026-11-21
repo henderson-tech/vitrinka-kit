@@ -29,7 +29,7 @@ import {
 import { setTabIdentity } from '../../recorder/state';
 import { type CaptureStore, openCaptureStore } from '../../recorder/storage/capture';
 import { fakeLocation } from '../../recorder/__tests__/stub';
-import { acquireEngine, releaseEngine } from '../engine';
+import { acquireEngine, journeyOf, laneKeeper, releaseEngine } from '../engine';
 import { maskingPolicy } from '../profile';
 
 const T0 = Date.parse('2026-10-16T10:00:00.000Z');
@@ -93,6 +93,85 @@ afterEach(() => {
   store?.close();
   store = null;
   setSystemTime();
+});
+
+describe('the journey before a report (vt-3094)', () => {
+  const all = { replay: true, errors: true, console: true, network: true };
+
+  it('keeps clicks and page changes with the replay, in the wire’s shapes only', () => {
+    const keep = laneKeeper(all);
+    expect(
+      keep('click', { selector: 'button.tab', text: 'Batteries', rect: { x: 10, y: 20, w: 80, h: 24 }, route: '/sites/7', value: 'never' }),
+    ).toEqual({ selector: 'button.tab', text: 'Batteries', rect: { x: 10, y: 20, w: 80, h: 24 }, route: '/sites/7' });
+    expect(keep('nav', { url: 'https://app.example.test/reset/aB3dE6gH9jK2mN5pQ8sT1vW4?token=s3cr3t#frag', route: '/reset/aB3dE6gH9jK2mN5pQ8sT1vW4', spa: true })).toEqual({
+      url: 'https://app.example.test/reset/•••',
+      route: '/reset/•••',
+      spa: true,
+    });
+  });
+
+  it('scrubs a token-shaped path segment behind percent escapes too', () => {
+    const keep = laneKeeper(all);
+    const escaped = '%61B3dE6gH9jK2mN5pQ8sT1vW4'; // "aB3dE6gH9jK2mN5pQ8sT1vW4" with its first letter escaped
+    expect(keep('nav', { url: `https://app.example.test/reset/${escaped}/done`, route: `/reset/${escaped}/done` })).toEqual({
+      url: 'https://app.example.test/reset/•••/done',
+      route: '/reset/•••/done',
+      spa: true,
+    });
+    // A decoded separator stays an escape (no new segment); a malformed escape is judged as written.
+    expect(keep('nav', { url: 'https://app.example.test/a%2Fb/%E0%A4%A/x', route: '/a%2Fb/%E0%A4%A/x' })).toEqual({
+      url: 'https://app.example.test/a%2Fb/%E0%A4%A/x',
+      route: '/a%2Fb/%E0%A4%A/x',
+      spa: true,
+    });
+    expect(keep('nav', { url: 'https://app.example.test/t/aB3dE6gH9jK2mN5pQ8sT1vW4%2Fmore', route: '/t/aB3dE6gH9jK2mN5pQ8sT1vW4%2Fmore' })).toMatchObject({
+      route: '/t/•••%2Fmore',
+    });
+  });
+
+  it('holds no journey where the profile keeps no replay', () => {
+    const keep = laneKeeper({ ...all, replay: false });
+    expect(keep('click', { selector: 'a', text: 'x', route: '/' })).toBeNull();
+    expect(keep('nav', { url: 'https://app.example.test/', route: '/' })).toBeNull();
+  });
+
+  it('a report with a Cover sends no clicks: nothing matches a press against what was covered', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ project: 'example-platform', captureProfile: { storage: 'memory', windowSec: 120, classes: ['errors', 'interactions'] }, profile: 'balanced' }))) as unknown as typeof fetch;
+    setSystemTime(new Date(T0));
+    const engine = acquireEngine({ base: 'https://vitrinka.test', key: 'vkb_test', loadRecord: async () => fakeRecord })!;
+    try {
+      await engine.ready;
+      const route = { tabId: TAB, tabHost: 'app.example.test' };
+      pushFlightEvent('click', { selector: '#iban', text: 'CZ65 0800 0000 1920 0014 5399', route: '/billing' }, route);
+      pushFlightEvent('nav', { url: 'https://app.example.test/billing', route: '/billing', spa: true }, route);
+      const open = await engine.build(engine.freeze(), []);
+      expect(open.journey.map((j) => j.kind)).toContain('click');
+      const covered = await engine.build(engine.freeze(), [{ n: 1, shape: 'hide', rect: { x: 0, y: 0, w: 400, h: 60 }, note: '' }]);
+      expect(covered.journey.some((j) => j.kind === 'click')).toBe(false);
+      expect(JSON.stringify(covered.journey)).not.toContain('CZ65');
+      expect(covered.journey.some((j) => j.kind === 'nav')).toBe(true);
+    } finally {
+      releaseEngine(engine);
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('a clip’s clicks and page changes become the report’s journey, oldest first', () => {
+    setSystemTime(new Date(T0));
+    startFlightBuffer(profile(null, { keepLane: laneKeeper(all) }));
+    const route = { tabId: TAB, tabHost: 'app.example.test' };
+    pushFlightEvent('nav', { url: 'https://app.example.test/sites/7', route: '/sites/7', spa: true }, route);
+    setSystemTime(new Date(T0 + 1000));
+    pushFlightEvent('console', { level: 'error', text: 'boom' }, route);
+    setSystemTime(new Date(T0 + 2000));
+    pushFlightEvent('click', { selector: 'button.tab', text: 'Batteries', route: '/sites/7' }, route);
+    expect(journeyOf(takeFlightClip()!.lanes)).toEqual([
+      { kind: 'nav', ts: new Date(T0).toISOString(), payload: { url: 'https://app.example.test/sites/7', route: '/sites/7', spa: true } },
+      { kind: 'click', ts: new Date(T0 + 2000).toISOString(), payload: { selector: 'button.tab', text: 'Batteries', route: '/sites/7' } },
+    ]);
+  });
 });
 
 describe('the capture profile in browser storage', () => {

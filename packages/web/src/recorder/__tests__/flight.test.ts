@@ -13,7 +13,7 @@ import { configureRecorder } from '../config';
 import { flightActive, pushFlightRRWeb, startFlightBuffer, takeFlightClip } from '../flight';
 import { __bufferForTests, pushEvent, setState } from '../queue';
 import { canReport, holdReport, sendReport, syncFlight, wantFlight } from '../report';
-import { currentRoute, setTabIdentity } from '../state';
+import { claimCapture, currentRoute, releaseCapture, setTabIdentity } from '../state';
 import { __resetStorageForTests, configureRecorderStorage, memoryRecorderStorage } from '../storage';
 import { BASE, fakeLocation, freshRecorder, installStub, liveSession, ROUTE, type Stub } from './stub';
 
@@ -62,6 +62,28 @@ afterEach(() => {
   stopRRWeb();
   setSystemTime();
   stub.restore();
+});
+
+describe('a report face’s lanes', () => {
+  it('feed the report’s buffer, never the recording another tab of the origin started', () => {
+    // The session state is the origin's (another tab pressed Record); the capture claim is this document's.
+    setState(liveSession());
+    const claim = claimCapture('report');
+    try {
+      startFlightBuffer();
+      const before = __bufferForTests().length;
+      expect(pushEvent('click', { selector: '#pay', text: 'Pay' }, ROUTE)).not.toBeNull();
+      expect(pushEvent('nav', { url: 'https://app.example.test/cart', route: '/cart', spa: true }, ROUTE)).not.toBeNull();
+      expect(__bufferForTests().length).toBe(before);
+      expect(takeFlightClip()!.lanes.map((e) => e.kind)).toEqual(['click', 'nav']);
+    } finally {
+      releaseCapture(claim);
+    }
+    // Without the claim the same press is the live session's, as before.
+    const queued = __bufferForTests().length;
+    pushEvent('click', { selector: '#pay', text: 'Pay' }, ROUTE);
+    expect(__bufferForTests().length).toBe(queued + 1);
+  });
 });
 
 describe('flight recorder', () => {

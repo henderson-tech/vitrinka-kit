@@ -38,6 +38,7 @@ import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } 
 import type { Locale, ReportKind } from './i18n';
 import type { ReportContext } from './context';
 import type { Identity } from './identity';
+import { keepRound } from './round';
 import type { WireMarker } from './markers';
 
 export interface ReportEnv {
@@ -67,6 +68,8 @@ export interface ReportEnvelope {
   memberToken?: string;
   /** The host's claimed context (context.ts, vt-9515), already validated; absent when the map is empty. */
   context?: ReportContext;
+  /** The test round this browser holds (round.ts, vt-3094), absent on its first report: the report joins it while it stands. */
+  round?: string;
 }
 
 export interface SubmitReply {
@@ -132,7 +135,7 @@ export async function deadline<T>(what: string, ms: number, work: (signal: Abort
 }
 
 /** What a report carries when its capture could not be prepared. */
-export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [] };
+export const EMPTY_CAPTURE: BuiltCapture = { chunks: [], truncated: false, console: [], network: [], journey: [] };
 
 /**
  * The capture a report sends, under its deadline like every leg (reading an
@@ -194,11 +197,13 @@ export class ReportJob {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const { res, memberSent } = await this.create(env);
+      const { res, memberSent, roundSent } = await this.create(env);
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
       this.sent = editsKey;
+      // The round the report was filed into: its token rides the next report.
+      keepRound(this.target, res.round, roundSent);
       if (typeof res.memberError === 'string' && res.memberError) onMemberRefusal?.(res.memberError, memberSent);
     } else if (this.sent !== editsKey) {
       await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
@@ -225,15 +230,17 @@ export class ReportJob {
    * The create leg, answering with the member link the accepted body carried
    * ('' none). A vitrinka older than an optional field refuses it by name;
    * the reporter's word (`type`), the member link (`memberToken`) and the host's context (`context`) are
-   * optional, the report is not, so it goes again without each field named,
+   * optional, and so is the test round (`round`); the report is not, so it goes again without each field named,
    * once. A refusal naming nothing still in the body fails the leg.
    */
-  private async create(env: ReportEnvelope): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown }; memberSent: string }> {
+  private async create(
+    env: ReportEnvelope,
+  ): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }; memberSent: string; roundSent: string }> {
     let body = env;
     for (;;) {
       try {
-        const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown }>('POST', '/api/v1/reports', body);
-        return { res, memberSent: body.memberToken ?? '' };
+        const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }>('POST', '/api/v1/reports', body);
+        return { res, memberSent: body.memberToken ?? '', roundSent: body.round ?? '' };
       } catch (e) {
         const field = refusedField(e);
         if (field === 'type' && body.type !== undefined) {
@@ -243,6 +250,11 @@ export class ReportJob {
         } else if (field === 'memberToken' && body.memberToken !== undefined) {
           console.warn('vitrinka: this server takes no member link yet — sending the report without it');
           const { memberToken: _dropped, ...rest } = body;
+          body = rest;
+        } else if (field === 'round' && body.round !== undefined) {
+          // A vitrinka before test rounds (vt-3094): the report files on its own.
+          console.warn('vitrinka: this server keeps no test rounds yet — sending the report without one');
+          const { round: _dropped, ...rest } = body;
           body = rest;
         } else if (field === 'context' && body.context !== undefined) {
           // The host's claimed context is optional like the rest (vt-9515); a signed `ctx` claim rides the token and is not dropped.
@@ -272,14 +284,14 @@ export class ReportJob {
 
   private async sendCapture(): Promise<void> {
     const id = encodeURIComponent(this.id);
-    const { chunks, truncated } = this.capture;
+    const { chunks, truncated, journey } = this.capture;
     for (const c of chunks) {
       if (this.blobKeys.has(c.seq)) continue;
       const up = await this.upload(`/api/v1/reports/${id}/chunk?seq=${c.seq}`, 'application/json', c.body);
       if (!up.blobKey) throw new Error(`vitrinka: chunk ${c.seq} came back without a blob key`);
       this.blobKeys.set(c.seq, up.blobKey);
     }
-    const rows = chunks.map((c) => ({
+    const rows: { seq: number; ts: string; tabHost: string; kind: string; payload: Record<string, unknown>; blobKey: string }[] = chunks.map((c) => ({
       seq: c.seq,
       ts: c.ts,
       tabHost: this.tabHost,
@@ -287,6 +299,12 @@ export class ReportJob {
       payload: { count: c.count, source: 'replay', truncated },
       blobKey: this.blobKeys.get(c.seq) ?? '',
     }));
+    // The journey's rows follow the replay's (vt-3094), each at its own time:
+    // vitrinka walks a report's session by time. Without a replay there is no
+    // session to walk, so they stay behind.
+    if (chunks.length) {
+      for (const j of journey) rows.push({ seq: rows.length + 1, ts: j.ts, tabHost: this.tabHost, kind: j.kind, payload: j.payload, blobKey: '' });
+    }
     while (this.rowsPosted < rows.length) {
       const batch = rows.slice(this.rowsPosted, this.rowsPosted + EVENTS_PER_POST);
       await this.call('POST', `/api/v1/reports/${id}/events`, { events: batch });

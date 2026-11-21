@@ -63,6 +63,7 @@ import { listMine, type MyReport, openSession, type ReporterSession, sessionKey,
 import { noteSent, readSent } from './sent';
 import { COACH_KEY, readCoach, readSize, SIZE_KEY, SIZE_SCALE, SIZES, techDetails, type WidgetSize, writePref } from './settings';
 import { REPORT_CSS } from './styles';
+import { roundFor } from './round';
 import { EMPTY_CAPTURE, prepareCapture, ReportJob, type ReportEnvelope, type SubmitReply } from './wire';
 
 export interface WidgetOptions {
@@ -1781,6 +1782,8 @@ export class ReportWidget {
   private envelope(description: string, capture: BuiltCapture): ReportEnvelope {
     const who = this.who();
     const member = memberTokenFor(this.opts.base);
+    // The test round this browser is in (vt-3094): the report joins it while vitrinka says it stands.
+    const round = roundFor({ url: this.opts.base, key: this.opts.key });
     const loc = globalThis.location;
     return {
       title: titleOf(description),
@@ -1798,6 +1801,7 @@ export class ReportWidget {
       markers: toWire(this.markers),
       locale: this.locale,
       ...(this.kind ? { type: this.kind } : {}),
+      ...(round ? { round: round.token } : {}),
       // A member linked on this base co-owns the report; the `vkb_` key stays the bearer.
       ...(member ? { memberToken: member } : {}),
       ...contextField(this.context),

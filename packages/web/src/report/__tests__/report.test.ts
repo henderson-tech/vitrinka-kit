@@ -74,7 +74,11 @@ const capture: BuiltCapture = {
   ],
   truncated: false,
   console: [{ level: 'error', ts: '2026-10-16T10:00:00.500Z', text: 'TypeError: total is NaN' }],
-  network: [{ method: 'POST', path: '/api/settlement', status: 500, ms: 120 }],
+  network: [{ method: 'POST', path: '/api/settlement', status: 500, ms: 120, ts: '2026-10-16T10:00:00.400Z' }],
+  journey: [
+    { kind: 'nav', ts: '2026-10-16T09:59:40.000Z', payload: { url: 'https://app.example.test/settlement', route: '/settlement', spa: true } },
+    { kind: 'click', ts: '2026-10-16T09:59:55.000Z', payload: { selector: 'button.month', text: 'August', route: '/settlement' } },
+  ],
 };
 
 function envelope(description: string): ReportEnvelope {
@@ -121,7 +125,20 @@ describe('the report wire', () => {
     expect((seen[5]!.body as { events: unknown[] }).events).toEqual([
       { seq: 1, ts: capture.chunks[0]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 2, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-1' },
       { seq: 2, ts: capture.chunks[1]!.ts, tabHost: 'app.example.test', kind: 'rrweb', payload: { count: 1, source: 'replay', truncated: false }, blobKey: 'reports/rep-1/chunk-2' },
+      // The journey before the report, each row at its own time (vt-3094).
+      { seq: 3, ts: '2026-10-16T09:59:40.000Z', tabHost: 'app.example.test', kind: 'nav', payload: capture.journey[0]!.payload, blobKey: '' },
+      { seq: 4, ts: '2026-10-16T09:59:55.000Z', tabHost: 'app.example.test', kind: 'click', payload: capture.journey[1]!.payload, blobKey: '' },
     ]);
+    // The network entry says when it happened, so vitrinka can place it.
+    expect((seen[0]!.body as { network: unknown[] }).network).toEqual([
+      { method: 'POST', path: '/api/settlement', status: 500, ms: 120, ts: '2026-10-16T10:00:00.400Z' },
+    ]);
+  });
+
+  it('a report without a replay stages no journey: there is no session for it to stand on', async () => {
+    const job = new ReportJob({ ...capture, chunks: [] }, 'app.example.test', { url: BASE, key: 'vkb_test' });
+    await job.run(envelope('No replay'));
+    expect(seen.some((c) => c.path.endsWith('/events'))).toBe(false);
   });
 });
 

@@ -78,6 +78,13 @@ export function installNavLane(): void {
   };
 }
 
+/** Remove this module's History wrap and its listeners; another bundle's live wrap is its own to remove. */
+export function uninstallNavLane(): void {
+  const g = globalThis as NavGlobals;
+  if (g[PATCH_MARK] !== OWNER) return;
+  g[UNPATCH_MARK]?.();
+}
+
 /**
  * Make this module's History wrap the live one (ONE recorder): the first
  * recorder bundle on the page installs it, but whichever bundle leads must

@@ -1,5 +1,56 @@
 # @vitrinka/web
 
+## 0.11.0
+
+- **A report shows how the reporter got there.** Report a problem sent a
+  replay and one marked frame: the report's timeline in vitrinka held a
+  single step, with no page, click, console line or request before it. The
+  report face now keeps the clicks and page changes of the kept minutes
+  beside the replay (the recorder pill's click and navigation lanes, under
+  the `interactions` capture class) and sends them with the report, and each
+  network entry says when it finished (`ts`). vitrinka places all of them on
+  the report's timeline, with a frame for each click and page.
+- A click is sent as its selector, its text as the replay shows it (nothing
+  under strict masking, never a field's value), its box and its route; a page
+  change as its origin and path, never a query or a fragment, with token-shaped
+  path segments scrubbed. A profile without `interactions` keeps neither.
+- A report that goes without a replay sends no clicks or page changes: there
+  is no session for them to stand on.
+- A press at or under a region the replay blocks (`.rr-block`, the
+  recorder's own `data-vitrinka-recorder`) is not sent at all.
+- A report with a **Cover** sends no clicks (its page changes still go): a
+  click carries its element's text from when it was pressed, and nothing
+  matches that against what the reporter covered.
+- While Report a problem runs a page's capture, what it captures goes to the
+  report's own buffer alone, even when another tab of the site is recording
+  with the pill; before, its console and network entries were written into
+  that recording.
+- **Reports from one sitting stay together: test rounds.** The first report
+  a browser sends opens a test round in vitrinka, which hands back the
+  round's token; Report a problem keeps it for the site (every tab, across
+  reloads) and sends it as `round` with each later report, so the team sees
+  which reports came from one person's one sitting. vitrinka decides when a
+  round is over (two quiet hours, or the reporter ending it) and opens a new
+  one for the next report. Nothing to configure: no option, no attribute.
+- The token is kept in localStorage under its own key per vitrinka and
+  report key (`vitrinka.recorder.report.round:<vitrinka>|<key>`), so two
+  projects' widgets on one site never share a round. It names no person and
+  reads nothing.
+
+Upgrading:
+
+- **The server side ships in vitrinka first.** An older vitrinka ignores a
+  network entry's `ts` and files the clicks and page changes as it would any
+  staged row; its timeline shows the clicks and pages but no console or
+  network steps.
+- **The report face now wraps `history.pushState` and `replaceState`** while
+  it captures (as the recorder pill always has), and restores them when it
+  unmounts.
+- An older vitrinka also refuses the unknown `round` by name; the widget then sends the report again without
+  it, once, as it does for `type`, and every report files on its own.
+- Ending a round from the widget has no control yet: it arrives with the
+  pill. Until then a round ends after two quiet hours.
+
 ## 0.10.1
 
 - Rebuilt from the cleaned repository history, with no behaviour change.

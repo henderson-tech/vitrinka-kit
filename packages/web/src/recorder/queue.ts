@@ -44,7 +44,7 @@ import { api, permanentStatus, uploadChunk, uploadImage, VitrinkaApiError } from
 import type { StagedImage } from './attachments';
 import { pushFlightEvent } from './flight';
 import type { HudNote } from './hud/controller';
-import { leadState, notify } from './state';
+import { captureFace, leadState, notify } from './state';
 import { getRecorderStorage } from './storage';
 import { getRecorderBlobStore } from './storage/blobs';
 
@@ -1138,6 +1138,12 @@ export function pushEvent(
 ): string | null {
   // A follower captures nothing: the leader records this document (ONE recorder D2).
   if (leadState.following) return null;
+  // The report face runs this document's capture: its lanes feed the
+  // report's own buffer, under its profile's shapes, and nothing leaves until
+  // the reporter presses Send — never the recording another tab of this
+  // origin started (the session state is the origin's, the capture claim is
+  // this document's).
+  if (captureFace() === 'report') return pushFlightEvent(kind, payload, route);
   const rec = getState();
   if (!rec) return pushFlightEvent(kind, payload, route);
   if (rec.dead || (rec.paused && kind !== 'note')) return null;

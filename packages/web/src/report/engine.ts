@@ -10,8 +10,10 @@
  * 2. The redaction rules first, then the lanes — so capture runs under the
  *    project's rules from its first byte: the console lane (errors, every
  *    level with `console`), the network lane in metadata-only mode
- *    (`errors`: failures, `network`: every request), and the rrweb lane
- *    into the flight buffer (`interactions`).
+ *    (`errors`: failures, `network`: every request), and with
+ *    `interactions` the rrweb lane plus the click and navigation lanes —
+ *    the journey a report's timeline is built from (vt-3094) — all into
+ *    the flight buffer.
  * 3. The flight buffer under the profile's window and cap, in memory or
  *    also in IndexedDB (`storage: browser`, storage/capture.ts), whose
  *    expired windows the start sweeps.
@@ -25,10 +27,12 @@
 import type { eventWithTime } from '@rrweb/types';
 
 import { api, type ApiTarget } from '../recorder/api';
+import { installClickLane } from '../recorder/capture/click';
 import { patchConsole, unpatchConsole } from '../recorder/capture/console';
+import { noteNavigation, ownNavLane, uninstallNavLane } from '../recorder/capture/nav';
 import { patchNetwork, unpatchNetwork } from '../recorder/capture/net';
 import { setCaptureSanitizer, setRedactionPolicy } from '../recorder/capture/redact';
-import { checkoutRRWeb, type RecordFn, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
+import { checkoutRRWeb, type RecordFn, RRWEB_BLOCK_ATTR, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
 import { addOwnBase } from '../recorder/config';
 import {
   clearFlight,
@@ -44,6 +48,7 @@ import {
   stopFlightBuffer,
   takeFlightClip,
 } from '../recorder/flight';
+import { insideHud } from '../recorder/hud/host';
 import { listen } from '../recorder/hud/listen';
 import { EVENTS_PER_POST, splitRRWebEvents, utf8Bytes } from '../recorder/queue';
 import { browserTabId, claimCapture, currentRoute, releaseCapture, setTabIdentity } from '../recorder/state';
@@ -105,6 +110,15 @@ export interface NetEntry {
   path: string;
   status: number;
   ms: number;
+  /** When it finished: what places it on the report's timeline (a vitrinka before vt-3094 ignores it). */
+  ts: string;
+}
+
+/** One step of the journey before a report: a click or a page change, as the recorder's lanes shape them. */
+export interface JourneyEntry {
+  kind: 'click' | 'nav';
+  ts: string;
+  payload: Record<string, unknown>;
 }
 
 /** The capture as frozen when the card opened (the buffer keeps rolling). */
@@ -129,6 +143,8 @@ export interface BuiltCapture {
   truncated: boolean;
   console: ConsoleEntry[];
   network: NetEntry[];
+  /** The clicks and page changes of the kept minutes, oldest first; staged beside the replay's rows. */
+  journey: JourneyEntry[];
 }
 
 /** The report wire's chunk cap is 4 MiB; pack a little under it. */
@@ -145,6 +161,27 @@ function str(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
+/**
+ * One path segment with its token runs scrubbed. A pathname keeps percent
+ * escapes, and an escaped token is still a token: the segment is judged
+ * decoded, and when that finds a run it is emitted decoded and scrubbed, its
+ * separators kept as escapes so no new segment appears. A malformed escape
+ * decodes nothing and the segment is judged as written.
+ */
+function scrubSegment(seg: string): string {
+  let decoded = seg;
+  if (seg.includes('%')) {
+    try {
+      decoded = decodeURIComponent(seg);
+    } catch {
+      decoded = seg;
+    }
+  }
+  TOKENY.lastIndex = 0;
+  if (decoded === seg || !TOKENY.test(decoded)) return seg.replace(TOKENY, '•••');
+  return decoded.replace(TOKENY, '•••').replace(/[/?#%]/g, (c) => encodeURIComponent(c));
+}
+
 /** A request URL (already through the redaction engine) as the wire's path: pathname only, token runs scrubbed. */
 export function reportPath(url: unknown): string {
   const raw = str(url);
@@ -154,7 +191,28 @@ export function reportPath(url: unknown): string {
   } catch {
     path = raw.split(/[?#]/)[0] ?? '';
   }
-  return path.replace(TOKENY, '•••').slice(0, 300);
+  return path.split('/').map(scrubSegment).join('/').slice(0, 300);
+}
+
+/** What the replay never serializes: rrweb's block class and the lane's own block attribute (rrweb-lane.ts). */
+const REPLAY_BLOCKED = `.rr-block,[${RRWEB_BLOCK_ATTR}]`;
+
+/**
+ * A press at or under a region the replay blocks is not the report's to
+ * send: its selector alone would name DOM the replay leaves out.
+ */
+function inBlockedRegion(t: EventTarget | null): boolean {
+  return typeof Element !== 'undefined' && t instanceof Element && t.closest(REPLAY_BLOCKED) !== null;
+}
+
+/** A page URL as a report carries one: origin and path, never a query or a fragment, token runs scrubbed. */
+export function reportPageUrl(url: unknown): string {
+  try {
+    const u = new URL(str(url), globalThis.location?.href ?? 'http://localhost');
+    return u.origin + reportPath(u.pathname);
+  } catch {
+    return reportPath(url);
+  }
 }
 
 /** rrweb's `EventType.Meta`, the head of every window (`@rrweb/types` is type-only here). */
@@ -185,9 +243,35 @@ export function wholeWindows(events: readonly eventWithTime[], hardBytes: number
   return { events: out, dropped };
 }
 
+const MAX_SELECTOR = 300;
+const MAX_CLICK_TEXT = 80;
+
+function rectOf(v: unknown): { x: number; y: number; w: number; h: number } | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const r = v as Record<string, unknown>;
+  const n = (k: string) => (typeof r[k] === 'number' && Number.isFinite(r[k]) ? (r[k] as number) : null);
+  const [x, y, w, h] = [n('x'), n('y'), n('w'), n('h')];
+  return x === null || y === null || w === null || h === null ? null : { x, y, w, h };
+}
+
 /** What the flight buffer keeps of each lane event under the profile's classes: the wire's shapes only. */
-function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keepLane']> {
+export function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keepLane']> {
   return (kind, payload) => {
+    // The journey rides with the replay (`interactions`): it shows nothing the replay does not.
+    if (kind === 'click') {
+      if (!lanes.replay) return null;
+      const rect = rectOf(payload?.rect);
+      return {
+        selector: str(payload?.selector).slice(0, MAX_SELECTOR),
+        text: str(payload?.text).slice(0, MAX_CLICK_TEXT),
+        ...(rect ? { rect } : {}),
+        route: reportPath(payload?.route),
+      };
+    }
+    if (kind === 'nav') {
+      if (!lanes.replay) return null;
+      return { url: reportPageUrl(payload?.url), route: reportPath(payload?.route), spa: true };
+    }
     if (kind === 'console') {
       const level = str(payload?.level, 'error');
       if (level === 'error' ? !(lanes.errors || lanes.console) : !lanes.console) return null;
@@ -206,6 +290,21 @@ function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keepLane']>
     }
     return null;
   };
+}
+
+/**
+ * The clicks and page changes among a clip's lane events, newest
+ * `MAX_ENTRIES`, oldest first. `clicks: false` leaves the clicks out: a
+ * report with a Cover sends none, because a click carries its element's
+ * text and box from when it was pressed, and nothing matches that against
+ * what the reporter covered at Send — fail closed, as a hide without a
+ * mirror withholds the replay.
+ */
+export function journeyOf(lanes: readonly FlightLaneEvent[], clicks = true): JourneyEntry[] {
+  return lanes
+    .filter((e): e is FlightLaneEvent & { kind: 'click' | 'nav' } => (clicks && e.kind === 'click') || e.kind === 'nav')
+    .slice(-MAX_ENTRIES)
+    .map((e) => ({ kind: e.kind, ts: e.ts, payload: e.payload ?? {} }));
 }
 
 async function fetchConfig(
@@ -353,6 +452,16 @@ export class CaptureEngine {
       this.capture.push(unpatchNetwork);
     }
     if (lanes.replay) {
+      // The journey (vt-3094): clicks and page changes, held like the console
+      // and network entries. The click listener is this engine's alone; the
+      // History wrap is shared with a recorder face (nav.ts): this engine holds
+      // the capture, so it takes the wrap over — another bundle's recorder may
+      // have left its own installed, and that one feeds a queue that is not
+      // this buffer — and it comes off in stop() only while this engine still
+      // runs the capture.
+      if (typeof document !== 'undefined') this.capture.push(installClickLane({ ignore: (t) => insideHud(t) || inBlockedRegion(t) }));
+      // The journey opens on the page it started on (the takeover notes it when it missed one).
+      if (!ownNavLane()) noteNavigation(true);
       const record = await opts.loadRecord(opts.base).catch((e: unknown) => {
         // A report without a replay is still a report: never block the card.
         console.warn('vitrinka: the page recorder did not load — reports go without a replay', e);
@@ -491,8 +600,9 @@ export class CaptureEngine {
         path: str(e.payload?.path),
         status: typeof e.payload?.status === 'number' ? e.payload.status : 0,
         ms: typeof e.payload?.ms === 'number' ? e.payload.ms : 0,
+        ts: e.ts,
       }));
-    return { chunks, truncated: truncated || dropped.length > 0, console: consoleEntries, network };
+    return { chunks, truncated: truncated || dropped.length > 0, console: consoleEntries, network, journey: journeyOf(lanes, hides.length === 0) };
   }
 
   /** A report went out: forget what it carried, in memory and in the store. */
@@ -503,6 +613,9 @@ export class CaptureEngine {
   stop(): void {
     this.stopped = true;
     this.listeners.clear();
+    // Still this engine's capture: its History wrap goes with it. After a
+    // recorder face took the capture over, the wrap is the recorder's.
+    if (this.capturing && this.config?.lanes.replay) uninstallNavLane();
     this.standDown();
     releaseCapture(this.claim);
     this.claim = null;
