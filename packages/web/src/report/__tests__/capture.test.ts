@@ -110,6 +110,25 @@ describe('the journey before a report (vt-3094)', () => {
     });
   });
 
+  it('scrubs a token-shaped path segment behind percent escapes too', () => {
+    const keep = laneKeeper(all);
+    const escaped = '%61B3dE6gH9jK2mN5pQ8sT1vW4'; // "aB3dE6gH9jK2mN5pQ8sT1vW4" with its first letter escaped
+    expect(keep('nav', { url: `https://app.example.test/reset/${escaped}/done`, route: `/reset/${escaped}/done` })).toEqual({
+      url: 'https://app.example.test/reset/•••/done',
+      route: '/reset/•••/done',
+      spa: true,
+    });
+    // A decoded separator stays an escape (no new segment); a malformed escape is judged as written.
+    expect(keep('nav', { url: 'https://app.example.test/a%2Fb/%E0%A4%A/x', route: '/a%2Fb/%E0%A4%A/x' })).toEqual({
+      url: 'https://app.example.test/a%2Fb/%E0%A4%A/x',
+      route: '/a%2Fb/%E0%A4%A/x',
+      spa: true,
+    });
+    expect(keep('nav', { url: 'https://app.example.test/t/aB3dE6gH9jK2mN5pQ8sT1vW4%2Fmore', route: '/t/aB3dE6gH9jK2mN5pQ8sT1vW4%2Fmore' })).toMatchObject({
+      route: '/t/•••%2Fmore',
+    });
+  });
+
   it('holds no journey where the profile keeps no replay', () => {
     const keep = laneKeeper({ ...all, replay: false });
     expect(keep('click', { selector: 'a', text: 'x', route: '/' })).toBeNull();

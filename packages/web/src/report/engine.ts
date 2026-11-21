@@ -32,7 +32,7 @@ import { patchConsole, unpatchConsole } from '../recorder/capture/console';
 import { noteNavigation, ownNavLane, uninstallNavLane } from '../recorder/capture/nav';
 import { patchNetwork, unpatchNetwork } from '../recorder/capture/net';
 import { setCaptureSanitizer, setRedactionPolicy } from '../recorder/capture/redact';
-import { checkoutRRWeb, type RecordFn, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
+import { checkoutRRWeb, type RecordFn, RRWEB_BLOCK_ATTR, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
 import { addOwnBase } from '../recorder/config';
 import {
   clearFlight,
@@ -161,6 +161,27 @@ function str(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
+/**
+ * One path segment with its token runs scrubbed. A pathname keeps percent
+ * escapes, and an escaped token is still a token: the segment is judged
+ * decoded, and when that finds a run it is emitted decoded and scrubbed, its
+ * separators kept as escapes so no new segment appears. A malformed escape
+ * decodes nothing and the segment is judged as written.
+ */
+function scrubSegment(seg: string): string {
+  let decoded = seg;
+  if (seg.includes('%')) {
+    try {
+      decoded = decodeURIComponent(seg);
+    } catch {
+      decoded = seg;
+    }
+  }
+  TOKENY.lastIndex = 0;
+  if (decoded === seg || !TOKENY.test(decoded)) return seg.replace(TOKENY, '•••');
+  return decoded.replace(TOKENY, '•••').replace(/[/?#%]/g, (c) => encodeURIComponent(c));
+}
+
 /** A request URL (already through the redaction engine) as the wire's path: pathname only, token runs scrubbed. */
 export function reportPath(url: unknown): string {
   const raw = str(url);
@@ -170,7 +191,18 @@ export function reportPath(url: unknown): string {
   } catch {
     path = raw.split(/[?#]/)[0] ?? '';
   }
-  return path.replace(TOKENY, '•••').slice(0, 300);
+  return path.split('/').map(scrubSegment).join('/').slice(0, 300);
+}
+
+/** What the replay never serializes: rrweb's block class and the lane's own block attribute (rrweb-lane.ts). */
+const REPLAY_BLOCKED = `.rr-block,[${RRWEB_BLOCK_ATTR}]`;
+
+/**
+ * A press at or under a region the replay blocks is not the report's to
+ * send: its selector alone would name DOM the replay leaves out.
+ */
+function inBlockedRegion(t: EventTarget | null): boolean {
+  return typeof Element !== 'undefined' && t instanceof Element && t.closest(REPLAY_BLOCKED) !== null;
 }
 
 /** A page URL as a report carries one: origin and path, never a query or a fragment, token runs scrubbed. */
@@ -427,7 +459,7 @@ export class CaptureEngine {
       // have left its own installed, and that one feeds a queue that is not
       // this buffer — and it comes off in stop() only while this engine still
       // runs the capture.
-      if (typeof document !== 'undefined') this.capture.push(installClickLane({ ignore: (t) => insideHud(t) }));
+      if (typeof document !== 'undefined') this.capture.push(installClickLane({ ignore: (t) => insideHud(t) || inBlockedRegion(t) }));
       // The journey opens on the page it started on (the takeover notes it when it missed one).
       if (!ownNavLane()) noteNavigation(true);
       const record = await opts.loadRecord(opts.base).catch((e: unknown) => {

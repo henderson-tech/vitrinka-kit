@@ -155,7 +155,22 @@ test('a report carries the clicks and page changes before it, and never the repo
     tab.textContent = 'Batteries';
     tab.addEventListener('click', () => history.pushState({}, '', '/sites/7?tab=batteries#detail'));
     document.body.append(tab);
+    // What the replay blocks is not the journey's either: a press there names DOM the replay leaves out.
+    for (const [id, mark] of [
+      ['vault-rr', (el: HTMLElement) => el.classList.add('rr-block')],
+      ['vault-attr', (el: HTMLElement) => el.setAttribute('data-vitrinka-recorder', '')],
+    ] as const) {
+      const region = document.createElement('div');
+      mark(region);
+      const secret = document.createElement('button');
+      secret.id = id;
+      secret.textContent = 'Reveal IBAN';
+      region.append(secret);
+      document.body.append(region);
+    }
   });
+  await page.locator('#vault-rr').click();
+  await page.locator('#vault-attr').click();
   await page.locator('#tab-batteries').click();
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
@@ -172,6 +187,7 @@ test('a report carries the clicks and page changes before it, and never the repo
   const journey = rows.filter((r) => r.kind !== 'rrweb');
   // The page it started on, the press, the page it led to: the widget's own button and Send are not the app's journey.
   expect(journey.map((r) => r.kind)).toEqual(['nav', 'click', 'nav']);
+  expect(JSON.stringify(rows)).not.toMatch(/vault-|Reveal IBAN/);
   expect(journey[0]!.payload).toEqual({ url: `${base}/`, route: '/', spa: true });
   expect(journey[1]!.payload).toMatchObject({ selector: '#tab-batteries', text: 'Batteries', route: '/' });
   // Origin and path only: the query and the fragment never ride along.
