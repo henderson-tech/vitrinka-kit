@@ -116,6 +116,29 @@ describe('the journey before a report (vt-3094)', () => {
     expect(keep('nav', { url: 'https://app.example.test/', route: '/' })).toBeNull();
   });
 
+  it('a report with a Cover sends no clicks: nothing matches a press against what was covered', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ project: 'example-platform', captureProfile: { storage: 'memory', windowSec: 120, classes: ['errors', 'interactions'] }, profile: 'balanced' }))) as unknown as typeof fetch;
+    setSystemTime(new Date(T0));
+    const engine = acquireEngine({ base: 'https://vitrinka.test', key: 'vkb_test', loadRecord: async () => fakeRecord })!;
+    try {
+      await engine.ready;
+      const route = { tabId: TAB, tabHost: 'app.example.test' };
+      pushFlightEvent('click', { selector: '#iban', text: 'CZ65 0800 0000 1920 0014 5399', route: '/billing' }, route);
+      pushFlightEvent('nav', { url: 'https://app.example.test/billing', route: '/billing', spa: true }, route);
+      const open = await engine.build(engine.freeze(), []);
+      expect(open.journey.map((j) => j.kind)).toContain('click');
+      const covered = await engine.build(engine.freeze(), [{ n: 1, shape: 'hide', rect: { x: 0, y: 0, w: 400, h: 60 }, note: '' }]);
+      expect(covered.journey.some((j) => j.kind === 'click')).toBe(false);
+      expect(JSON.stringify(covered.journey)).not.toContain('CZ65');
+      expect(covered.journey.some((j) => j.kind === 'nav')).toBe(true);
+    } finally {
+      releaseEngine(engine);
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it('a clip’s clicks and page changes become the report’s journey, oldest first', () => {
     setSystemTime(new Date(T0));
     startFlightBuffer(profile(null, { keepLane: laneKeeper(all) }));

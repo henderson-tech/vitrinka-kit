@@ -29,7 +29,7 @@ import type { eventWithTime } from '@rrweb/types';
 import { api, type ApiTarget } from '../recorder/api';
 import { installClickLane } from '../recorder/capture/click';
 import { patchConsole, unpatchConsole } from '../recorder/capture/console';
-import { installNavLane, noteNavigation, uninstallNavLane } from '../recorder/capture/nav';
+import { noteNavigation, ownNavLane, uninstallNavLane } from '../recorder/capture/nav';
 import { patchNetwork, unpatchNetwork } from '../recorder/capture/net';
 import { setCaptureSanitizer, setRedactionPolicy } from '../recorder/capture/redact';
 import { checkoutRRWeb, type RecordFn, runningRecord, startRecordWith, stopRRWeb } from '../recorder/capture/rrweb-lane';
@@ -260,10 +260,17 @@ export function laneKeeper(lanes: CaptureLanes): NonNullable<FlightProfile['keep
   };
 }
 
-/** The clicks and page changes among a clip's lane events, newest `MAX_ENTRIES`, oldest first. */
-export function journeyOf(lanes: readonly FlightLaneEvent[]): JourneyEntry[] {
+/**
+ * The clicks and page changes among a clip's lane events, newest
+ * `MAX_ENTRIES`, oldest first. `clicks: false` leaves the clicks out: a
+ * report with a Cover sends none, because a click carries its element's
+ * text and box from when it was pressed, and nothing matches that against
+ * what the reporter covered at Send — fail closed, as a hide without a
+ * mirror withholds the replay.
+ */
+export function journeyOf(lanes: readonly FlightLaneEvent[], clicks = true): JourneyEntry[] {
   return lanes
-    .filter((e): e is FlightLaneEvent & { kind: 'click' | 'nav' } => e.kind === 'click' || e.kind === 'nav')
+    .filter((e): e is FlightLaneEvent & { kind: 'click' | 'nav' } => (clicks && e.kind === 'click') || e.kind === 'nav')
     .slice(-MAX_ENTRIES)
     .map((e) => ({ kind: e.kind, ts: e.ts, payload: e.payload ?? {} }));
 }
@@ -415,11 +422,14 @@ export class CaptureEngine {
     if (lanes.replay) {
       // The journey (vt-3094): clicks and page changes, held like the console
       // and network entries. The click listener is this engine's alone; the
-      // History wrap is shared with a recorder face (nav.ts), so it comes off
-      // in stop() only while this engine still runs the capture.
+      // History wrap is shared with a recorder face (nav.ts): this engine holds
+      // the capture, so it takes the wrap over — another bundle's recorder may
+      // have left its own installed, and that one feeds a queue that is not
+      // this buffer — and it comes off in stop() only while this engine still
+      // runs the capture.
       if (typeof document !== 'undefined') this.capture.push(installClickLane({ ignore: (t) => insideHud(t) }));
-      installNavLane();
-      noteNavigation(true);
+      // The journey opens on the page it started on (the takeover notes it when it missed one).
+      if (!ownNavLane()) noteNavigation(true);
       const record = await opts.loadRecord(opts.base).catch((e: unknown) => {
         // A report without a replay is still a report: never block the card.
         console.warn('vitrinka: the page recorder did not load — reports go without a replay', e);
@@ -560,7 +570,7 @@ export class CaptureEngine {
         ms: typeof e.payload?.ms === 'number' ? e.payload.ms : 0,
         ts: e.ts,
       }));
-    return { chunks, truncated: truncated || dropped.length > 0, console: consoleEntries, network, journey: journeyOf(lanes) };
+    return { chunks, truncated: truncated || dropped.length > 0, console: consoleEntries, network, journey: journeyOf(lanes, hides.length === 0) };
   }
 
   /** A report went out: forget what it carried, in memory and in the store. */
