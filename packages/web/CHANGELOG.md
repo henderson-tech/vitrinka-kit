@@ -37,6 +37,13 @@ Upgrading:
   path segments scrubbed. A profile without `interactions` keeps neither.
 - A report that goes without a replay sends no clicks or page changes: there
   is no session for them to stand on.
+- A report with a **Cover** sends no clicks (its page changes still go): a
+  click carries its element's text from when it was pressed, and nothing
+  matches that against what the reporter covered.
+- While Report a problem runs a page's capture, what it captures goes to the
+  report's own buffer alone, even when another tab of the site is recording
+  with the pill; before, its console and network entries were written into
+  that recording.
 
 Upgrading:
 
