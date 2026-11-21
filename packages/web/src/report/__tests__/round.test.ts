@@ -6,7 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { configureRecorder } from '../../recorder/config';
-import { endRound, forgetRound, keepRound, roundFor } from '../round';
+import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../../recorder/storage';
+import { endRound, forgetRound, keepRound, ROUND_STORAGE_KEY, roundFor } from '../round';
 import { EMPTY_CAPTURE, type ReportEnvelope, ReportJob } from '../wire';
 
 const BASE = 'https://vitrinka.test';
@@ -115,6 +116,53 @@ describe('the test round a browser holds', () => {
     answer = () => json({ error: 'no round of this project carries that token' }, 404);
     expect(await endRound(TARGET)).toBe(true);
     expect(roundFor(TARGET)).toBeNull();
+  });
+
+  it('End round forgets only the round it ended: one another tab was handed meanwhile stays', async () => {
+    keepRound(TARGET, { token: 'rnd_old', reports: 3 });
+    answer = () => {
+      // While the request is in flight another tab's report rotates the round.
+      keepRound(TARGET, { token: 'rnd_new', reports: 1, rotated: true });
+      return json({ ended: true, how: 'ended' });
+    };
+    expect(await endRound(TARGET)).toBe(true);
+    expect(roundFor(TARGET)).toEqual({ token: 'rnd_new', reports: 1, openedAt: '' });
+  });
+
+  it('reads whatever the store holds without trusting it', () => {
+    const s = getRecorderStorage();
+    const scope = `${BASE}|vkb_test`;
+    // A count that is no number — even one whose conversion would throw — is no count.
+    s.set(ROUND_STORAGE_KEY, JSON.stringify({ [scope]: { token: 'rnd_a', reports: { valueOf: 1, toString: 1 }, openedAt: 7 } }));
+    expect(roundFor(TARGET)).toEqual({ token: 'rnd_a', reports: 0, openedAt: '' });
+    for (const bad of ['"rnd_a"', '[]', '{"' + scope + '": null}', '{"' + scope + '": {"token": 5}}', 'not json']) {
+      s.set(ROUND_STORAGE_KEY, bad);
+      expect(roundFor(TARGET)).toBeNull();
+    }
+    s.remove(ROUND_STORAGE_KEY);
+  });
+
+  it('a store that refuses the write never costs the report: the round is simply not kept', async () => {
+    const mem = memoryRecorderStorage();
+    let full = false;
+    __resetStorageForTests();
+    configureRecorderStorage({
+      ...mem,
+      set: (k, v) => {
+        if (full) throw new DOMException('quota exceeded', 'QuotaExceededError');
+        mem.set(k, v);
+      },
+    });
+    try {
+      full = true;
+      answer = () => json({ id: 'rep-1', custody: 'quarantined', round: { token: 'rnd_a', reports: 1 } }, 201);
+      const reply = await send();
+      expect(reply.status).toBe('quarantined');
+      expect(roundFor(TARGET)).toBeNull();
+    } finally {
+      __resetStorageForTests();
+      configureRecorderStorage(memoryRecorderStorage());
+    }
   });
 
   it('End round keeps the token when vitrinka could not be reached, so it can be pressed again', async () => {

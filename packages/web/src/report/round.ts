@@ -29,25 +29,46 @@ type Held = Record<string, HeldRound>;
 
 const scope = (t: ApiTarget): string => `${t.url}|${t.key}`;
 
-function readAll(): Held {
+/** What the store holds, entry by entry as stored: whatever another script or version wrote there, so nothing is trusted. */
+function readAll(): Record<string, unknown> {
   try {
     const v: unknown = JSON.parse(getRecorderStorage().getString(ROUND_STORAGE_KEY) ?? '{}');
-    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Held) : {};
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   } catch {
     return {};
   }
 }
 
-function writeAll(all: Held): void {
-  const s = getRecorderStorage();
-  if (Object.keys(all).length) s.set(ROUND_STORAGE_KEY, JSON.stringify(all));
-  else s.remove(ROUND_STORAGE_KEY);
+/**
+ * Storage can refuse a write long after it took the first (a full quota, a
+ * browser that withdrew it): a round then simply is not kept — the report
+ * that was just filed never fails for it, and the next one opens a new round.
+ */
+function writeAll(all: Record<string, unknown>): void {
+  try {
+    const s = getRecorderStorage();
+    if (Object.keys(all).length) s.set(ROUND_STORAGE_KEY, JSON.stringify(all));
+    else s.remove(ROUND_STORAGE_KEY);
+  } catch (e) {
+    console.warn('vitrinka: the test round could not be kept in this browser — the next report opens a new one', e);
+  }
+}
+
+/** One stored entry as a round, field by field; null for anything that is not one. */
+function heldOf(v: unknown): HeldRound | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const r = v as Record<string, unknown>;
+  if (typeof r.token !== 'string' || !r.token) return null;
+  return {
+    token: r.token,
+    reports: typeof r.reports === 'number' && Number.isFinite(r.reports) && r.reports > 0 ? Math.floor(r.reports) : 0,
+    openedAt: typeof r.openedAt === 'string' ? r.openedAt : '',
+  };
 }
 
 /** The round held for this vitrinka and key; null on a first report. */
 export function roundFor(target: ApiTarget): HeldRound | null {
-  const r = readAll()[scope(target)];
-  return r && typeof r.token === 'string' && r.token ? { token: r.token, reports: Number(r.reports) || 0, openedAt: typeof r.openedAt === 'string' ? r.openedAt : '' } : null;
+  return heldOf(readAll()[scope(target)]);
 }
 
 /** Forget the round (it ended, or vitrinka no longer knows it). */
@@ -56,6 +77,11 @@ export function forgetRound(target: ApiTarget): void {
   if (!(scope(target) in all)) return;
   delete all[scope(target)];
   writeAll(all);
+}
+
+/** Forget `token`'s round only while it is still the one held: another tab may have been handed a new one since. */
+function forgetToken(target: ApiTarget, token: string): void {
+  if (roundFor(target)?.token === token) forgetRound(target);
 }
 
 /**
@@ -70,7 +96,7 @@ export function keepRound(target: ApiTarget, reply: unknown): { round: HeldRound
   if (typeof r.token !== 'string' || !r.token) return null;
   const round: HeldRound = {
     token: r.token,
-    reports: typeof r.reports === 'number' && r.reports > 0 ? Math.floor(r.reports) : 1,
+    reports: typeof r.reports === 'number' && Number.isFinite(r.reports) && r.reports > 0 ? Math.floor(r.reports) : 1,
     openedAt: typeof r.openedAt === 'string' ? r.openedAt : '',
   };
   const all = readAll();
@@ -83,8 +109,9 @@ export function keepRound(target: ApiTarget, reply: unknown): { round: HeldRound
  * End the round this browser holds: vitrinka closes it and the next report
  * opens a new one. The token is forgotten once vitrinka ended the round or
  * no longer knows it; a failure it may recover from (offline, a 5xx) keeps
- * the token and rejects, so End can be pressed again. False when there was
- * no round to end.
+ * the token and rejects, so End can be pressed again. Only the round the
+ * request named is forgotten: a new one another tab was handed meanwhile
+ * stays. False when there was no round to end.
  */
 export async function endRound(target: ApiTarget, signal?: AbortSignal): Promise<boolean> {
   const held = roundFor(target);
@@ -95,6 +122,6 @@ export async function endRound(target: ApiTarget, signal?: AbortSignal): Promise
     // 404: vitrinka knows no such round (or predates rounds) — nothing left to end.
     if (!(e instanceof VitrinkaApiError) || e.status !== 404) throw e;
   }
-  forgetRound(target);
+  forgetToken(target, held.token);
   return true;
 }
