@@ -38,6 +38,7 @@ import { type BuiltCapture, type ConsoleEntry, EVENTS_PER_POST, type NetEntry } 
 import type { Locale, ReportKind } from './i18n';
 import type { ReportContext } from './context';
 import type { Identity } from './identity';
+import { keepRound } from './round';
 import type { WireMarker } from './markers';
 
 export interface ReportEnv {
@@ -67,6 +68,8 @@ export interface ReportEnvelope {
   memberToken?: string;
   /** The host's claimed context (context.ts, vt-9515), already validated; absent when the map is empty. */
   context?: ReportContext;
+  /** The test round this browser holds (round.ts, vt-3094), absent on its first report: the report joins it while it stands. */
+  round?: string;
 }
 
 export interface SubmitReply {
@@ -199,6 +202,8 @@ export class ReportJob {
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
       this.sent = editsKey;
+      // The round the report was filed into: its token rides the next report.
+      keepRound(this.target, res.round);
       if (typeof res.memberError === 'string' && res.memberError) onMemberRefusal?.(res.memberError, memberSent);
     } else if (this.sent !== editsKey) {
       await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
@@ -225,14 +230,16 @@ export class ReportJob {
    * The create leg, answering with the member link the accepted body carried
    * ('' none). A vitrinka older than an optional field refuses it by name;
    * the reporter's word (`type`), the member link (`memberToken`) and the host's context (`context`) are
-   * optional, the report is not, so it goes again without each field named,
+   * optional, and so is the test round (`round`); the report is not, so it goes again without each field named,
    * once. A refusal naming nothing still in the body fails the leg.
    */
-  private async create(env: ReportEnvelope): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown }; memberSent: string }> {
+  private async create(
+    env: ReportEnvelope,
+  ): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }; memberSent: string }> {
     let body = env;
     for (;;) {
       try {
-        const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown }>('POST', '/api/v1/reports', body);
+        const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }>('POST', '/api/v1/reports', body);
         return { res, memberSent: body.memberToken ?? '' };
       } catch (e) {
         const field = refusedField(e);
@@ -243,6 +250,11 @@ export class ReportJob {
         } else if (field === 'memberToken' && body.memberToken !== undefined) {
           console.warn('vitrinka: this server takes no member link yet — sending the report without it');
           const { memberToken: _dropped, ...rest } = body;
+          body = rest;
+        } else if (field === 'round' && body.round !== undefined) {
+          // A vitrinka before test rounds (vt-3094): the report files on its own.
+          console.warn('vitrinka: this server keeps no test rounds yet — sending the report without one');
+          const { round: _dropped, ...rest } = body;
           body = rest;
         } else if (field === 'context' && body.context !== undefined) {
           // The host's claimed context is optional like the rest (vt-9515); a signed `ctx` claim rides the token and is not dropped.
