@@ -2,27 +2,6 @@
 
 ## 0.11.0
 
-- **Reports from one sitting stay together: test rounds.** The first report
-  a browser sends opens a test round in vitrinka, which hands back the
-  round's token; Report a problem keeps it for the site (every tab, across
-  reloads) and sends it as `round` with each later report, so the team sees
-  which reports came from one person's one sitting. vitrinka decides when a
-  round is over (two quiet hours, or the reporter ending it) and opens a new
-  one for the next report. Nothing to configure: no option, no attribute.
-- The token is kept in `vitrinka.recorder.report.round` (localStorage), per
-  vitrinka and report key, so two projects' widgets on one site never share
-  a round. It names no person and reads nothing.
-
-Upgrading:
-
-- **The server side ships in vitrinka first.** An older vitrinka refuses the
-  unknown `round` by name; the widget then sends the report again without
-  it, once, as it does for `type`, and every report files on its own.
-- Ending a round from the widget has no control yet: it arrives with the
-  pill. Until then a round ends after two quiet hours.
-
-## 0.10.2
-
 - **A report shows how the reporter got there.** Report a problem sent a
   replay and one marked frame: the report's timeline in vitrinka held a
   single step, with no page, click, console line or request before it. The
@@ -44,6 +23,16 @@ Upgrading:
   report's own buffer alone, even when another tab of the site is recording
   with the pill; before, its console and network entries were written into
   that recording.
+- **Reports from one sitting stay together: test rounds.** The first report
+  a browser sends opens a test round in vitrinka, which hands back the
+  round's token; Report a problem keeps it for the site (every tab, across
+  reloads) and sends it as `round` with each later report, so the team sees
+  which reports came from one person's one sitting. vitrinka decides when a
+  round is over (two quiet hours, or the reporter ending it) and opens a new
+  one for the next report. Nothing to configure: no option, no attribute.
+- The token is kept in `vitrinka.recorder.report.round` (localStorage), per
+  vitrinka and report key, so two projects' widgets on one site never share
+  a round. It names no person and reads nothing.
 
 Upgrading:
 
@@ -54,6 +43,10 @@ Upgrading:
 - **The report face now wraps `history.pushState` and `replaceState`** while
   it captures (as the recorder pill always has), and restores them when it
   unmounts.
+- An older vitrinka also refuses the unknown `round` by name; the widget then sends the report again without
+  it, once, as it does for `type`, and every report files on its own.
+- Ending a round from the widget has no control yet: it arrives with the
+  pill. Until then a round ends after two quiet hours.
 
 ## 0.10.1
 
