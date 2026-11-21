@@ -53,6 +53,26 @@ describe('net lane', () => {
   });
 });
 
+describe('net lane under a report face', () => {
+  it('captures into the report’s buffer whatever recording another tab holds, paused included', async () => {
+    const { claimCapture, releaseCapture } = await import('../state');
+    const { startFlightBuffer, stopFlightBuffer, takeFlightClip } = await import('../flight');
+    // Another tab paused its recording: without the claim this page's requests would go nowhere.
+    setState(liveSession(true));
+    const claim = claimCapture('report');
+    try {
+      startFlightBuffer();
+      await fetch('https://api.example.test/sites/7');
+      await capturesSettled();
+      expect(recorded()).toHaveLength(0);
+      expect(takeFlightClip()!.lanes.filter((e) => e.kind === 'net').map((e) => e.payload?.url)).toEqual(['https://api.example.test/sites/7']);
+    } finally {
+      stopFlightBuffer();
+      releaseCapture(claim);
+    }
+  });
+});
+
 describe('net lane detail', () => {
   it('a lane the report face released captures full detail for the recorder that patches it next', async () => {
     const net = await import('../capture/net');
