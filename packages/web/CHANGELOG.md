@@ -16,6 +16,8 @@
   path segments scrubbed. A profile without `interactions` keeps neither.
 - A report that goes without a replay sends no clicks or page changes: there
   is no session for them to stand on.
+- A press at or under a region the replay blocks (`.rr-block`, the
+  recorder's own `data-vitrinka-recorder`) is not sent at all.
 - A report with a **Cover** sends no clicks (its page changes still go): a
   click carries its element's text from when it was pressed, and nothing
   matches that against what the reporter covered.
@@ -30,9 +32,10 @@
   which reports came from one person's one sitting. vitrinka decides when a
   round is over (two quiet hours, or the reporter ending it) and opens a new
   one for the next report. Nothing to configure: no option, no attribute.
-- The token is kept in `vitrinka.recorder.report.round` (localStorage), per
-  vitrinka and report key, so two projects' widgets on one site never share
-  a round. It names no person and reads nothing.
+- The token is kept in localStorage under its own key per vitrinka and
+  report key (`vitrinka.recorder.report.round:<vitrinka>|<key>`), so two
+  projects' widgets on one site never share a round. It names no person and
+  reads nothing.
 
 Upgrading:
 

@@ -197,13 +197,13 @@ export class ReportJob {
     const edits = { title: env.title, description: env.description, markers: env.markers, notify: env.notify ?? false };
     const editsKey = JSON.stringify(edits);
     if (!this.id) {
-      const { res, memberSent } = await this.create(env);
+      const { res, memberSent, roundSent } = await this.create(env);
       if (typeof res.id !== 'string' || !res.id) throw new Error('vitrinka: the server filed the report without an id');
       this.id = res.id;
       this.custody = res.custody === 'direct' ? 'direct' : 'quarantined';
       this.sent = editsKey;
       // The round the report was filed into: its token rides the next report.
-      keepRound(this.target, res.round);
+      keepRound(this.target, res.round, roundSent);
       if (typeof res.memberError === 'string' && res.memberError) onMemberRefusal?.(res.memberError, memberSent);
     } else if (this.sent !== editsKey) {
       await this.call('PATCH', `/api/v1/reports/${encodeURIComponent(this.id)}`, edits);
@@ -235,12 +235,12 @@ export class ReportJob {
    */
   private async create(
     env: ReportEnvelope,
-  ): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }; memberSent: string }> {
+  ): Promise<{ res: { id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }; memberSent: string; roundSent: string }> {
     let body = env;
     for (;;) {
       try {
         const res = await this.call<{ id?: unknown; custody?: unknown; memberError?: unknown; round?: unknown }>('POST', '/api/v1/reports', body);
-        return { res, memberSent: body.memberToken ?? '' };
+        return { res, memberSent: body.memberToken ?? '', roundSent: body.round ?? '' };
       } catch (e) {
         const field = refusedField(e);
         if (field === 'type' && body.type !== undefined) {

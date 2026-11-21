@@ -8,13 +8,21 @@
  * only keeps the token.
  *
  * Kept in the recorder storage (localStorage: every tab of the site shares
- * it, a reload keeps it) under ONE key, per vitrinka and report key, so two
- * widgets for two projects on a page never share a round.
+ * it, a reload keeps it), one key per vitrinka and report key: two widgets
+ * for two projects never share a round, and never rewrite each other's (a
+ * shared map would be read and written whole by tabs that do not exclude
+ * one another).
  */
 import { api, type ApiTarget, VitrinkaApiError } from '../recorder/api';
 import { getRecorderStorage } from '../recorder/storage';
 
+/** The keys' prefix; `roundStorageKey` names a target's own. */
 export const ROUND_STORAGE_KEY = 'report.round';
+
+/** The storage key of the round held for this vitrinka and report key. */
+export function roundStorageKey(target: ApiTarget): string {
+  return `${ROUND_STORAGE_KEY}:${target.url}|${target.key}`;
+}
 
 /** A round as this browser knows it. */
 export interface HeldRound {
@@ -25,17 +33,12 @@ export interface HeldRound {
   openedAt: string;
 }
 
-type Held = Record<string, HeldRound>;
-
-const scope = (t: ApiTarget): string => `${t.url}|${t.key}`;
-
-/** What the store holds, entry by entry as stored: whatever another script or version wrote there, so nothing is trusted. */
-function readAll(): Record<string, unknown> {
+/** What the store holds for a target, as stored: whatever another script or version wrote there, so nothing is trusted. */
+function read(target: ApiTarget): unknown {
   try {
-    const v: unknown = JSON.parse(getRecorderStorage().getString(ROUND_STORAGE_KEY) ?? '{}');
-    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+    return JSON.parse(getRecorderStorage().getString(roundStorageKey(target)) ?? 'null');
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -44,11 +47,11 @@ function readAll(): Record<string, unknown> {
  * browser that withdrew it): a round then simply is not kept — the report
  * that was just filed never fails for it, and the next one opens a new round.
  */
-function writeAll(all: Record<string, unknown>): void {
+function write(target: ApiTarget, round: HeldRound | null): void {
   try {
     const s = getRecorderStorage();
-    if (Object.keys(all).length) s.set(ROUND_STORAGE_KEY, JSON.stringify(all));
-    else s.remove(ROUND_STORAGE_KEY);
+    if (round) s.set(roundStorageKey(target), JSON.stringify(round));
+    else s.remove(roundStorageKey(target));
   } catch (e) {
     console.warn('vitrinka: the test round could not be kept in this browser — the next report opens a new one', e);
   }
@@ -68,15 +71,12 @@ function heldOf(v: unknown): HeldRound | null {
 
 /** The round held for this vitrinka and key; null on a first report. */
 export function roundFor(target: ApiTarget): HeldRound | null {
-  return heldOf(readAll()[scope(target)]);
+  return heldOf(read(target));
 }
 
 /** Forget the round (it ended, or vitrinka no longer knows it). */
 export function forgetRound(target: ApiTarget): void {
-  const all = readAll();
-  if (!(scope(target) in all)) return;
-  delete all[scope(target)];
-  writeAll(all);
+  if (read(target) !== null) write(target, null);
 }
 
 /** Forget `token`'s round only while it is still the one held: another tab may have been handed a new one since. */
@@ -86,11 +86,16 @@ function forgetToken(target: ApiTarget, token: string): void {
 
 /**
  * Keep what a create answered as `round` ({token, reports?, openedAt?,
- * rotated?}); anything else leaves the held round as it is. Returns the
- * round now held and whether vitrinka opened a new one in place of the
- * token sent.
+ * rotated?}); anything else leaves the held round as it is. `sent` is the
+ * token that create carried ('' on a first report): the reply is kept only
+ * while the browser still holds what the request started from. Another tab
+ * may have been answered meanwhile — then its round stands and this late
+ * reply is dropped, never restoring a token the browser moved on from. A
+ * reply for the round still held keeps the higher count of the two. Returns
+ * the round now held and whether vitrinka opened a new one in place of the
+ * token sent; null when nothing was kept.
  */
-export function keepRound(target: ApiTarget, reply: unknown): { round: HeldRound; rotated: boolean } | null {
+export function keepRound(target: ApiTarget, reply: unknown, sent = ''): { round: HeldRound; rotated: boolean } | null {
   if (typeof reply !== 'object' || reply === null) return null;
   const r = reply as Record<string, unknown>;
   if (typeof r.token !== 'string' || !r.token) return null;
@@ -99,9 +104,13 @@ export function keepRound(target: ApiTarget, reply: unknown): { round: HeldRound
     reports: typeof r.reports === 'number' && Number.isFinite(r.reports) && r.reports > 0 ? Math.floor(r.reports) : 1,
     openedAt: typeof r.openedAt === 'string' ? r.openedAt : '',
   };
-  const all = readAll();
-  all[scope(target)] = round;
-  writeAll(all);
+  const held = roundFor(target);
+  if ((held?.token ?? '') !== sent) {
+    // The browser moved on while this request was in flight. Its own round's reply still counts.
+    if (held?.token !== round.token) return null;
+  }
+  if (held?.token === round.token) round.reports = Math.max(round.reports, held.reports);
+  write(target, round);
   return { round, rotated: r.rotated === true };
 }
 

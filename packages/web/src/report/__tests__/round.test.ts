@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { configureRecorder } from '../../recorder/config';
 import { __resetStorageForTests, configureRecorderStorage, getRecorderStorage, memoryRecorderStorage } from '../../recorder/storage';
-import { endRound, forgetRound, keepRound, ROUND_STORAGE_KEY, roundFor } from '../round';
+import { endRound, forgetRound, keepRound, roundFor, roundStorageKey } from '../round';
 import { EMPTY_CAPTURE, type ReportEnvelope, ReportJob } from '../wire';
 
 const BASE = 'https://vitrinka.test';
@@ -79,7 +79,7 @@ describe('the test round a browser holds', () => {
     answer = () => json({ id: 'rep-5', custody: 'quarantined', round: { token: 'rnd_new', reports: 1, rotated: true } }, 201);
     await send('rnd_old');
     expect(roundFor(TARGET)).toEqual({ token: 'rnd_new', reports: 1, openedAt: '' });
-    expect(keepRound(TARGET, { token: 'rnd_newer', rotated: true })).toEqual({ round: { token: 'rnd_newer', reports: 1, openedAt: '' }, rotated: true });
+    expect(keepRound(TARGET, { token: 'rnd_newer', rotated: true }, 'rnd_new')).toEqual({ round: { token: 'rnd_newer', reports: 1, openedAt: '' }, rotated: true });
   });
 
   it('a reply without a round leaves the held one alone', async () => {
@@ -122,7 +122,7 @@ describe('the test round a browser holds', () => {
     keepRound(TARGET, { token: 'rnd_old', reports: 3 });
     answer = () => {
       // While the request is in flight another tab's report rotates the round.
-      keepRound(TARGET, { token: 'rnd_new', reports: 1, rotated: true });
+      keepRound(TARGET, { token: 'rnd_new', reports: 1, rotated: true }, 'rnd_old');
       return json({ ended: true, how: 'ended' });
     };
     expect(await endRound(TARGET)).toBe(true);
@@ -131,15 +131,51 @@ describe('the test round a browser holds', () => {
 
   it('reads whatever the store holds without trusting it', () => {
     const s = getRecorderStorage();
-    const scope = `${BASE}|vkb_test`;
+    const key = roundStorageKey(TARGET);
     // A count that is no number — even one whose conversion would throw — is no count.
-    s.set(ROUND_STORAGE_KEY, JSON.stringify({ [scope]: { token: 'rnd_a', reports: { valueOf: 1, toString: 1 }, openedAt: 7 } }));
+    s.set(key, JSON.stringify({ token: 'rnd_a', reports: { valueOf: 1, toString: 1 }, openedAt: 7 }));
     expect(roundFor(TARGET)).toEqual({ token: 'rnd_a', reports: 0, openedAt: '' });
-    for (const bad of ['"rnd_a"', '[]', '{"' + scope + '": null}', '{"' + scope + '": {"token": 5}}', 'not json']) {
-      s.set(ROUND_STORAGE_KEY, bad);
+    for (const bad of ['"rnd_a"', '[]', 'null', '{"token": 5}', 'not json']) {
+      s.set(key, bad);
       expect(roundFor(TARGET)).toBeNull();
     }
-    s.remove(ROUND_STORAGE_KEY);
+    s.remove(key);
+  });
+
+  it('a create’s late reply never restores a round the browser moved on from', async () => {
+    keepRound(TARGET, { token: 'rnd_old', reports: 2 });
+    answer = () => {
+      // While this tab's report (sent with rnd_old) is in flight, another tab's report rotates the round…
+      keepRound(TARGET, { token: 'rnd_new', reports: 1, rotated: true }, 'rnd_old');
+      // …and this one's reply, for the old round, arrives after.
+      return json({ id: 'rep-7', custody: 'quarantined', round: { token: 'rnd_old', reports: 3 } }, 201);
+    };
+    await send('rnd_old');
+    expect(roundFor(TARGET)).toEqual({ token: 'rnd_new', reports: 1, openedAt: '' });
+    // A first report whose reply lands after another tab's first report keeps that tab's round too.
+    forgetRound(TARGET);
+    answer = () => {
+      keepRound(TARGET, { token: 'rnd_first', reports: 1 });
+      return json({ id: 'rep-8', custody: 'quarantined', round: { token: 'rnd_second', reports: 1 } }, 201);
+    };
+    await send();
+    expect(roundFor(TARGET)!.token).toBe('rnd_first');
+  });
+
+  it('two replies for the round still held keep the higher count, whichever lands last', () => {
+    keepRound(TARGET, { token: 'rnd_a', reports: 1 });
+    keepRound(TARGET, { token: 'rnd_a', reports: 3 }, 'rnd_a');
+    keepRound(TARGET, { token: 'rnd_a', reports: 2 }, 'rnd_a');
+    expect(roundFor(TARGET)!.reports).toBe(3);
+  });
+
+  it('two projects on one site keep separate keys: neither rewrites the other’s round', () => {
+    keepRound(TARGET, { token: 'rnd_a', reports: 1 });
+    keepRound(OTHER, { token: 'rnd_b', reports: 4 });
+    expect(roundStorageKey(TARGET)).not.toBe(roundStorageKey(OTHER));
+    forgetRound(TARGET);
+    expect(roundFor(TARGET)).toBeNull();
+    expect(roundFor(OTHER)).toEqual({ token: 'rnd_b', reports: 4, openedAt: '' });
   });
 
   it('a store that refuses the write never costs the report: the round is simply not kept', async () => {
