@@ -20,6 +20,7 @@ import { defineReportElement as define, type Faces, mountReport as mount, type R
 export type { CaptureClass, CaptureNarrowing, CaptureProfile, CaptureStorage } from './profile';
 export type { ReportContext, ReportContextInput, ReportContextValue } from './context';
 export type { Locale } from './i18n';
+export type { EdgeInsets, Launcher } from './edge';
 export type { IdentifyInput, Identity } from './identity';
 export type { Marker, MarkerShape, WireMarker } from './markers';
 export type { ReportEnvelope, SubmitReply } from './wire';

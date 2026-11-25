@@ -15,8 +15,8 @@ screenshots), **clicks** (selector, text, rect), **navigation**, **network**
 the last minute as a bug report ([Report a bug](#report-a-bug)).
 
 The same engine has a second face for the people who use your app:
-**[Report a problem](#report-a-problem-vitrinkawebreport)** — a large
-button and one card: "What went wrong?", optional marks drawn on the page,
+**[Report a problem](#report-a-problem-vitrinkawebreport)** — a drop
+resting on the screen's edge and one card: "What went wrong?", optional marks drawn on the page,
 files, and the last minutes attached under your project's capture profile.
 No React needed; it also ships as one file vitrinka serves.
 
@@ -295,8 +295,8 @@ offered only during one.
 
 ## Report a problem (`@vitrinka/web/report`)
 
-The report face of the same engine, for the people using your app: a large
-**Report a problem** / **Nahlásit problém** button and ONE card. Its header
+The report face of the same engine, for the people using your app: a quiet
+drop on the right edge of the screen and ONE card. Its header
 says who is reporting (the account chip) and holds the ⋯ menu; its body
 takes the reporter's word for it — **Bug · Suggestion · Question · Other**,
 optional, sent as `type`, a hint for your team's triage — and **What went
@@ -306,6 +306,20 @@ drafting through sending, an error and the thanks, so Send is always in
 view. The minutes before are attached under your project's **capture
 profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
 § Report a problem). You need the project's report key (`vkb_…`).
+
+**The drop.** The launcher is a small ink drop resting on the right edge, a
+little below the middle — the edge is the flat surface it sits on, with a
+meniscus where they meet. Hovered or focused it grows its name (**Report a
+problem** / **Nahlásit problém** / **Nahlásiť problém**) and swells; click,
+hold and move it to slide it up or down the edge (Alt+↑/↓ from the
+keyboard) — it stretches while it moves, settles when let go and is
+remembered per site (`vitrinka.report.edge`). It never moves on its own,
+and under reduced motion it neither swells, stretches nor wobbles. It keeps
+clear of your top bar and bottom bars (`edgeInsets`, default 80 px top and
+136 px bottom), and the card opens beside it, centred on it; on a phone the
+card takes the width. Theme it with `--vr-drop-fill` and `--vr-drop-ink` on
+the HUD host. `launcher: 'corner'` (attribute `launcher="corner"`) keeps the
+large button in a corner instead.
 
 **Marking.** **Show us where** puts a glass bar at the top of the page —
 "Mark where the problem is", a segmented **Box · Circle · Arrow · Cover**
@@ -371,8 +385,10 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 |---|---|
 | `key` | the project's `vkb_` report key (required) |
 | `base` | vitrinka's origin (the script tag defaults to where it was served from) |
-| `locale` | `cs` · `en`; live as an attribute, and through `setLocale()` |
-| `button` | `false` hides the floating button: open the card from your own control |
+| `locale` | `cs` · `en` · `sk`; live as an attribute, and through `setLocale()` |
+| `button` | `false` hides the launcher: open the card from your own control; live as an attribute, and through `setButton()` |
+| `launcher` | `edge` (default) — the drop on the right edge — or `corner`, the large button in a corner; live as an attribute |
+| `edgeInsets` | `{top, bottom}` in px the drop keeps clear of (your top bar, bottom bars); default `{top: 80, bottom: 136}` (npm only) |
 | `open-selector` / `openSelector` | a CSS selector of your control(s) that open the card |
 | `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link). A linked member also switches in place: **The face switch** below |
 | `capture` | narrow the capture profile: `{storage: 'memory', windowSec, maxBytes, classes}` |
@@ -382,7 +398,8 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 
 The handle (and the element) has `open()`, `close()`, `identify()`,
 `setContext()`, `setLocale()` and `face`, the face on screen (`recorder` while a member has
-switched to the pill); the handle also `unmount()`s. For the tag from npm, call
+switched to the pill); the handle also has `setButton()` (hide the launcher
+while your own modal is up) and `unmount()`s. For the tag from npm, call
 `defineReportElement()` once. Closing the card hands focus back to whatever
 had it when the card opened (your control, the field the shortcut fired in),
 else to the button: call `open()` once your control holds focus again — after
