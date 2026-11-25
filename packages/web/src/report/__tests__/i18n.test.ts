@@ -35,3 +35,13 @@ describe('locales', () => {
     expect(sk.discardMarks(2)).toBe('Zahodiť 2 značky?');
   });
 });
+
+describe('the sent card', () => {
+  it('says thank you and nothing about what the team does next (vt-3811)', () => {
+    expect([strings('cs').sentTitle, strings('sk').sentTitle, strings('en').sentTitle]).toEqual(['Děkujeme', 'Ďakujeme', 'Thank you']);
+    for (const l of ['cs', 'en', 'sk'] as const) {
+      const keys = Object.keys(strings(l));
+      for (const gone of ['sentBody', 'sentNotify', 'sentQueued']) expect(keys, `${l}.${gone}`).not.toContain(gone);
+    }
+  });
+});

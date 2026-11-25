@@ -123,7 +123,7 @@ test('describe and send without marking', async ({ page }) => {
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Total shows NaN after the coupon');
   await send.click();
 
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   await expect(card.getByRole('link', { name: 'See your report' })).toHaveAttribute('href', REPORT_URL);
 
   const body = created();
@@ -176,7 +176,7 @@ test('a report carries the clicks and page changes before it, and never the repo
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The service field resets on Batteries');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
 
   const rows = (
     JSON.parse(seen.find((s) => s.path.endsWith('/events'))!.body) as {
@@ -267,7 +267,7 @@ test('markers 1..n with notes; the coach rides on the card, follows the picked s
   await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(4);
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('August is listed twice');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
 
   const body = created();
   const markers = body.markers as { n: number; shape: string; rect: { x: number; y: number; w: number; h: number }; note?: string; head?: string }[];
@@ -375,7 +375,7 @@ test('a hide blanks what was under it when it was drawn, even when the page chan
     p.replaceChildren(document.createTextNode('IBAN CZ65 0800 0000 1920 0014 5399'));
   });
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
   expect(chunks).toContain('Settlement'); // balanced: page text is kept…
   expect(chunks).not.toContain('1920 0014 5399'); // …except under the hide
@@ -397,7 +397,7 @@ test('a hide added after a failed send is blanked in the retried capture', async
   await draw(page, [iban.x - 6, iban.y - 6], [iban.x + iban.width + 6, iban.y + iban.height + 6]);
   await page.keyboard.press('Escape');
   await card.getByRole('button', { name: 'Try again' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const creates = seen.filter((s) => s.method === 'POST' && s.path === '/api/v1/reports');
   expect(JSON.parse(creates.at(-1)!.body).markers).toMatchObject([{ n: 1, shape: 'hide' }]);
   const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
@@ -428,7 +428,7 @@ test('a card opened before the recorder started still sends the page as it is at
   release();
   await page.waitForFunction(() => ((globalThis as { __rrwebStarted?: number }).__rrwebStarted ?? 0) > 0);
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const chunks = seen.filter((s) => s.path.includes('/chunk?seq=')).map((s) => s.body).join('');
   // A full snapshot of the page (its text masked under the strict profile), not an empty replay.
   expect(chunks).toContain('"tagName":"table"');
@@ -446,7 +446,7 @@ test('a widget told identify(null) reports anonymously, whatever the page-wide i
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Anonymous, please');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   expect(created()).not.toHaveProperty('identity');
 });
 
@@ -464,7 +464,7 @@ test('mountReport({identity: null}) reports anonymously under a page-wide identi
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Anonymous from the options');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   expect(created()).not.toHaveProperty('identity');
 });
 
@@ -483,7 +483,7 @@ test('the standalone widget yields to a host recorder from another bundle', asyn
   await expect(card.getByText('The last 5 minutes are attached')).toBeHidden();
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('Sent beside the recorder');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   expect(seen.some((s) => s.path.includes('/chunk?seq='))).toBe(false);
 });
 
@@ -499,7 +499,7 @@ test('under an open modal dialog the report stays reachable, and keeps its draft
   await page.evaluate(() => (document.getElementById('modal') as HTMLDialogElement).close());
   await expect(draft).toHaveValue('The modal saves the wrong month');
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
 });
 
 for (const modal of ['dialog', 'aria-dialog']) {
@@ -535,7 +535,7 @@ for (const modal of ['dialog', 'aria-dialog']) {
     await fab.click();
     await expect(draft).toHaveValue('The editor shows the wrong month');
     await card.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
     expect(created()).toMatchObject({ description: 'The editor shows the wrong month' });
     await page.keyboard.press('Escape');
     await editor.getByRole('button', { name: 'Close editor', exact: true }).click();
@@ -623,7 +623,7 @@ test('marks can be made from the keyboard alone', async ({ page }) => {
 
   await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(2);
   await card.getByRole('button', { name: 'Send' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const markers = created().markers as { n: number; shape: string; note?: string }[];
   expect(markers.map((m) => [m.n, m.shape, m.note])).toEqual([
     [1, 'box', 'the total'],
@@ -656,7 +656,7 @@ for (const viewport of [{ width: 1440, height: 810 }, { width: 390, height: 844 
     await expect(card.getByRole('button', { name: 'Sending…' })).toBeDisabled();
     const sending = await card.boundingBox();
     release();
-    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
     const thanks = await card.boundingBox();
     expect(created().description).toBe('The card stays put');
     expect(drafting).not.toBeNull();
@@ -751,7 +751,7 @@ for (const shortcut of ['Meta+z', 'Control+z']) {
     await expect(card.getByRole('textbox', { name: /^Mark \d+ —/ })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Mark 2', exact: true })).toHaveCount(0);
     await card.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
     expect(created().markers).toMatchObject([{ n: 1, rect: { x: 80, y: 120, w: 120, h: 40 } }]);
     expect(created().markers).toHaveLength(1);
   });
@@ -768,7 +768,7 @@ for (const [label, type] of [['Bug', 'bug'], ['Suggestion', 'suggestion'], ['Que
     await expect(chip).toHaveAttribute('aria-checked', 'true');
     await card.getByRole('textbox', { name: 'What went wrong?' }).fill('About this page');
     await card.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+    await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
     expect(created().type).toBe(type);
   });
 }
@@ -789,7 +789,7 @@ test('a mark note alone enables Send and reaches the report with an empty descri
   await expect(card.getByRole('textbox', { name: 'What went wrong?' })).toHaveValue('');
   await expect(send).toBeEnabled();
   await send.click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   expect(created()).toMatchObject({ description: 'This total is wrong', markers: [{ n: 1, note: 'This total is wrong' }] });
 });
 

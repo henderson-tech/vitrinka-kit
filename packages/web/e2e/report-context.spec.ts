@@ -26,7 +26,7 @@ async function report(page: Page, words: string): Promise<void> {
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill(words);
   await card.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   await page.evaluate(() => document.querySelector('vitrinka-report')!.close());
 }
 

@@ -86,13 +86,18 @@ kbd {
 .vr[data-dock="tr"] .fab, .vr[data-dock="tr"] .card { transform-origin: 100% 0; }
 .vr[data-dock="tl"] .fab, .vr[data-dock="tl"] .card { transform-origin: 0 0; }
 /* -- the edge drop (vt-3811, the default launcher; edge.ts) ---------------------
-   A half-bead resting on the right edge, with two meniscus feet where it meets it: the edge is the flat
-   surface the liquid sits on. It grows its name on hover or focus, swells with a soft spring, stretches
-   while it is moved along the edge and settles with one damped wobble. It never moves at rest. Ink in
-   both colour schemes; a hairline light rim keeps it visible on a dark page. A host themes it with
-   --vr-drop-fill and --vr-drop-ink on the HUD host. The card opens beside it, centred on it. */
+   A half-bead resting on a side edge, with two concave meniscus feet where it meets it: the edge is the
+   flat surface the liquid sits on. Body and feet are ONE path (.fab-shape, edge.ts dropPath, redrawn as
+   the drop's width changes), so no seam or outline shows where they meet each other or the wall. It grows
+   its name toward the page on hover or focus and swells with a soft spring; pressed and moved it comes off
+   the wall as a free, rounded pill that follows the pointer and stretches the way it moves, then lands on
+   the nearer side edge, regrows its feet there and settles with one damped wobble. It never moves at rest.
+   Opened, it becomes the card (widget.ts morphCard). Ink in both colour schemes: a soft shadow toward the
+   page, and a faint diffuse glow that follows the curved outline (no line, nothing to read as a border; off
+   screen beyond the wall) keeps it findable on a dark page — white on a light page, it shows nothing. A host themes it with --vr-drop-fill and --vr-drop-ink on the HUD host. */
 .fab-glyph { display: none; }
 .fab-glyph svg { display: block; width: 18px; height: 18px; }
+.fab-shape { display: none; }
 .vr[data-launcher="edge"] {
   --drop-fill: var(--vr-drop-fill, #131216);
   --drop-ink: var(--vr-drop-ink, #fff);
@@ -102,40 +107,46 @@ kbd {
   right: 0; bottom: auto; top: var(--vr-drop-top, 62vh);
   transform-origin: 100% 50%;
   height: 48px; gap: 0; padding: 0 11px 0 13px;
+  /* The painted shape is the path; this radius only shapes the focus ring and the hit area. */
   border-radius: 24px 0 0 24px;
-  background: radial-gradient(7px 3.5px at 15px 10px, rgba(255, 255, 255, .24), transparent) no-repeat, var(--drop-fill);
-  color: var(--drop-ink);
+  background: transparent; color: var(--drop-ink);
   font-size: 14px; font-weight: 500; letter-spacing: normal;
   box-shadow: none;
-  filter: drop-shadow(0 0 .6px rgba(255, 255, 255, .55)) drop-shadow(-3px 5px 9px rgba(0, 0, 0, .22));
   transition: top var(--dur-slow) var(--ease-smooth-out), transform 420ms var(--spring);
 }
-.vr[data-launcher="edge"] .fab::before, .vr[data-launcher="edge"] .fab::after {
-  content: ""; position: absolute; right: 0; width: 11px; height: 11px; pointer-events: none;
-  transition: transform 420ms var(--spring);
+.vr[data-launcher="edge"][data-side="left"] .fab {
+  right: auto; left: 0; transform-origin: 0 50%;
+  padding: 0 13px 0 11px; border-radius: 0 24px 24px 0;
 }
-.vr[data-launcher="edge"] .fab::before {
-  bottom: 100%; transform-origin: 100% 100%;
-  background: radial-gradient(circle at 0 0, transparent 10.5px, var(--drop-fill) 11px);
+.vr[data-launcher="edge"] .fab-shape {
+  display: block; position: absolute; left: 0; top: -11px; width: 100%; height: calc(100% + 22px);
+  overflow: visible; pointer-events: none;
+  filter: drop-shadow(0 0 5px rgba(255, 255, 255, .13)) drop-shadow(-2px 4px 7px rgba(0, 0, 0, .2));
 }
-.vr[data-launcher="edge"] .fab::after {
-  top: 100%; transform-origin: 100% 0;
-  background: radial-gradient(circle at 0 100%, transparent 10.5px, var(--drop-fill) 11px);
-}
+.vr[data-launcher="edge"][data-side="left"] .fab-shape { filter: drop-shadow(0 0 5px rgba(255, 255, 255, .13)) drop-shadow(2px 4px 7px rgba(0, 0, 0, .2)); }
+.fab-shape .fill { fill: var(--drop-fill); }
+.vr[data-launcher="edge"] .fab-glyph, .vr[data-launcher="edge"] .fab-label { position: relative; }
 .vr[data-launcher="edge"] .fab-glyph { display: block; flex: none; }
 .vr[data-launcher="edge"] .fab-label {
   max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0;
   transition: max-width 460ms cubic-bezier(.34, 1.4, .64, 1), opacity .2s ease .06s, padding .3s ease;
 }
 .vr[data-launcher="edge"] .fab:hover, .vr[data-launcher="edge"] .fab:focus-visible { transform: scale(1.07); box-shadow: none; }
-.vr[data-launcher="edge"] .fab:hover::before, .vr[data-launcher="edge"] .fab:hover::after,
-.vr[data-launcher="edge"] .fab:focus-visible::before, .vr[data-launcher="edge"] .fab:focus-visible::after { transform: scaleY(1.45); }
-/* Never while the card is open: the name would grow under the card beside it. */
-.vr[data-launcher="edge"] .fab[aria-expanded="false"]:hover .fab-label,
-.vr[data-launcher="edge"] .fab[aria-expanded="false"]:focus-visible .fab-label { max-width: 240px; opacity: 1; padding: 0 7px 0 9px; }
+/* Never while the card is open (the drop became the card) or while it is carried. */
+.vr[data-launcher="edge"] .fab[aria-expanded="false"]:not(.dragging):hover .fab-label,
+.vr[data-launcher="edge"] .fab[aria-expanded="false"]:not(.dragging):focus-visible .fab-label { max-width: 240px; opacity: 1; padding: 0 7px 0 9px; }
 .vr[data-launcher="edge"] .fab:focus-visible { outline-offset: -4px; }
-/* Moved along the edge it follows the pointer and stretches; released, it settles. */
-.vr[data-launcher="edge"] .fab.dragging { transform: scale(.9, 1.16); transition: transform 200ms var(--spring); cursor: grabbing; }
+/* Opened, the drop is the card: it gives its place to the morph surface, which starts exactly where it is, and
+   takes no press until it is back. Both ways at once: a fade would show two drops for a moment. */
+.vr[data-launcher="edge"] .fab.lifted { opacity: 0; pointer-events: none; }
+/* Carried, it is a free pill riding the pointer by its left/top (widget.ts fabMove writes them and the stretch). */
+.vr[data-launcher="edge"] .fab.dragging {
+  right: auto; padding: 0 12px; border-radius: 24px; transform-origin: 50% 50%;
+  transition: none; cursor: grabbing;
+}
+.vr[data-launcher="edge"] .fab.dragging .fab-shape { filter: drop-shadow(0 10px 16px rgba(0, 0, 0, .28)); }
+/* Let go, it glides onto the wall it is nearer (FLIP on translate), with a little overshoot. */
+.vr[data-launcher="edge"] .fab.gliding { transition: translate 460ms cubic-bezier(.3, 1.3, .5, 1), transform 420ms var(--spring); }
 .vr[data-launcher="edge"] .fab.settle { animation: vr-settle 520ms ease-out; }
 @keyframes vr-settle {
   0% { transform: scale(.9, 1.16); }
@@ -148,9 +159,19 @@ kbd {
   right: calc((44px + 12px) * var(--vr-scale)); bottom: auto; top: var(--vr-card-top, 16px);
   transform-origin: 100% 0;
   height: min(460px, calc((100vh - 32px) / var(--vr-scale)));
+  /* The drop grows into it (widget.ts morphCard); a card with no drop on screen rises in from there too. */
+  animation: none;
 }
+.vr[data-launcher="edge"][data-side="left"] .card { right: auto; left: calc((44px + 12px) * var(--vr-scale)); transform-origin: 0 0; }
 .vr.nobutton[data-launcher="edge"] .card { right: var(--edge); }
+.vr.nobutton[data-launcher="edge"][data-side="left"] .card { right: auto; left: var(--edge); }
 .vr[data-launcher="edge"] .card.parked { right: auto; transform-origin: 0 0; }
+/* The morph (vt-3811): ONE surface, the drop's fill turning into the card's, grows from the drop's box to
+   the card's; the card paints nothing of its own meanwhile, and its content — clipped to that surface —
+   fades in once the surface nearly holds it. Closing runs it back into the drop. */
+.morph { position: fixed; left: 0; top: 0; pointer-events: none; }
+.card.morphing { background: transparent; border-color: transparent; box-shadow: none; }
+.card.morphing > * { opacity: var(--vr-morph-alpha, 1); }
 /* Dragged, the button rides the pointer by its left/top; dropped, it glides into its corner (FLIP on translate). */
 .vr .fab.dragging { transform-origin: 0 0; transition: none; cursor: grabbing; }
 .fab.gliding { transition: translate var(--dur-slow) var(--ease-smooth-out), transform .14s ease, box-shadow .14s ease; }
@@ -343,12 +364,12 @@ a.row:hover { background: var(--faint); }
 .reason { color: #ffc1ca; }
 .settings-foot { display: flex; justify-content: space-between; margin-top: 16px; }
 
-/* -- sent ------------------------------------------------------------------- */
-.sent-head { display: flex; align-items: center; gap: 10px; }
-.sent-head h3 { margin: 0; font-size: 17px; font-weight: 650; }
-.sent-head svg { width: 22px; height: 22px; color: #4ade80; flex: none; }
-.sent-body { margin: 8px 0 0 32px; color: var(--dim); }
-.sent-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 0 32px; }
+/* -- sent: thanks, and nothing else to read (vt-3811) — centred in the one card size ----------- */
+.pane.sent { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; min-height: 100%; text-align: center; }
+.sent-head { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.sent-head h3 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+.sent-head svg { width: 40px; height: 40px; color: #4ade80; flex: none; }
+.sent-actions { display: flex; align-items: center; justify-content: center; gap: 18px; }
 .see {
   display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 9px;
   background: #fff; color: #131216; font-weight: 650; font-size: 13px; text-decoration: none;
@@ -466,8 +487,24 @@ a.row:hover { background: var(--faint); }
 @media (max-width: 520px) {
   .vr { --edge: 16px; --lift: calc(var(--edge) + 68px * var(--vr-scale)); }
   .fab { padding: 13px 18px; font-size: 16px; }
-  /* A phone has no room beside the drop: the card takes the width and covers it. */
-  .vr[data-launcher="edge"] .card { right: var(--edge); }
+  /* A phone has no room beside the drop: the card is a bottom sheet across the width, pinned to the VISUAL
+     viewport (widget.ts trackViewport writes its height and offset): when the on-screen keyboard rises, the
+     sheet's bottom edge, and Send on it, ride on top of the keyboard and its height shrinks with what is left,
+     on iOS Safari (whose layout viewport stays put under the keyboard) as on Android Chrome. The home
+     indicator's inset pads it while no keyboard covers it; the notch's insets pad its sides. It never scales:
+     it is the width. */
+  .vr[data-launcher="edge"] .card,
+  .vr[data-launcher="edge"][data-side="left"] .card,
+  .vr.nobutton[data-launcher="edge"] .card,
+  .vr.nobutton[data-launcher="edge"][data-side="left"] .card {
+    --sheet-h: min(460px, calc(var(--vr-vv-h, 100vh) - 12px - env(safe-area-inset-top, 0px)));
+    left: 0; right: auto; width: 100%;
+    top: calc(var(--vr-vv-top, 0px) + var(--vr-vv-h, 100vh) - var(--sheet-h));
+    height: var(--sheet-h);
+    scale: none; transform-origin: 50% 100%;
+    border-width: 1px 0 0; border-radius: 16px 16px 0 0;
+    padding: 0 env(safe-area-inset-right, 0px) var(--vr-sheet-safe, env(safe-area-inset-bottom, 0px)) env(safe-area-inset-left, 0px);
+  }
   .tb { max-width: calc((100vw - 16px) / var(--vr-scale)); overflow-x: auto; }
   .tb-lead { display: none; }
   .seg button { padding: 0 9px; }
@@ -479,11 +516,10 @@ a.row:hover { background: var(--faint); }
   .card.busy .head::after { animation: none; }
   .fab, .fab.gliding { transition: none; }
   /* The edge drop stays the still bead: no swell, stretch or wobble, and it moves without gliding. */
-  .vr[data-launcher="edge"] .fab, .vr[data-launcher="edge"] .fab::before, .vr[data-launcher="edge"] .fab::after,
+  /* The card swaps with the drop at once (widget.ts skips the morph) and its views swap without a fade. */
+  .vr[data-launcher="edge"] .fab, .vr[data-launcher="edge"] .fab.gliding,
   .vr[data-launcher="edge"] .fab-label { transition: none; }
   .vr[data-launcher="edge"] .fab:hover, .vr[data-launcher="edge"] .fab:focus-visible, .vr[data-launcher="edge"] .fab.dragging { transform: none; }
-  .vr[data-launcher="edge"] .fab:hover::before, .vr[data-launcher="edge"] .fab:hover::after,
-  .vr[data-launcher="edge"] .fab:focus-visible::before, .vr[data-launcher="edge"] .fab:focus-visible::after { transform: none; }
   .vr[data-launcher="edge"] .fab.settle { animation: none; }
 }
 `;

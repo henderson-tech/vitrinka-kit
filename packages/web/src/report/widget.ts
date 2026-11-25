@@ -4,10 +4,14 @@
  * - The launcher (hidden with `button: false`; the host then opens the card
  *   from its own control, `open-selector`, or `open()`), and the reporter's
  *   own shortcut (keybind.ts). By default it is the edge drop (vt-3811,
- *   edge.ts): a drop resting on the right edge that grows its name on hover
- *   and slides along the edge; `launcher: 'corner'` is the large button.
+ *   edge.ts): a drop resting on a side edge, one seamless path with its
+ *   meniscus feet, that grows its name on hover; carried, it comes off the
+ *   wall as a liquid pill and lands on the nearer side edge. Opened, the drop
+ *   becomes the card (morphCard) and closing runs it back; `launcher:
+ *   'corner'` is the large button.
  * - ONE card (vt-8020 D10 A), one fixed size from drafting through sending
- *   to thanks: the reporter's word for it (vt-8020 D11 chips), "What went wrong?",
+ *   to thanks (its views cross-fade, part()); on a phone a bottom sheet pinned
+ *   to the visual viewport, above the on-screen keyboard (pinSheet): the reporter's word for it (vt-8020 D11 chips), "What went wrong?",
  *   one numbered note line per mark, and Send — the capture frozen when the
  *   card opens (the buffer rolls on).
  * - "Show us where" marks the frozen page under a top bar (vt-8020 D6 A): a segmented
@@ -21,8 +25,8 @@
  *   paste or drop onto the card; chips above the foot, refused at once past
  *   the project's caps, sent on the wire's attachment leg.
  * - The corner button drags to any corner, or moves with Alt+arrows (drag.ts);
- *   the edge drop slides along the edge, or moves with Alt+↑/↓ (edge.ts); the
- *   card rests beside either. Settings adds the size (S · M · L, settings.ts)
+ *   the edge drop is carried to either side edge, or moves with Alt+arrows
+ *   (edge.ts); the card rests beside either. Settings adds the size (S · M · L, settings.ts)
  *   and the technical details a support conversation asks for.
  * - Rendered once into the shared HUD host's shadow root (top layer,
  *   shielded, blocked from rrweb); `paint()` rewrites text and state in place,
@@ -42,7 +46,23 @@ import { RECORDER_VERSION } from '../recorder/version';
 import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
 import { contextField, type ReportContext } from './context';
 import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
-import { cardTopBeside, edgeCorner, edgeFraction, type EdgeInsets, edgeInsets, edgeTop, edgeToward, type Launcher, readEdge, saveEdge } from './edge';
+import {
+  cardTopBeside,
+  DROP_FOOT,
+  dropForm,
+  dropPath,
+  edgeCorner,
+  edgeFraction,
+  type EdgeInsets,
+  edgeInsets,
+  type EdgePlace,
+  edgeTop,
+  edgeToward,
+  type Launcher,
+  nearerSide,
+  readEdge,
+  saveEdge,
+} from './edge';
 import { memberLinked, memberLinkGone, memberTokenFor, rememberDisplayMode, watchMemberLink } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
@@ -79,7 +99,7 @@ export interface WidgetOptions {
   button: boolean;
   /** CSS selector of the host's own control(s) that open the card. */
   openSelector?: string | null;
-  /** `edge` (default): the drop on the right edge (edge.ts); `corner`: the four-corner button (drag.ts). */
+  /** `edge` (default): the drop on a side edge (edge.ts); `corner`: the four-corner button (drag.ts). */
   launcher?: Launcher;
   /** The clear space the edge drop keeps at the top and the bottom of the viewport (px). */
   edgeInsets?: Partial<EdgeInsets> | null;
@@ -96,6 +116,52 @@ type View = 'describe' | 'settings' | 'sent' | 'reports' | 'recents' | 'link';
 type Popover = 'account' | 'more';
 type LinkFlow = { start: LinkStart | null; state: 'starting' | 'waiting' | 'expired' | 'failed'; abort: AbortController };
 type Drawn = Marker & { key: number };
+/**
+ * The morph's one surface (vt-3811), in painted viewport px: its box, its corner radii (top-left, top-right,
+ * bottom-right, bottom-left), how far its fill has turned from the drop's to the card's (0–1), and how much
+ * of the card's content shows through it (0–1).
+ */
+interface Geo {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  r: readonly [number, number, number, number];
+  fill: number;
+  alpha: number;
+}
+/**
+ * How the card comes and goes: `surface` — the drop grows into it (and back); `rise` — no drop on screen on
+ * a phone, the sheet rises from the bottom; `fade` — no drop on screen on a desk, it fades up in place.
+ */
+type MorphMode = 'surface' | 'rise' | 'fade';
+interface Morph {
+  mode: MorphMode;
+  open: boolean;
+  from: Geo;
+  to: Geo;
+  /** Spring progress from `from` (0) to `to` (1), and its velocity per second. */
+  q: number;
+  v: number;
+  raf: number;
+  last: number;
+  /** The card's painted box and scale, read when this run started. */
+  card: DOMRect;
+  k: number;
+}
+/** A press on the button; past DRAG_THRESHOLD a drag. The edge drop also keeps where it is carried, and how fast. */
+interface FabDrag {
+  pointer: number;
+  start: Point;
+  grab: Point;
+  moved: boolean;
+  left: number;
+  top: number;
+  vx: number;
+  vy: number;
+  at: number;
+  raf: number;
+}
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TITLE_CAP = 100;
@@ -113,6 +179,10 @@ const DROP = { h: 48, w: 44, gap: 12 } as const;
 const COACH = { w: 300, h: 160, gap: 10 } as const;
 /** The gap a parked card keeps on a side it did not rest against. */
 const PARK_EDGE = 16;
+/** A phone (styles: the `max-width: 520px` block): the card is a bottom sheet pinned to the visual viewport. */
+const PHONE = '(max-width: 520px)';
+/** Pane swaps inside the open card (vt-3811): the old content fades out over the new one as it fades in. */
+const SWAP = { out: 140, in: 220 } as const;
 const KB_STEPS: Readonly<Record<string, readonly [number, number]>> = {
   ArrowLeft: [-10, 0],
   ArrowRight: [10, 0],
@@ -246,6 +316,45 @@ function reducedMotion(): boolean {
   return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+/** 0 below `a`, 1 above `b`, a smooth S between. */
+function smoothstep(a: number, b: number, v: number): number {
+  const t = clamp((v - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
+/** Past the end and back: a foot regrowing overshoots a little, like liquid. */
+const easeBack = (t: number) => 1 + 2.4 * (t - 1) ** 3 + 1.4 * (t - 1) ** 2;
+
+function lerp(a: number, b: number, q: number): number {
+  return a + (b - a) * q;
+}
+
+/**
+ * The surface `q` of the way from `a` to `b`. Its box follows the spring past the end and back (the overshoot
+ * is the liquid); fill and radii stop at the ends. The content shows late on the way in — once the surface
+ * nearly holds it — and goes early on the way out, so it never shows outside a surface too small for it.
+ */
+function lerpGeo(a: Geo, b: Geo, q: number, opening: boolean): Geo {
+  const c = clamp(q, 0, 1);
+  const shown = opening ? smoothstep(0.35, 0.9, q) : smoothstep(0, 0.45, q);
+  return {
+    x: lerp(a.x, b.x, q),
+    y: lerp(a.y, b.y, q),
+    w: Math.max(0, lerp(a.w, b.w, q)),
+    h: Math.max(0, lerp(a.h, b.h, q)),
+    r: [0, 1, 2, 3].map((i) => Math.max(0, lerp(a.r[i]!, b.r[i]!, c))) as unknown as Geo['r'],
+    fill: lerp(a.fill, b.fill, c),
+    alpha: lerp(a.alpha, b.alpha, shown),
+  };
+}
+
+const px = (v: number) => `${Math.round(v * 100) / 100}px`;
+
 /** The focused element (HTML or SVG: an SVG link or a tabindexed shape is a control too), through open shadow roots; null when nothing but <body> has it. */
 function deepActiveElement(): HTMLElement | SVGElement | null {
   let active = document.activeElement;
@@ -310,7 +419,11 @@ function buildDom(mount: HTMLElement) {
   const fabKbd = h('kbd', { 'aria-hidden': 'true' });
   // The edge drop shows the glyph and grows the label out of it; the corner button shows the label alone (styles).
   const fabGlyph = h('span', { class: 'fab-glyph', 'aria-hidden': 'true' }, icon(ICON.report));
-  const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabGlyph, fabLabel, fabKbd);
+  // The edge drop's painted shape: ONE path for the body and both feet (edge.ts dropPath, widget shapeDrop).
+  const fabFill = svgEl('path', { class: 'fill' });
+  const fabShape = svgEl('svg', { class: 'fab-shape', 'aria-hidden': 'true', preserveAspectRatio: 'none' });
+  fabShape.append(fabFill);
+  const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabShape, fabGlyph, fabLabel, fabKbd);
 
   const title = h('h2', { id: 'vr-title' });
   // Who you are, at a glance (vt-8020 D5 A): the chip opens the account popover, ⋯ the menu.
@@ -409,8 +522,8 @@ function buildDom(mount: HTMLElement) {
     h('div', { class: 'settings-foot' }, back, unbind),
   );
 
+  // Sent (vt-3811): thanks and nothing more to read — the way to the report when the server gave one, and Close.
   const sentTitle = h('h3');
-  const sentBody = h('p', { class: 'sent-body' });
   const seeText = h('span');
   const see = h('a', { class: 'see', target: '_blank', rel: 'noopener noreferrer' }, seeText);
   const sentClose = h('button', { class: 'link', type: 'button' });
@@ -418,7 +531,6 @@ function buildDom(mount: HTMLElement) {
     'div',
     { class: 'pane sent', role: 'status' },
     h('div', { class: 'sent-head' }, icon(ICON.check), sentTitle),
-    sentBody,
     h('div', { class: 'sent-actions' }, see, sentClose),
   );
 
@@ -488,14 +600,16 @@ function buildDom(mount: HTMLElement) {
   mark.prepend(ink);
 
   // The card after the marking layer: it stays on top of it, usable, while the reporter marks.
-  const root = h('div', { class: 'vr' }, fab, mark, card);
+  // The morph surface (vt-3811) under the card: the drop grows into the card through it, and back.
+  const morph = h('div', { class: 'morph', 'aria-hidden': 'true', hidden: '' });
+  const root = h('div', { class: 'vr' }, fab, mark, morph, card);
   const style = h('style');
   style.textContent = REPORT_CSS;
   // The sheet rides inside the root: the whole tree moves into an open dialog and back (followDialog).
   root.prepend(style);
   mount.append(root);
   return {
-    root, fab, fabGlyph, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
+    root, fab, fabGlyph, fabLabel, fabKbd, fabShape, fabFill, morph, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
     accountPop, accName, accMail, accVia, accLinked, accUnlink, accLink, accPortal,
     morePop, mReports, mRecents, mRecord, mRecordWhy, mSettings, mOpen,
     reports, repBack, repStatus, repRows, repLocal, repPortal, recents, recBack, recStatus, recRows,
@@ -505,7 +619,7 @@ function buildDom(mount: HTMLElement) {
     attach, fileInput, fileNote, files, tray,
     settings, bindLabel, bindBtn, unbind, bindHint, bindReason, back,
     sizeLabel, sizeButtons, sizeInd, sizeSeg, coachLabel, coachSwitch, techText, techBtn, tech,
-    sent, sentTitle, sentBody, see, seeText, sentClose,
+    sent, sentTitle, see, seeText, sentClose,
     mark, ink, shapes, draft, pins, coach, coachArtSlot, coachText, coachMore, coachDismiss, coachKeys,
     toolbar, barLead, seg, segInd, toolButtons, toolLabels, cancel, ask, askText, discard, keep,
   };
@@ -568,7 +682,6 @@ export class ReportWidget {
   private error: '' | 'create' | 'files' | 'capture' = '';
   private result: SubmitReply | null = null;
   private notify = false;
-  private sentNotify = false;
   private includedOpen = false;
   private recordingBind = false;
   private bindRefused = false;
@@ -584,14 +697,24 @@ export class ReportWidget {
   private parkInsets: Pick<Frame, 'top' | 'bottom' | 'edge'> | null = null;
   /** The corner the button docks in (drag.ts); the card rests beside it and marking parks it from there. */
   private dock: Corner = readDock();
-  /** Which launcher shows (edge.ts); the edge drop's place along the right edge as a fraction of its band, and that band's insets. */
+  /** Which launcher shows (edge.ts); the edge drop's place — its side and a fraction of its band — and that band's insets. */
   private launcher: Launcher;
-  private edge: number = readEdge();
+  private edge: EdgePlace = readEdge();
+  /** How attached the drop is to its wall (edge.ts dropForm: 1 with feet, 0.5 the bare body, 0 the free pill), and its tween. */
+  private attach = 1;
+  private attachRaf = 0;
+  /** The card coming or going (vt-3811), and the surface where it is now; null at rest. */
+  private morph: Morph | null = null;
+  private morphGeo: Geo | null = null;
+  /** Panes fading out over the one fading in (vt-3811 SWAP); paint() leaves them shown until they are gone. */
+  private readonly leaving = new Map<HTMLElement, Animation>();
+  /** This paint may cross-fade the card's panes: the card was already open and showing. */
+  private fadeParts = false;
   private readonly insets: EdgeInsets;
   private size: WidgetSize = readSize();
   private techOpen = false;
   /** A press on the button: it becomes a drag once it travels DRAG_THRESHOLD; `grab` is where the pointer holds it. */
-  private fabDrag: { pointer: number; start: Point; grab: Point; moved: boolean; edgeTop?: number } | null = null;
+  private fabDrag: FabDrag | null = null;
   /** The click that ends a drag is the drop, not a press of the button. */
   private swallowClick = false;
   /** The button's glide to its new corner, while it runs. */
@@ -703,13 +826,18 @@ export class ReportWidget {
 
   open(): void {
     if (this.isOpen) return;
+    // The drop as it is this moment — its name grown, its swell — is what becomes the card (morphCard).
+    const drop = this.morph ? null : this.dropBox();
     this.isOpen = true;
+    // Reopened while it was closing: the card it ran back from leaves its parking (close() kept it there).
+    if (this.morph) this.unpark();
     this.opener = insideHud(document.activeElement) ? null : deepActiveElement();
     if (this.view !== 'describe') this.view = 'describe';
     this.result = null;
     // The minutes before THIS open; a half-sent report keeps the capture it started with.
     if (!this.job) this.frozen = this.engine?.freeze() ?? null;
     this.paint();
+    if (this.morphCard(true, drop)) this.attachTo(0.5, 140);
     requestAnimationFrame(() => this.e.desc.focus());
     // Who you are fills the chip as soon as the server says it.
     void this.refreshWho();
@@ -721,8 +849,8 @@ export class ReportWidget {
     if (this.marking) this.endMarking(false);
     this.stopRecordingBind();
     this.isOpen = false;
-    this.view = 'describe';
-    this.unpark();
+    // Morphing back into the drop, the card keeps its view and its place until it is gone (finishMorph).
+    if (!this.morphCard(false)) this.closed();
     this.paint();
     // Focus goes back where it came from — the host's control, the field the
     // shortcut fired in — else to the button; never lost to <body> when the
@@ -749,6 +877,7 @@ export class ReportWidget {
 
   setLauncher(l: Launcher): void {
     if (l === this.launcher) return;
+    this.stopMorph();
     this.launcher = l;
     this.paint();
   }
@@ -779,6 +908,9 @@ export class ReportWidget {
   }
 
   unmount(): void {
+    this.stopMorph();
+    cancelAnimationFrame(this.attachRaf);
+    if (this.fabDrag) cancelAnimationFrame(this.fabDrag.raf);
     this.stopRecordingBind();
     this.linkFlow?.abort.abort();
     for (const off of this.offs.splice(0).reverse()) off();
@@ -811,10 +943,11 @@ export class ReportWidget {
     on(e.fab, 'keydown', (ev) => {
       if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
       if (this.launcher === 'edge') {
+        // ↑/↓ along the edge, ←/→ across to the other one (Alt+← is the browser's Back).
         const to = edgeToward(this.edge, ev.key);
         if (to === null) return;
         ev.preventDefault();
-        if (to !== this.edge) this.moveEdge(to);
+        if (to.side !== this.edge.side || to.at !== this.edge.at) this.moveEdge(to);
         return;
       }
       const next = cornerToward(this.dock, ev.key);
@@ -1037,7 +1170,21 @@ export class ReportWidget {
         this.open();
       }),
     );
+    // The drop's one path follows its width as its name grows and shrinks — in the frame the width changes.
+    if (typeof ResizeObserver === 'function') {
+      const shape = new ResizeObserver(() => this.shapeDrop());
+      shape.observe(e.fab);
+      this.offs.push(() => shape.disconnect());
+    }
+    // A phone's sheet rides the visual viewport: above the on-screen keyboard, as tall as what is left (styles).
+    const vv = globalThis.visualViewport;
+    if (vv) {
+      const pin = () => this.pinSheet();
+      this.offs.push(listen(vv, 'resize', pin), listen(vv, 'scroll', pin));
+    }
+    this.pinSheet();
     this.offs.push(listen(window, 'resize', () => {
+      this.pinSheet();
       if (this.launcher === 'edge') this.placeEdge();
       if (this.parked) this.placeCard(true);
       if (this.marking) this.placeSeg();
@@ -1434,7 +1581,18 @@ export class ReportWidget {
     this.swallowClick = false;
     if (ev.button !== 0 || !ev.isPrimary) return;
     const r = this.e.fab.getBoundingClientRect();
-    this.fabDrag = { pointer: ev.pointerId, start: { x: ev.clientX, y: ev.clientY }, grab: { x: ev.clientX - r.left, y: ev.clientY - r.top }, moved: false };
+    this.fabDrag = {
+      pointer: ev.pointerId,
+      start: { x: ev.clientX, y: ev.clientY },
+      grab: { x: ev.clientX - r.left, y: ev.clientY - r.top },
+      moved: false,
+      left: r.left,
+      top: r.top,
+      vx: 0,
+      vy: 0,
+      at: ev.timeStamp,
+      raf: 0,
+    };
     try {
       this.e.fab.setPointerCapture(ev.pointerId);
     } catch {
@@ -1447,21 +1605,17 @@ export class ReportWidget {
     const d = this.fabDrag;
     if (!d || ev.pointerId !== d.pointer) return;
     if (!d.moved && Math.hypot(ev.clientX - d.start.x, ev.clientY - d.start.y) < DRAG_THRESHOLD) return;
+    const first = !d.moved;
     d.moved = true;
+    if (this.launcher === 'edge') {
+      this.carryDrop(d, ev, first);
+      return;
+    }
     const fab = this.e.fab;
     fab.classList.add('dragging');
     const r = fab.getBoundingClientRect();
     const vw = globalThis.innerWidth || 800;
     const vh = globalThis.innerHeight || 600;
-    if (this.launcher === 'edge') {
-      // The drop slides along the edge only, inside its band; it stretches while it moves (styles: `.dragging`).
-      fab.classList.remove('settle');
-      const h = DROP.h * SIZE_SCALE[this.size];
-      const top = edgeTop(edgeFraction(ev.clientY - d.grab.y, vh, h, this.insets), vh, h, this.insets);
-      d.edgeTop = top;
-      this.e.root.style.setProperty('--vr-drop-top', `${top}px`);
-      return;
-    }
     const s = fab.style;
     s.left = `${Math.min(Math.max(0, ev.clientX - d.grab.x), vw - r.width)}px`;
     s.top = `${Math.min(Math.max(0, ev.clientY - d.grab.y), vh - r.height)}px`;
@@ -1475,25 +1629,21 @@ export class ReportWidget {
     if (!d || ev.pointerId !== d.pointer) return;
     this.fabDrag = null;
     if (!d.moved) return;
-    const fab = this.e.fab;
-    const at = fab.getBoundingClientRect();
-    fab.classList.remove('dragging');
-    for (const p of ['left', 'top', 'right', 'bottom']) fab.style.removeProperty(p);
     // The click this pointerup is about to fire is the drop; a click that never comes must not eat the next one.
     this.swallowClick = true;
     setTimeout(() => {
       this.swallowClick = false;
     }, 0);
-    const vw = globalThis.innerWidth || 800;
-    const vh = globalThis.innerHeight || 600;
     if (this.launcher === 'edge') {
-      // Released, it stays where it is (a cancelled drag goes home) and settles with one damped wobble.
-      // Read from where the drag put it, never the painted box: the stretch scales that box.
-      const h = DROP.h * SIZE_SCALE[this.size];
-      this.moveEdge(drop && d.edgeTop !== undefined ? edgeFraction(d.edgeTop, vh, h, this.insets) : this.edge);
-      this.settle();
+      this.landDrop(d, drop);
       return;
     }
+    const fab = this.e.fab;
+    const at = fab.getBoundingClientRect();
+    fab.classList.remove('dragging');
+    for (const p of ['left', 'top', 'right', 'bottom']) fab.style.removeProperty(p);
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
     this.moveDock(drop ? nearestCorner({ x: at.left + at.width / 2, y: at.top + at.height / 2 }, vw, vh) : this.dock, at);
   }
 
@@ -1531,16 +1681,24 @@ export class ReportWidget {
 
   // -- the edge drop (vt-3811) -------------------------------------------------
 
-  /** The corner the launcher rests in, for marking and the coach: the dock, or the drop's half of the edge. */
+  /** The corner the launcher rests in, for marking and the coach: the dock, or the drop's side and half of its edge. */
   private rest(): Corner {
-    return this.launcher === 'edge' ? edgeCorner(this.edge) : this.dock;
+    return this.launcher === 'edge' ? edgeCorner(this.edge.at, this.edge.side) : this.dock;
   }
 
-  /** Moves the drop to `fraction` of its band and remembers it; the stylesheet's transition carries it there. */
-  private moveEdge(fraction: number): void {
-    this.edge = fraction;
-    saveEdge(fraction);
+  /**
+   * Moves the drop to `place` and remembers it. Along the edge the stylesheet's transition carries it; across
+   * to the other edge (Alt+←/→) it lands there at once and regrows its feet on that wall with a wobble.
+   */
+  private moveEdge(place: EdgePlace): void {
+    const crossed = place.side !== this.edge.side;
+    this.edge = place;
+    saveEdge(place);
     this.paint();
+    if (!crossed) return;
+    this.attach = 0.5;
+    this.attachTo(1, 320, true);
+    this.settle();
   }
 
   /** One damped wobble after a drag (styles: `.settle`); nothing under reduced motion. */
@@ -1554,18 +1712,403 @@ export class ReportWidget {
   }
 
   /**
-   * Places the drop on the right edge and the card beside it, centred on it (edge.ts). Both go through
-   * custom properties so the stylesheet keeps every other rule; a drag in progress owns the drop's top.
+   * Places the drop on its edge and the card beside it, centred on it (edge.ts). Both go through custom
+   * properties so the stylesheet keeps every other rule; a drag in progress places the drop itself.
    */
   private placeEdge(): void {
     const root = this.e.root;
     const vh = globalThis.innerHeight || 600;
     const k = SIZE_SCALE[this.size];
     const dropH = DROP.h * k;
-    const top = this.fabDrag?.edgeTop ?? edgeTop(this.edge, vh, dropH, this.insets);
+    const top = edgeTop(this.edge.at, vh, dropH, this.insets);
     root.style.setProperty('--vr-drop-top', `${top}px`);
     const cardH = Math.min(CARD.h * k, vh - 32);
     root.style.setProperty('--vr-card-top', `${cardTopBeside(top, dropH, cardH, vh)}px`);
+  }
+
+  /**
+   * Redraws the drop's one outline (edge.ts dropPath) for its width now, its side and how attached it is —
+   * the body and both feet a single area, so no seam or outline shows anywhere.
+   */
+  private shapeDrop(): void {
+    if (this.launcher !== 'edge') return;
+    const e = this.e;
+    const w = e.fab.offsetWidth;
+    const hgt = e.fab.offsetHeight;
+    if (!w || !hgt) return;
+    const { foot, round } = dropForm(this.attach);
+    e.fabShape.setAttribute('viewBox', `0 0 ${w} ${hgt + 2 * DROP_FOOT}`);
+    e.fabFill.setAttribute('d', dropPath(w, hgt, this.edge.side, foot, round));
+  }
+
+  /** Tweens how attached the drop is (dropForm) to `target` over `ms`; at once under reduced motion. */
+  private attachTo(target: number, ms: number, overshoot = false): void {
+    cancelAnimationFrame(this.attachRaf);
+    this.attachRaf = 0;
+    if (ms <= 0 || reducedMotion() || typeof requestAnimationFrame !== 'function') {
+      this.attach = target;
+      this.shapeDrop();
+      return;
+    }
+    const from = this.attach;
+    const ease = overshoot ? easeBack : easeOut;
+    let t0 = 0;
+    const step = (now: number) => {
+      t0 ||= now;
+      const t = Math.min(1, (now - t0) / ms);
+      this.attach = lerp(from, target, ease(t));
+      this.shapeDrop();
+      if (t < 1) this.attachRaf = requestAnimationFrame(step);
+      else this.attachRaf = 0;
+    };
+    this.attachRaf = requestAnimationFrame(step);
+  }
+
+  /**
+   * Carried (vt-3811): the drop comes off the wall — its feet retract and it rounds into a free pill — and
+   * rides the pointer anywhere in the viewport, centred under it, stretching the way it moves (stretchDrop).
+   */
+  private carryDrop(d: FabDrag, ev: PointerEvent, first: boolean): void {
+    const fab = this.e.fab;
+    if (first) {
+      this.glide?.abort();
+      this.glide = null;
+      fab.classList.remove('gliding', 'settle');
+      fab.style.removeProperty('translate');
+      fab.classList.add('dragging');
+      this.attachTo(0, 200);
+      if (!reducedMotion() && typeof requestAnimationFrame === 'function') d.raf = requestAnimationFrame(() => this.stretchDrop());
+    }
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    const w = fab.offsetWidth || DROP.w;
+    const hgt = fab.offsetHeight || DROP.h;
+    const left = clamp(ev.clientX - w / 2, 0, Math.max(0, vw - w));
+    const top = clamp(ev.clientY - hgt / 2, 0, Math.max(0, vh - hgt));
+    const dt = Math.max(1, ev.timeStamp - d.at);
+    // Smoothed px per ms: one jittery event never flicks the stretch.
+    d.vx = d.vx * 0.6 + ((left - d.left) / dt) * 0.4;
+    d.vy = d.vy * 0.6 + ((top - d.top) / dt) * 0.4;
+    d.left = left;
+    d.top = top;
+    d.at = ev.timeStamp;
+    fab.style.left = `${left}px`;
+    fab.style.top = `${top}px`;
+  }
+
+  /** While carried, once a frame: the pill stretches along its motion and eases back round when it slows. */
+  private stretchDrop(): void {
+    const d = this.fabDrag;
+    if (!d?.moved || this.launcher !== 'edge') return;
+    // No move for a moment: the motion dies away, and so does the stretch.
+    if (performance.now() - d.at > 48) {
+      d.vx *= 0.8;
+      d.vy *= 0.8;
+    }
+    const s = Math.min(0.24, Math.hypot(d.vx, d.vy) * 0.09);
+    const a = (Math.atan2(d.vy, d.vx) * 180) / Math.PI;
+    this.e.fab.style.transform = s < 0.004 ? '' : `rotate(${a.toFixed(1)}deg) scale(${(1 + s).toFixed(3)}, ${(1 - s * 0.6).toFixed(3)}) rotate(${(-a).toFixed(1)}deg)`;
+    d.raf = requestAnimationFrame(() => this.stretchDrop());
+  }
+
+  /**
+   * Let go (vt-3811): the pill lands on the NEARER side edge at the height it was let go, inside the band
+   * (a cancelled drag goes home). It glides onto that wall (FLIP on translate), then straightens against it,
+   * regrows its feet and settles with one damped wobble. The side and the fraction are remembered.
+   */
+  private landDrop(d: FabDrag, drop: boolean): void {
+    const fab = this.e.fab;
+    cancelAnimationFrame(d.raf);
+    fab.style.transition = 'none';
+    fab.style.removeProperty('transform');
+    const before = fab.getBoundingClientRect();
+    const vw = globalThis.innerWidth || 800;
+    const vh = globalThis.innerHeight || 600;
+    // Read from where the drag put it (its top), never the painted box alone: the stretch scaled that box.
+    const place: EdgePlace = drop
+      ? { side: nearerSide(before.left + before.width / 2, vw), at: edgeFraction(d.top, vh, DROP.h * SIZE_SCALE[this.size], this.insets) }
+      : this.edge;
+    fab.classList.remove('dragging');
+    for (const p of ['left', 'top', 'right']) fab.style.removeProperty(p);
+    this.edge = place;
+    if (drop) saveEdge(place);
+    this.paint();
+    const after = fab.getBoundingClientRect();
+    if (reducedMotion() || fab.hidden) {
+      fab.style.removeProperty('transition');
+      this.attachTo(1, 0);
+      return;
+    }
+    const dx = before.left - after.left;
+    const dy = before.top - after.top;
+    this.glide?.abort();
+    const glide = new AbortController();
+    this.glide = glide;
+    fab.style.setProperty('translate', `${dx}px ${dy}px`);
+    void fab.offsetWidth;
+    fab.style.removeProperty('transition');
+    fab.classList.add('gliding');
+    fab.style.setProperty('translate', '0px 0px');
+    const arrive = () => {
+      glide.abort();
+      if (this.glide === glide) this.glide = null;
+      fab.classList.remove('gliding');
+      fab.style.removeProperty('translate');
+      this.attachTo(1, 340, true);
+      this.settle();
+    };
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+      arrive();
+      return;
+    }
+    const done = (ev: TransitionEvent) => {
+      if (ev.propertyName === 'translate') arrive();
+    };
+    fab.addEventListener('transitionend', done, { signal: glide.signal });
+    fab.addEventListener('transitioncancel', done, { signal: glide.signal });
+  }
+
+  /** The drop's painted box while it shows (null when the launcher is hidden, marking hid it, or it is the corner button). */
+  private dropBox(): DOMRect | null {
+    const fab = this.e.fab;
+    if (this.launcher !== 'edge' || !this.button || fab.hidden) return null;
+    const r = fab.getBoundingClientRect();
+    return r.width && r.height ? r : null;
+  }
+
+  // -- the drop becomes the card (vt-3811) ----------------------------------------
+
+  private phone(): boolean {
+    return globalThis.matchMedia?.(PHONE).matches ?? false;
+  }
+
+  /**
+   * Pins a phone's sheet to the visual viewport (styles: the `max-width: 520px` block): its height and its
+   * offset in the layout viewport, which iOS Safari leaves in place while the keyboard covers its bottom.
+   * While something covers the layout viewport's bottom (the keyboard), the home indicator's inset is not
+   * padded: the keyboard is already there. Pinch-zoomed, the visual viewport is a magnified piece of the
+   * page, not the screen: the sheet keeps to the layout viewport.
+   */
+  private pinSheet(): void {
+    const st = this.e.root.style;
+    const vv = globalThis.visualViewport;
+    const vars = ['--vr-vv-h', '--vr-vv-top', '--vr-sheet-safe'];
+    if (!vv || !(vv.height > 0) || vv.scale > 1.01) {
+      for (const v of vars) st.removeProperty(v);
+      return;
+    }
+    st.setProperty('--vr-vv-h', px(vv.height));
+    st.setProperty('--vr-vv-top', px(Math.max(0, vv.offsetTop)));
+    const layout = document.documentElement.clientHeight || globalThis.innerHeight || vv.height;
+    if (layout - (vv.offsetTop + vv.height) > 40) st.setProperty('--vr-sheet-safe', '0px');
+    else st.removeProperty('--vr-sheet-safe');
+  }
+
+  /**
+   * Opens or closes the card as ONE surface (vt-3811). With the drop on screen, the morph layer starts as the
+   * drop — its box, its round page side and square wall side, its fill — and springs into the card's box,
+   * radii and fill while the card's content, clipped to it, fades in once it nearly fits; closing runs back
+   * into the drop. With no drop (the host hid it), a phone's sheet rises from the bottom and a desk's card
+   * fades up in place. Interruptible: a run reversed midway starts from the surface where it is. Returns false
+   * where nothing animates (reduced motion, the corner button): the swap is instant.
+   */
+  private morphCard(open: boolean, drop: DOMRect | null = null): boolean {
+    const card = this.e.card;
+    if (this.launcher !== 'edge' || reducedMotion() || typeof requestAnimationFrame !== 'function') {
+      this.stopMorph();
+      return false;
+    }
+    const cr = card.getBoundingClientRect();
+    if (!cr.width || !cr.height) {
+      this.stopMorph();
+      return false;
+    }
+    const k = card.offsetWidth ? cr.width / card.offsetWidth : 1;
+    const cs = getComputedStyle(card);
+    const rad = (v: string) => (Number.parseFloat(v) || 0) * k;
+    const shown: Geo = {
+      x: cr.left,
+      y: cr.top,
+      w: cr.width,
+      h: cr.height,
+      r: [rad(cs.borderTopLeftRadius), rad(cs.borderTopRightRadius), rad(cs.borderBottomRightRadius), rad(cs.borderBottomLeftRadius)],
+      fill: 1,
+      alpha: 1,
+    };
+    const box = drop ?? this.dropBox();
+    const mode: MorphMode = box ? 'surface' : this.phone() ? 'rise' : 'fade';
+    let away: Geo;
+    if (box) {
+      const R = box.height / 2;
+      away = { x: box.left, y: box.top, w: box.width, h: box.height, r: this.edge.side === 'right' ? [R, 0, 0, R] : [0, R, R, 0], fill: 0, alpha: 0 };
+    } else if (mode === 'rise') {
+      // Below the visual viewport's bottom: the sheet comes up from under the screen's edge.
+      away = { ...shown, y: Math.max(cr.bottom, (globalThis.visualViewport?.offsetTop ?? 0) + (globalThis.visualViewport?.height ?? cr.bottom)) + 8 };
+    } else {
+      away = { ...shown, y: cr.top + 10, alpha: 0 };
+    }
+    const prev = this.morph;
+    if (prev) cancelAnimationFrame(prev.raf);
+    // A run of another kind (the drop appeared or went meanwhile) does not blend: it ends where it was going.
+    if (prev && prev.mode !== mode) this.clearMorph();
+    const from = prev && prev.mode === mode && this.morphGeo ? this.morphGeo : open ? away : shown;
+    this.morph = { mode, open, from, to: open ? shown : away, q: 0, v: 0, raf: 0, last: 0, card: cr, k };
+    card.classList.toggle('morphing', mode === 'surface');
+    card.inert = !open;
+    this.e.morph.hidden = mode !== 'surface';
+    // The first frame now, before the browser paints the card this task just showed: it never flashes whole.
+    this.renderMorph(from);
+    this.morph.raf = requestAnimationFrame((t) => this.stepMorph(t));
+    return true;
+  }
+
+  /** One frame of the spring: a little bounce into the card, none into the drop (it lands, it does not shrink past). */
+  private stepMorph(now: number): void {
+    const m = this.morph;
+    if (!m) return;
+    const dt = m.last ? Math.min(1 / 30, (now - m.last) / 1000) : 1 / 60;
+    m.last = now;
+    const response = m.open ? 0.42 : 0.3;
+    const zeta = m.open ? 0.8 : 1;
+    const stiff = (2 * Math.PI / response) ** 2;
+    const damp = 2 * zeta * Math.sqrt(stiff);
+    for (let i = 0; i < 4; i++) {
+      const h = dt / 4;
+      m.v += (stiff * (1 - m.q) - damp * m.v) * h;
+      m.q += m.v * h;
+    }
+    const done = Math.abs(1 - m.q) < 0.002 && Math.abs(m.v) < 0.05;
+    if (done) m.q = 1;
+    this.renderMorph(lerpGeo(m.from, m.to, m.q, m.open));
+    if (done) this.finishMorph();
+    else m.raf = requestAnimationFrame((t) => this.stepMorph(t));
+  }
+
+  /** Paints the surface at `g`: the morph layer, and the card's content clipped to it in the card's own (unscaled) box. */
+  private renderMorph(g: Geo): void {
+    const m = this.morph;
+    if (!m) return;
+    this.morphGeo = g;
+    const card = this.e.card;
+    if (m.mode === 'rise') {
+      card.style.translate = `0 ${px(g.y - m.card.top)}`;
+      return;
+    }
+    if (m.mode === 'fade') {
+      card.style.translate = `0 ${px(g.y - m.card.top)}`;
+      card.style.opacity = String(clamp(g.alpha, 0, 1));
+      return;
+    }
+    const f = clamp(g.fill, 0, 1);
+    const s = this.e.morph.style;
+    s.width = px(g.w);
+    s.height = px(g.h);
+    s.transform = `translate(${px(g.x)}, ${px(g.y)})`;
+    s.borderRadius = g.r.map(px).join(' ');
+    s.background = `color-mix(in srgb, var(--bg) ${Math.round(f * 100)}%, var(--drop-fill))`;
+    // The drop's soft shadow deepens into the card's, and the card's hairline edge comes in with its fill.
+    s.boxShadow =
+      `0 ${px(4 + 24 * f)} ${px(8 + 62 * f)} rgba(0, 0, 0, ${(0.2 + 0.18 * f).toFixed(3)}), ` +
+      `0 2px 8px rgba(0, 0, 0, ${(0.2 * f).toFixed(3)}), inset 0 0 0 1px rgba(255, 255, 255, ${(0.08 * f).toFixed(3)})`;
+    const c = m.card;
+    const k = m.k || 1;
+    const inset = [g.y - c.top, c.right - (g.x + g.w), c.bottom - (g.y + g.h), g.x - c.left].map((v) => px(Math.max(0, v / k)));
+    card.style.clipPath = `inset(${inset.join(' ')} round ${g.r.map((r) => px(r / k)).join(' ')})`;
+    card.style.setProperty('--vr-morph-alpha', String(clamp(g.alpha, 0, 1).toFixed(3)));
+  }
+
+  /** The run is over: the card is itself again, or — closed — it is gone and the drop grows its feet back. */
+  private finishMorph(): void {
+    const m = this.morph;
+    if (!m) return;
+    this.clearMorph();
+    if (m.open) return;
+    this.closed();
+    this.paint();
+    if (m.mode === 'surface') this.attachTo(1, 320, true);
+  }
+
+  /** Ends a run where it was going, at once (reduced motion asked mid-run, the launcher changed, unmount). */
+  private stopMorph(): void {
+    if (this.morph) this.finishMorph();
+  }
+
+  private clearMorph(): void {
+    const m = this.morph;
+    if (m) cancelAnimationFrame(m.raf);
+    this.morph = null;
+    this.morphGeo = null;
+    const card = this.e.card;
+    this.e.morph.hidden = true;
+    card.classList.remove('morphing');
+    card.inert = false;
+    for (const p of ['clip-path', 'translate', 'opacity', '--vr-morph-alpha']) card.style.removeProperty(p);
+  }
+
+  /** What a close leaves once the card is gone: the next open starts on the describe view, anchored by its launcher. */
+  private closed(): void {
+    this.view = 'describe';
+    this.unpark();
+  }
+
+  /**
+   * Shows or hides one of the card's parts. Inside the open card (vt-3811) a part that goes fades out over
+   * the one that comes — lifted out of the flow where it stood, so nothing below it moves — while the new one
+   * fades up; the card keeps its one size, so nothing jumps. Elsewhere, and under reduced motion, it swaps.
+   */
+  private part(el: HTMLElement, shown: boolean): void {
+    const leave = this.leaving.get(el);
+    if (shown) {
+      if (leave) {
+        leave.cancel();
+        this.leaving.delete(el);
+        this.unlift(el);
+      }
+      const coming = el.hidden || Boolean(leave);
+      el.hidden = false;
+      if (coming && this.fadeParts) {
+        el.animate(
+          [
+            { opacity: 0, transform: 'translateY(4px)' },
+            { opacity: 1, transform: 'none' },
+          ],
+          { duration: SWAP.in, delay: leave ? 0 : 40, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'backwards' },
+        );
+      }
+      return;
+    }
+    if (el.hidden || leave) return;
+    if (!this.fadeParts || typeof el.animate !== 'function') {
+      el.hidden = true;
+      return;
+    }
+    // Lifted where it stands (offsets are the card's: no part between them is positioned), above what comes.
+    const scroll = el.parentElement === this.e.body ? this.e.body.scrollTop : 0;
+    const st = el.style;
+    st.position = 'absolute';
+    st.top = `${el.offsetTop - scroll}px`;
+    st.left = `${el.offsetLeft}px`;
+    st.width = `${el.offsetWidth}px`;
+    st.margin = '0';
+    st.pointerEvents = 'none';
+    st.zIndex = '1';
+    el.setAttribute('aria-hidden', 'true');
+    el.inert = true;
+    const a = el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: SWAP.out, easing: 'ease-in', fill: 'forwards' });
+    this.leaving.set(el, a);
+    a.onfinish = () => {
+      if (this.leaving.get(el) !== a) return;
+      this.leaving.delete(el);
+      el.hidden = true;
+      this.unlift(el);
+      a.cancel();
+    };
+  }
+
+  private unlift(el: HTMLElement): void {
+    for (const p of ['position', 'top', 'left', 'width', 'margin', 'pointer-events', 'z-index']) el.style.removeProperty(p);
+    el.removeAttribute('aria-hidden');
+    el.inert = false;
   }
 
   // -- marking --------------------------------------------------------------
@@ -1944,7 +2487,6 @@ export class ReportWidget {
         status: this.result.status,
         ...(this.result.reportUrl ? { url: this.result.reportUrl } : {}),
       });
-      this.sentNotify = this.notify && this.who() !== null;
       this.view = 'sent';
       this.job = null;
       this.frozen = null;
@@ -2103,7 +2645,7 @@ export class ReportWidget {
     // maxCount 0: the project switched attaching off — no 📎 to press.
     e.attach.hidden = this.caps().maxCount === 0;
     e.fileInput.setAttribute('accept', this.caps().types.join(','));
-    e.tray.hidden = this.view !== 'describe' || (this.files.length === 0 && !this.fileRefusal);
+    this.part(e.tray, this.view === 'describe' && (this.files.length > 0 || Boolean(this.fileRefusal)));
     e.files.hidden = this.files.length === 0;
     e.files.setAttribute('aria-label', s.incFiles);
     e.fileNote.hidden = !this.fileRefusal;
@@ -2143,35 +2685,40 @@ export class ReportWidget {
     // The dock and the size (vt-8020 D9): the stylesheet places and scales everything from these two.
     e.root.dataset.dock = this.dock;
     e.root.dataset.launcher = this.launcher;
+    e.root.dataset.side = this.edge.side;
     if (this.launcher === 'edge') this.placeEdge();
     e.root.style.setProperty('--vr-scale', String(SIZE_SCALE[this.size]));
+    // A view swapped inside a card already on screen cross-fades (part); the card's own coming is the morph's.
+    this.fadeParts = this.isOpen && !e.card.hidden && !reducedMotion() && typeof e.card.animate === 'function';
 
     e.fab.hidden = !this.button || this.marking;
+    // Open — or still morphing back — the drop IS the card: it gives its place to the morph surface.
+    e.fab.classList.toggle('lifted', this.launcher === 'edge' && (this.isOpen || this.morph !== null));
     e.fabLabel.textContent = s.button;
     e.fab.setAttribute('aria-expanded', String(this.isOpen));
     const edge = this.launcher === 'edge';
     e.fab.setAttribute('aria-description', edge ? s.edgeHint : s.moveHint);
-    e.fab.setAttribute('aria-keyshortcuts', `${this.keybind ? `${keybindAria(this.keybind)} ` : ''}Alt+ArrowUp Alt+ArrowDown${edge ? '' : ' Alt+ArrowLeft Alt+ArrowRight'}`);
+    e.fab.setAttribute('aria-keyshortcuts', `${this.keybind ? `${keybindAria(this.keybind)} ` : ''}Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight`);
     // The drop is a glyph that grows its name; the chord stays in aria-keyshortcuts and the settings.
     e.fabKbd.hidden = !this.keybind || edge;
     e.fabKbd.textContent = this.keybind ? keybindLabel(this.keybind) : '';
 
     // The one card stays up while marking (vt-8020 D10): its note lines and Send are where the reporter finishes.
-    e.card.hidden = !this.isOpen;
+    e.card.hidden = !this.isOpen && this.morph === null;
     e.card.classList.toggle('busy', this.sending);
     e.title.textContent = s.title;
     e.closeBtn.setAttribute('aria-label', s.close);
     this.paintAccount();
-    e.describe.hidden = this.view !== 'describe';
-    e.settings.hidden = this.view !== 'settings';
-    e.sent.hidden = this.view !== 'sent';
-    e.reports.hidden = this.view !== 'reports';
-    e.recents.hidden = this.view !== 'recents';
-    e.linking.hidden = this.view !== 'link';
+    this.part(e.describe, this.view === 'describe');
+    this.part(e.settings, this.view === 'settings');
+    this.part(e.sent, this.view === 'sent');
+    this.part(e.reports, this.view === 'reports');
+    this.part(e.recents, this.view === 'recents');
+    this.part(e.linking, this.view === 'link');
     if (this.view === 'reports') this.paintReports();
     if (this.view === 'recents') this.paintRecents();
     if (this.view === 'link') this.paintLink();
-    e.foot.hidden = this.view !== 'describe';
+    this.part(e.foot, this.view === 'describe');
     this.paintFiles();
 
     e.kindsLabel.textContent = s.kindsLabel;
@@ -2220,9 +2767,8 @@ export class ReportWidget {
     e.back.textContent = s.back;
     this.paintSettings();
 
+    // Thanks, and nothing more to read (vt-3811): what the team does next is the team's to say.
     e.sentTitle.textContent = s.sentTitle;
-    // Filed or waiting: an unsigned report is checked by the team before it is filed, and says so.
-    e.sentBody.textContent = this.result?.status === 'quarantined' ? s.sentQueued : this.sentNotify ? s.sentNotify : s.sentBody;
     e.seeText.textContent = s.seeReport;
     const url = this.result?.reportUrl;
     e.see.hidden = !url;
@@ -2265,6 +2811,7 @@ export class ReportWidget {
     }
     // Always: the note lines live in the card, so their labels follow the locale outside marking too.
     this.renderPins();
+    this.shapeDrop();
   }
 }
 

@@ -1,5 +1,59 @@
 # @vitrinka/web
 
+## 0.13.0
+
+- **The drop becomes the card.** Opening Report a problem from the edge drop
+  no longer fades a separate card in beside an unchanged drop: the drop
+  itself grows into the card — one surface, its fill turning into the
+  card's, springing from the drop's box and round page side to the card's
+  box and corners — and the card's content fades in once the surface nearly
+  holds it. Closing runs it back into the drop, which then regrows its
+  feet. Reversed midway (closed while opening, opened while closing) it
+  turns from where it is. With no drop on screen (`button: false`), a
+  phone's sheet rises from the bottom and a desk's card fades up in place.
+- **One seamless drop.** The resting drop is drawn as ONE path — the body
+  and both concave meniscus feet — filled with `--vr-drop-fill`, so no seam
+  or outline shows where the feet meet the body or the screen's edge, and
+  it grows its name with the same one outline. The hairline light rim and
+  the specular highlight are gone; a soft shadow toward the page stays, and
+  a faint diffuse glow along the curved outline keeps it findable on a dark
+  page (on a light page it shows nothing).
+- **Either side edge, carried like liquid.** Pressed and moved, the drop
+  comes off the wall: its feet retract and it rounds into a free pill that
+  follows the pointer anywhere on the screen, stretching the way it moves.
+  Let go, it lands on the nearer side edge — left or right — at the height
+  it was let go (inside `edgeInsets`), straightens against that wall,
+  regrows its feet there and settles with one damped wobble. On the left
+  edge everything mirrors: the shape, the name growing toward the page, the
+  card opening to its right, and marking parking the card from that side.
+  Alt+←/→ crosses to the other edge, Alt+↑/↓ moves along it; a press that
+  barely moves is still a click.
+- **Stored place.** `vitrinka.report.edge` now holds
+  `{"side":"left"|"right","at":0–1}`. The 0.12.0 value (the fraction alone)
+  is read as a place on the right edge; anything else — another shape, an
+  unknown side, a value out of range — is the default place, and only
+  `side` and `at` are ever read.
+- **Sent is just thanks.** After Send the card says **Thank you** /
+  **Děkujeme** / **Ďakujeme**, with **See your report** (when the server
+  returns its page) and **Close** — nothing about the team taking a look or
+  checking it first. The strings `sentBody`, `sentNotify` and `sentQueued`
+  are gone from the catalogs.
+- **Views swap without a jump.** Inside the open card, moving between
+  describe, sending, sent or a failed send, settings and the lists
+  cross-fades: the old view fades out where it stood while the new one
+  fades up, and the card keeps its one size.
+- **Phones: a keyboard-safe sheet.** At 520 px wide or less the card is a
+  bottom sheet across the width, pinned to the visual viewport: when the
+  on-screen keyboard rises, the sheet's bottom edge — with Send — stays on
+  top of it and its height shrinks to what is left, on iOS Safari (whose
+  layout viewport does not shrink) as on Android Chrome. Safe-area insets
+  pad it. It works the same opened from the host's own control with the
+  drop hidden (`setButton(false)`, `openSelector`).
+- Under `prefers-reduced-motion: reduce` there is no morph, stretch,
+  wobble, glide or cross-fade: the card and the drop swap at once.
+- `launcher: 'corner'` is unchanged: the corner button, its dock, its
+  card and its animation.
+
 ## 0.12.0
 
 - **Report a problem opens from a drop on the screen's edge.** The default
