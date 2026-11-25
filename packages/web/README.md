@@ -296,7 +296,7 @@ offered only during one.
 ## Report a problem (`@vitrinka/web/report`)
 
 The report face of the same engine, for the people using your app: a quiet
-drop on the right edge of the screen and ONE card. Its header
+drop on a side edge of the screen and ONE card. Its header
 says who is reporting (the account chip) and holds the ⋯ menu; its body
 takes the reporter's word for it — **Bug · Suggestion · Question · Other**,
 optional, sent as `type`, a hint for your team's triage — and **What went
@@ -309,17 +309,38 @@ profile** (set in vitrinka; see [`docs/PROTOCOL.md`](../../docs/PROTOCOL.md)
 
 **The drop.** The launcher is a small ink drop resting on the right edge, a
 little below the middle — the edge is the flat surface it sits on, with a
-meniscus where they meet. Hovered or focused it grows its name (**Report a
-problem** / **Nahlásit problém** / **Nahlásiť problém**) and swells; click,
-hold and move it to slide it up or down the edge (Alt+↑/↓ from the
-keyboard) — it stretches while it moves, settles when let go and is
-remembered per site (`vitrinka.report.edge`). It never moves on its own,
-and under reduced motion it neither swells, stretches nor wobbles. It keeps
-clear of your top bar and bottom bars (`edgeInsets`, default 80 px top and
-136 px bottom), and the card opens beside it, centred on it; on a phone the
-card takes the width. Theme it with `--vr-drop-fill` and `--vr-drop-ink` on
-the HUD host. `launcher: 'corner'` (attribute `launcher="corner"`) keeps the
-large button in a corner instead.
+concave meniscus foot above and below where they meet, all one seamless
+shape. Hovered or focused it grows its name (**Report a problem** /
+**Nahlásit problém** / **Nahlásiť problém**) and swells. Click, hold and move
+it and it comes off the wall as a free pill that follows the pointer
+anywhere, stretching the way it moves; let go, it lands on the nearer side
+edge — left or right — at that height, regrows its feet there and settles.
+From the keyboard, Alt+↑/↓ moves it along the edge and Alt+←/→ to the other
+one. Its side and place are remembered per site (`vitrinka.report.edge`,
+`{"side":"right","at":0.62}`; the 0.12.0 number still reads as the right
+edge). It never moves on its own, and under reduced motion it neither
+swells, stretches, glides nor wobbles. It keeps clear of your top bar and
+bottom bars (`edgeInsets`, default 80 px top and 136 px bottom). Theme it
+with `--vr-drop-fill` and `--vr-drop-ink` on the HUD host.
+`launcher: 'corner'` (attribute `launcher="corner"`) keeps the large button
+in a corner instead.
+
+**The drop becomes the card.** Pressed, the drop grows into the card — one
+surface springing from the drop's box to the card's beside it, toward the
+middle of the page, centred on it — and the card's content fades in as it
+lands; closing runs it back into the drop. Switching views inside the card
+(sending, the thanks, settings, the lists) cross-fades at the card's one
+size. With the drop hidden (`button: false`, `setButton(false)`) the card
+fades up in place, or rises as a sheet on a phone. Reduced motion swaps
+them at once.
+
+**On a phone** (520 px wide or less) the card is a bottom sheet across the
+width, pinned to the visual viewport: when the on-screen keyboard opens, the
+sheet's bottom edge, with Send, sits on top of the keyboard and its height
+shrinks to what is left — on iOS Safari and Android Chrome alike — and it
+keeps clear of the notch and the home indicator. A host that hides the drop
+on phones and opens the card from its own control (`setButton(false)` and
+`openSelector`) gets the same sheet.
 
 **Marking.** **Show us where** puts a glass bar at the top of the page —
 "Mark where the problem is", a segmented **Box · Circle · Arrow · Cover**
@@ -387,7 +408,7 @@ function ReportAProblem({ locale, token }: { locale: string; token?: string }) {
 | `base` | vitrinka's origin (the script tag defaults to where it was served from) |
 | `locale` | `cs` · `en` · `sk`; live as an attribute, and through `setLocale()` |
 | `button` | `false` hides the launcher: open the card from your own control; live as an attribute, and through `setButton()` |
-| `launcher` | `edge` (default) — the drop on the right edge — or `corner`, the large button in a corner; live as an attribute |
+| `launcher` | `edge` (default) — the drop on a side edge (right until the reporter moves it) — or `corner`, the large button in a corner; live as an attribute |
 | `edgeInsets` | `{top, bottom}` in px the drop keeps clear of (your top bar, bottom bars); default `{top: 80, bottom: 136}` (npm only) |
 | `open-selector` / `openSelector` | a CSS selector of your control(s) that open the card |
 | `face` | `report` (default) or `recorder` — the recorder pill on the same engine (npm only; it takes a `vkr_` key or the device link). A linked member also switches in place: **The face switch** below |
@@ -556,11 +577,10 @@ pass. Its limit: a `window` capture listener your page registered before
 the widget mounted still runs first — read `event.composedPath()[0]`
 there, not `event.target`.
 
-**What the reporter sees after Send**: "Thanks — we've got it", then what
-happens next: a filed report says the team will take a look, with **See
-your report** when the server returns the report's page; one held for
-approval (an asserted or anonymous reporter) says the team checks it
-before it is filed. A failed send keeps every word; **Try again** resumes
+**What the reporter sees after Send**: "Thank you" ("Děkujeme",
+"Ďakujeme") and nothing more to read — **See your report** when the server
+returns the report's page, and **Close**; a report held for approval (an
+asserted or anonymous reporter) shows the same thanks. A failed send keeps every word; **Try again** resumes
 the same report. A request nothing answers counts as failed: each call
 gets 30 s, an upload 30 s plus its bytes at 32 KiB/s, so the card never
 stays on Sending.

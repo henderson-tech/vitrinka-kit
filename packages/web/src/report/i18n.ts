@@ -44,9 +44,8 @@ export interface Strings {
   retry: string;
   errorCreate: string;
   errorCapture: string;
+  /** All the sent card says (vt-3811): thanks, nothing about what the team does next. */
   sentTitle: string;
-  sentBody: string;
-  sentNotify: string;
   seeReport: string;
   tools: { circle: string; box: string; arrow: string; hide: string };
   toolbar: string;
@@ -107,7 +106,6 @@ export interface Strings {
   /** A report's step as the portal names it; an unknown key shows as is. */
   steps: Record<string, string>;
   waiting: string;
-  sentQueued: string;
   // -- the link sheet --
   linkCode: string;
   linkHint: string;
@@ -126,7 +124,7 @@ export interface Strings {
   errorFiles: string;
   // -- moving the button, size and technical details (vt-8020 D9) --
   moveHint: string;
-  /** The edge drop's move hint (vt-3811): along the edge only. */
+  /** The edge drop's move hint (vt-3811): along either side edge, or across to the other. */
   edgeHint: string;
   size: string;
   sizes: { sm: string; md: string; lg: string };
@@ -188,9 +186,7 @@ const en: Strings = {
   retry: 'Try again',
   errorCreate: 'Couldn’t send — your text is safe, try again',
   errorCapture: 'Your report arrived, the recording not yet — try again to attach it',
-  sentTitle: 'Thanks — we’ve got it',
-  sentBody: 'The team will take a look.',
-  sentNotify: 'We’ll email you when it’s fixed.',
+  sentTitle: 'Thank you',
   seeReport: 'See your report',
   tools: { circle: 'Circle', box: 'Box', arrow: 'Arrow', hide: 'Cover' },
   toolbar: 'Marking tools',
@@ -244,7 +240,6 @@ const en: Strings = {
   fromThisBrowser: 'Sent from this browser',
   steps: { received: 'Received', planned: 'Planned', in_progress: 'In progress', fixed: 'Fixed', done: 'Done' },
   waiting: 'Waiting for approval',
-  sentQueued: 'The team checks it before it’s filed.',
   linkCode: 'Your code',
   linkHint: 'Approve this code in vitrinka — on this device or another one where you’re signed in.',
   linkWaiting: 'Waiting for approval…',
@@ -259,7 +254,7 @@ const en: Strings = {
   incFiles: 'The files you attached',
   errorFiles: 'Your report arrived, a file not yet — try again to attach it',
   moveHint: 'Click, hold and move it to another corner, or press Alt and an arrow key.',
-  edgeHint: 'Click, hold and move it up or down along the edge, or press Alt and the up or down arrow.',
+  edgeHint: 'Click, hold and move it up or down, or across to the other edge; or press Alt and an arrow key.',
   size: 'Size',
   sizes: { sm: 'Small', md: 'Medium', lg: 'Large' },
   techDetails: 'Technical details',
@@ -318,9 +313,7 @@ const cs: Strings = {
   retry: 'Zkusit znovu',
   errorCreate: 'Nepodařilo se odeslat — váš text zůstal, zkuste to znovu',
   errorCapture: 'Hlášení dorazilo, záznam zatím ne — zkuste to znovu a přiložíme ho',
-  sentTitle: 'Díky — máme to',
-  sentBody: 'Tým se na to podívá.',
-  sentNotify: 'Až to bude opravené, pošleme vám e-mail.',
+  sentTitle: 'Děkujeme',
   seeReport: 'Zobrazit hlášení',
   tools: { circle: 'Kruh', box: 'Obdélník', arrow: 'Šipka', hide: 'Zakrýt' },
   toolbar: 'Nástroje pro označení',
@@ -374,7 +367,6 @@ const cs: Strings = {
   fromThisBrowser: 'Odesláno z tohoto prohlížeče',
   steps: { received: 'Přijato', planned: 'Naplánováno', in_progress: 'Řešíme', fixed: 'Opraveno', done: 'Hotovo' },
   waiting: 'Čeká na schválení',
-  sentQueued: 'Než ho zařadíme, tým ho zkontroluje.',
   linkCode: 'Váš kód',
   linkHint: 'Schvalte kód ve vitrince — na tomto nebo jiném zařízení, kde jste přihlášeni.',
   linkWaiting: 'Čekám na schválení…',
@@ -389,7 +381,7 @@ const cs: Strings = {
   incFiles: 'Soubory, které jste přiložili',
   errorFiles: 'Hlášení dorazilo, soubor zatím ne — zkuste to znovu a přiložíme ho',
   moveHint: 'Klikněte, podržte a veďte ho do jiného rohu, nebo stiskněte Alt a šipku.',
-  edgeHint: 'Klikněte, podržte a posuňte ho nahoru nebo dolů podél okraje, nebo stiskněte Alt a šipku nahoru či dolů.',
+  edgeHint: 'Klikněte, podržte a posuňte ho nahoru, dolů nebo k druhému okraji; nebo stiskněte Alt a šipku.',
   size: 'Velikost',
   sizes: { sm: 'Malá', md: 'Střední', lg: 'Velká' },
   techDetails: 'Technické údaje',
@@ -449,9 +441,7 @@ const sk: Strings = {
   retry: 'Skúsiť znova',
   errorCreate: 'Nepodarilo sa odoslať — váš text zostal, skúste to znova',
   errorCapture: 'Hlásenie dorazilo, záznam zatiaľ nie — skúste to znova a priložíme ho',
-  sentTitle: 'Vďaka — máme to',
-  sentBody: 'Tím sa na to pozrie.',
-  sentNotify: 'Keď to bude opravené, pošleme vám e-mail.',
+  sentTitle: 'Ďakujeme',
   seeReport: 'Zobraziť hlásenie',
   tools: { circle: 'Kruh', box: 'Obdĺžnik', arrow: 'Šípka', hide: 'Zakryť' },
   toolbar: 'Nástroje na označenie',
@@ -505,7 +495,6 @@ const sk: Strings = {
   fromThisBrowser: 'Odoslané z tohto prehliadača',
   steps: { received: 'Prijaté', planned: 'Naplánované', in_progress: 'Riešime', fixed: 'Opravené', done: 'Hotovo' },
   waiting: 'Čaká na schválenie',
-  sentQueued: 'Kým ho zaradíme, tím ho skontroluje.',
   linkCode: 'Váš kód',
   linkHint: 'Schváľte kód vo vitrinke — na tomto alebo inom zariadení, kde ste prihlásení.',
   linkWaiting: 'Čakám na schválenie…',
@@ -520,7 +509,7 @@ const sk: Strings = {
   incFiles: 'Súbory, ktoré ste priložili',
   errorFiles: 'Hlásenie dorazilo, súbor zatiaľ nie — skúste to znova a priložíme ho',
   moveHint: 'Kliknite, podržte a veďte ho do iného rohu, alebo stlačte Alt a šípku.',
-  edgeHint: 'Kliknite, podržte a posuňte ho hore alebo dole pozdĺž okraja, alebo stlačte Alt a šípku hore či dole.',
+  edgeHint: 'Kliknite, podržte a posuňte ho hore, dole alebo k druhému okraju; alebo stlačte Alt a šípku.',
   size: 'Veľkosť',
   sizes: { sm: 'Malá', md: 'Stredná', lg: 'Veľká' },
   techDetails: 'Technické údaje',

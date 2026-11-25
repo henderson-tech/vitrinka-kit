@@ -55,7 +55,7 @@ export interface ReportOptions extends ReportScriptOptions {
   locale?: Locale | string;
   /** The launcher (default true); false = open it from your own control. */
   button?: boolean;
-  /** `edge` (default): the drop resting on the right edge; `corner`: the large button in a corner. */
+  /** `edge` (default): the drop resting on a side edge (the right one until the reporter moves it); `corner`: the large button in a corner. */
   launcher?: Launcher;
   /** Your control(s) that open the card, as a CSS selector. */
   openSelector?: string;

@@ -2,8 +2,9 @@
  * Report a problem's extras (vt-8020 S11, S12, S14) on the report fixture
  * (fixture/report-server.ts): keys typed in the widget never reach a host's
  * capture-phase shortcuts; picked, pasted and dropped files ride the
- * attachment leg under the project's caps; the button moves to any corner;
- * Settings scales the widget and shows the technical details.
+ * attachment leg under the project's caps; the button moves to any corner; the
+ * edge drop moves along either side edge and across; the sent card only thanks;
+ * on a phone the card is a sheet that keeps Send above the keyboard; Settings scales the widget and shows the technical details.
  */
 import { expect, type Page, test } from '@playwright/test';
 
@@ -144,7 +145,7 @@ test('a picked, a pasted and a dropped file ride the attachment leg between the 
     if (r.url().includes('/attachment?') && name) types.set(name, r.headers()['content-type'] ?? '');
   });
   await card.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const calls = apiCalls();
   const legs = calls.filter((c) => c.includes('/attachment?'));
   expect(legs).toEqual([
@@ -164,7 +165,7 @@ test('a follow-up report carries a canvas-drawn PNG whole: every byte lands on t
   let card = await openCard(page);
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The export is empty');
   await card.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   await card.getByRole('button', { name: 'Close', exact: true }).last().click();
   seen.length = 0;
 
@@ -189,7 +190,7 @@ test('a follow-up report carries a canvas-drawn PNG whole: every byte lands on t
   });
   await expect(card.getByRole('button', { name: 'Remove chart.png' })).toBeVisible();
   await card.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const leg = seen.find((s) => s.path === '/api/v1/reports/rep-1/attachment?name=chart.png');
   expect(leg?.bytes).toBe(size);
   const calls = apiCalls();
@@ -261,7 +262,7 @@ test('a file that did not land is the only one Try again sends', async ({ page }
   await expect(card.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
   await expect(card.getByRole('radio', { name: 'Bug', exact: true })).toBeDisabled();
   await card.getByRole('button', { name: 'Try again' }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
   const calls = apiCalls();
   expect(calls.filter((c) => c === 'POST /api/v1/reports')).toHaveLength(1);
   expect(calls.filter((c) => c.includes('/attachment?'))).toEqual(['POST /api/v1/reports/rep-1/attachment?name=shot.png', 'POST /api/v1/reports/rep-1/attachment?name=spec.pdf']);
@@ -318,7 +319,7 @@ test('the button drags to another corner, the card opens beside it, and the corn
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.report.dock'))).toBe('br');
 });
 
-test('the edge drop rests on the right edge, names itself on hover, slides only along the edge and remembers it; the card opens beside it', async ({ page }) => {
+test('the edge drop rests on the right edge, names itself on hover, moves along it and remembers it; the card opens beside it', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 810 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(base);
@@ -334,26 +335,30 @@ test('the edge drop rests on the right edge, names itself on hover, slides only 
   expect(rest.y).toBeGreaterThan(810 / 2);
   expect(rest.y + rest.height).toBeLessThanOrEqual(810 - 136);
   expect((await label.boundingBox())?.width ?? 0).toBeLessThan(1);
+  // Its body and both feet are ONE closed path: nothing can show a seam between pieces.
+  await expect(fab.locator('.fab-shape path')).toHaveCount(1);
+  expect(await fab.locator('.fab-shape path').getAttribute('d')).toMatch(/^M[^M]*Z$/);
 
   // Hovered, it grows its name toward the page and stays on the edge.
   await fab.hover();
   await expect.poll(async () => (await fab.boundingBox())!.width).toBeGreaterThan(120);
   expect(Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
 
-  // Moved, it follows the pointer up the edge only — never off it — and the drop is no click.
+  // Carried up and let go on the right half, it lands back on the right edge at that height — and the drop is no click.
   const grip = { x: rest.x + 20, y: rest.y + rest.height / 2 };
   await page.mouse.move(grip.x, grip.y);
   await page.mouse.down();
-  await page.mouse.move(600, 260, { steps: 6 });
+  await page.mouse.move(1100, 260, { steps: 6 });
   await page.mouse.up();
   await page.mouse.move(700, 400);
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
   const moved = (await fab.boundingBox())!;
-  expect(Math.round(moved.x + moved.width)).toBe(1440);
   expect(moved.y).toBeLessThan(rest.y - 100);
   await expect(card).toBeHidden();
-  const stored = Number(await page.evaluate(() => localStorage.getItem('vitrinka.report.edge')));
-  expect(stored).toBeGreaterThanOrEqual(0);
-  expect(stored).toBeLessThan(0.62);
+  const stored = JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.report.edge')))!) as { side: string; at: number };
+  expect(stored.side).toBe('right');
+  expect(stored.at).toBeGreaterThanOrEqual(0);
+  expect(stored.at).toBeLessThan(0.62);
 
   // The card opens beside it, toward the page, and its middle sits level with the drop where there is room.
   await fab.click();
@@ -362,7 +367,7 @@ test('the edge drop rests on the right edge, names itself on hover, slides only 
   expect(beside.x + beside.width).toBeLessThan(moved.x);
   expect(beside.y).toBeGreaterThanOrEqual(16);
   expect(beside.y + beside.height).toBeLessThanOrEqual(810 - 16);
-  await card.getByRole('button', { name: 'Close' }).click();
+  await card.getByRole('button', { name: 'Close' }).first().click();
 
   // Remembered across a reload; Alt+↓ steps it back down the edge.
   await page.reload();
@@ -372,6 +377,159 @@ test('the edge drop rests on the right edge, names itself on hover, slides only 
   await expect.poll(async () => (await fab.boundingBox())!.y).toBeGreaterThan(moved.y);
   await expect(fab).toBeFocused();
   expect(Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+});
+
+test('carried across the screen the drop comes off the wall as a pill, lands on the left edge, opens the card toward the middle and stays there; Alt+→ takes it back', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(base);
+  await armed(page);
+  const fab = page.getByRole('button', { name: /^Report a problem/ });
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const rest = (await fab.boundingBox())!;
+
+  // A press that barely travels is still a click.
+  await page.mouse.move(rest.x + 20, rest.y + 24);
+  await page.mouse.down();
+  await page.mouse.move(rest.x + 22, rest.y + 25);
+  await page.mouse.up();
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: 'Close' }).first().click();
+  await expect(card).toBeHidden();
+
+  // Carried, it leaves the wall: a free pill under the pointer, its feet gone (every corner round).
+  await page.mouse.move(rest.x + 20, rest.y + 24);
+  await page.mouse.down();
+  await page.mouse.move(900, 400, { steps: 6 });
+  await page.mouse.move(220, 300, { steps: 8 });
+  await expect(fab).toHaveClass(/dragging/);
+  await expect.poll(async () => {
+    const b = (await fab.boundingBox())!;
+    return Math.abs(b.x + b.width / 2 - 220) < 30 && Math.abs(b.y + b.height / 2 - 300) < 30;
+  }).toBe(true);
+  // Let go on the left half: it lands on the LEFT edge at that height, inside the band.
+  await page.mouse.up();
+  await page.mouse.move(700, 700);
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x)).toBe(0);
+  await expect(fab).not.toHaveClass(/dragging/);
+  const landed = (await fab.boundingBox())!;
+  expect(landed.y + landed.height / 2).toBeGreaterThan(300 - 40);
+  expect(landed.y + landed.height / 2).toBeLessThan(300 + 40);
+  await expect(card).toBeHidden();
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.report.edge')))!)).toMatchObject({ side: 'left' });
+
+  // The drop becomes the card: it gives its place up while the card is open, and the card opens toward the middle.
+  await fab.click();
+  await expect(card).toBeVisible();
+  await expect.poll(() => fab.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
+  await expect.poll(async () => (await card.boundingBox())!.x).toBeGreaterThan(landed.x + landed.width);
+  await page.keyboard.press('Escape');
+  await expect(card).toBeHidden();
+  await expect.poll(() => fab.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+
+  // Remembered across a reload, side and height.
+  await page.reload();
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x)).toBe(0);
+  expect(Math.round((await fab.boundingBox())!.y)).toBe(Math.round(landed.y));
+  // Alt+→ crosses back to the right edge at the same height; Alt+← returns.
+  await fab.focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+  // Same height, once its landing wobble has settled.
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.y)).toBe(Math.round(landed.y));
+  await expect(fab).toBeFocused();
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('vitrinka.report.edge')))!)).toMatchObject({ side: 'right' });
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x)).toBe(0);
+
+  // A place stored by 0.12.0 (the fraction alone) is the right edge; a tampered one is the default place.
+  await page.evaluate(() => localStorage.setItem('vitrinka.report.edge', '0.3'));
+  await page.reload();
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+  await page.evaluate(() => localStorage.setItem('vitrinka.report.edge', '{"side":"top","at":9}'));
+  await page.reload();
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+  expect((await fab.boundingBox())!.y).toBeGreaterThan(810 / 2);
+});
+
+test('after Send the card says only thank you, with the way to the report and Close', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.goto(base);
+  await armed(page);
+  const card = await openCard(page);
+  await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The totals are off');
+  await card.getByRole('button', { name: 'Send' }).click();
+  const sent = card.locator('.pane.sent');
+  await expect(sent.getByText('Thank you', { exact: true })).toBeVisible();
+  // The old pane has faded out over it: the card shows nothing but the thanks.
+  await expect(card.locator('.pane:not([hidden])')).toHaveCount(1);
+  // Nothing about what the team does next: the thanks, the way to the report, Close.
+  await expect(sent).toHaveText(/^\s*Thank you\s*(See your report)?\s*Close\s*$/);
+  await expect(card.getByRole('button', { name: 'Send' })).toHaveCount(0);
+});
+
+/** iOS Safari's keyboard: the visual viewport shrinks, the layout viewport (innerHeight) stays. `__vv(h, top)` plays it. */
+const FAKE_KEYBOARD = `(() => {
+  const fake = new EventTarget(); let h = 0, top = 0, on = false;
+  Object.defineProperties(fake, {
+    height: { get: () => (on ? h : innerHeight) }, width: { get: () => innerWidth },
+    offsetTop: { get: () => (on ? top : 0) }, offsetLeft: { get: () => 0 }, scale: { get: () => 1 },
+    pageTop: { get: () => scrollY + (on ? top : 0) }, pageLeft: { get: () => scrollX },
+  });
+  Object.defineProperty(window, 'visualViewport', { configurable: true, get: () => fake });
+  window.__vv = (hh, tt = 0) => { on = true; h = hh; top = tt; fake.dispatchEvent(new Event('resize')); };
+})();`;
+
+test('on a phone the card opened from the host’s own control is a bottom sheet that keeps Send above the keyboard', async ({ page }) => {
+  await page.addInitScript(FAKE_KEYBOARD);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/?nobutton`);
+  await armed(page);
+  await expect(page.getByRole('button', { name: /^Report a problem/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Help', exact: true }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const send = card.getByRole('button', { name: 'Send', exact: true });
+  // A sheet across the width, its bottom on the screen's bottom (it rises there).
+  await expect.poll(async () => {
+    const b = (await card.boundingBox())!;
+    return [Math.round(b.x), Math.round(b.width), Math.round(b.y + b.height)];
+  }).toEqual([0, 390, 844]);
+
+  const draft = card.getByRole('textbox', { name: 'What went wrong?' });
+  await draft.fill('The month picker jumps');
+  await draft.focus();
+  // The keyboard rises over the bottom 344 px; the layout viewport stays 844 px tall, as on iOS Safari.
+  await page.evaluate(() => (window as unknown as { __vv(h: number, t?: number): void }).__vv(500));
+  expect(await page.evaluate(() => innerHeight)).toBe(844);
+  await expect.poll(async () => Math.round((await card.boundingBox())!.y + (await card.boundingBox())!.height)).toBe(500);
+  const above = (await send.boundingBox())!;
+  expect(above.y).toBeGreaterThanOrEqual(0);
+  expect(above.y + above.height).toBeLessThanOrEqual(500);
+  const field = (await draft.boundingBox())!;
+  expect(field.y).toBeGreaterThanOrEqual(0);
+  // Scrolled under the keyboard (the visual viewport moved down the layout one), the sheet follows it.
+  await page.evaluate(() => (window as unknown as { __vv(h: number, t?: number): void }).__vv(460, 120));
+  await expect.poll(async () => Math.round((await card.boundingBox())!.y + (await card.boundingBox())!.height)).toBe(580);
+  expect((await card.boundingBox())!.y).toBeGreaterThanOrEqual(120);
+  await expect(draft).toBeFocused();
+  await expect(draft).toHaveValue('The month picker jumps');
+});
+
+test('on a phone whose window itself shrinks under the keyboard (Android), Send stays in view', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/?nobutton`);
+  await armed(page);
+  await page.getByRole('button', { name: 'Help', exact: true }).click();
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const draft = card.getByRole('textbox', { name: 'What went wrong?' });
+  await draft.focus();
+  await page.setViewportSize({ width: 390, height: 500 });
+  const send = card.getByRole('button', { name: 'Send', exact: true });
+  await expect.poll(async () => {
+    const b = (await send.boundingBox())!;
+    return b.y >= 0 && b.y + b.height <= 500;
+  }).toBe(true);
+  await expect.poll(async () => Math.round((await card.boundingBox())!.y + (await card.boundingBox())!.height)).toBe(500);
+  await expect(draft).toBeFocused();
 });
 
 test('Settings: Large and Small scale the card and the button, remembered; technical details list version, capture, buffer and server', async ({ page }) => {

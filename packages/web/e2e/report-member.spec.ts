@@ -49,7 +49,7 @@ async function send(page: Page): Promise<void> {
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   await card.getByRole('textbox', { name: 'What went wrong?' }).fill('The export is empty');
   await card.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(card.getByText('Thanks — we’ve got it')).toBeVisible();
+  await expect(card.getByText('Thank you', { exact: true })).toBeVisible();
 }
 
 function created(): { auth: string; body: Record<string, unknown> } {
