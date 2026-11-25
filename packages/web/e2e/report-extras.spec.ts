@@ -270,7 +270,7 @@ test('a file that did not land is the only one Try again sends', async ({ page }
 test('the button drags to another corner, the card opens beside it, and the corner survives a reload; Alt+arrows move it back', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 810 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto(base);
+  await page.goto(`${base}/?corner`);
   const fab = page.getByRole('button', { name: /^Report a problem/ });
   const card = page.getByRole('dialog', { name: 'Report a problem' });
   const home = (await fab.boundingBox())!;
@@ -318,10 +318,66 @@ test('the button drags to another corner, the card opens beside it, and the corn
   expect(await page.evaluate(() => localStorage.getItem('vitrinka.report.dock'))).toBe('br');
 });
 
-test('Settings: Large and Small scale the card and the button, remembered; technical details list version, capture, buffer and server', async ({ page }) => {
+test('the edge drop rests on the right edge, names itself on hover, slides only along the edge and remembers it; the card opens beside it', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 810 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(base);
+  await armed(page);
+  const fab = page.getByRole('button', { name: /^Report a problem/ });
+  const card = page.getByRole('dialog', { name: 'Report a problem' });
+  const label = fab.locator('.fab-label');
+
+  // At rest: flush with the right edge, below the middle, above the bottom inset; the name is only for the ear.
+  const rest = (await fab.boundingBox())!;
+  expect(Math.round(rest.x + rest.width)).toBe(1440);
+  expect(rest.width).toBeLessThan(60);
+  expect(rest.y).toBeGreaterThan(810 / 2);
+  expect(rest.y + rest.height).toBeLessThanOrEqual(810 - 136);
+  expect((await label.boundingBox())?.width ?? 0).toBeLessThan(1);
+
+  // Hovered, it grows its name toward the page and stays on the edge.
+  await fab.hover();
+  await expect.poll(async () => (await fab.boundingBox())!.width).toBeGreaterThan(120);
+  expect(Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+
+  // Moved, it follows the pointer up the edge only — never off it — and the drop is no click.
+  const grip = { x: rest.x + 20, y: rest.y + rest.height / 2 };
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(600, 260, { steps: 6 });
+  await page.mouse.up();
+  await page.mouse.move(700, 400);
+  const moved = (await fab.boundingBox())!;
+  expect(Math.round(moved.x + moved.width)).toBe(1440);
+  expect(moved.y).toBeLessThan(rest.y - 100);
+  await expect(card).toBeHidden();
+  const stored = Number(await page.evaluate(() => localStorage.getItem('vitrinka.report.edge')));
+  expect(stored).toBeGreaterThanOrEqual(0);
+  expect(stored).toBeLessThan(0.62);
+
+  // The card opens beside it, toward the page, and its middle sits level with the drop where there is room.
+  await fab.click();
+  await expect(card).toBeVisible();
+  const beside = (await card.boundingBox())!;
+  expect(beside.x + beside.width).toBeLessThan(moved.x);
+  expect(beside.y).toBeGreaterThanOrEqual(16);
+  expect(beside.y + beside.height).toBeLessThanOrEqual(810 - 16);
+  await card.getByRole('button', { name: 'Close' }).click();
+
+  // Remembered across a reload; Alt+↓ steps it back down the edge.
+  await page.reload();
+  await expect.poll(async () => Math.round((await fab.boundingBox())!.y)).toBe(Math.round(moved.y));
+  await fab.focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(async () => (await fab.boundingBox())!.y).toBeGreaterThan(moved.y);
+  await expect(fab).toBeFocused();
+  expect(Math.round((await fab.boundingBox())!.x + (await fab.boundingBox())!.width)).toBe(1440);
+});
+
+test('Settings: Large and Small scale the card and the button, remembered; technical details list version, capture, buffer and server', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 810 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${base}/?corner`);
   await armed(page);
   const fab = page.getByRole('button', { name: /^Report a problem/ });
   const fabMedium = (await fab.boundingBox())!;

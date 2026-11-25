@@ -22,6 +22,7 @@
 import { listen } from '../recorder/hud/listen';
 import { normalizeContext, type ReportContext, type ReportContextInput } from './context';
 import type { RecordLoader } from './engine';
+import { type EdgeInsets, type Launcher, parseLauncher } from './edge';
 import { memberLinked, pillRecording, rememberFace, startFace, watchMemberLink } from './face';
 import { type Locale, parseLocale } from './i18n';
 import type { IdentifyInput } from './identity';
@@ -39,6 +40,8 @@ export interface ReportScriptOptions {
   capture?: CaptureNarrowing;
   /** Rewrite captured URLs and routes before redaction (credentials in paths). */
   sanitizeUrl?: (url: string) => string;
+  /** The clear space (px) the edge drop keeps at the top and the bottom of the viewport: your top bar and bottom bars. */
+  edgeInsets?: Partial<EdgeInsets>;
 }
 
 export interface ReportOptions extends ReportScriptOptions {
@@ -48,10 +51,12 @@ export interface ReportOptions extends ReportScriptOptions {
   base?: string;
   /** Default `report`. */
   face?: ReportFace;
-  /** `cs` | `en`; default: the browser's language. */
+  /** `cs` | `en` | `sk`; default: the browser's language. */
   locale?: Locale | string;
-  /** The large floating button (default true); false = open it from your own control. */
+  /** The launcher (default true); false = open it from your own control. */
   button?: boolean;
+  /** `edge` (default): the drop resting on the right edge; `corner`: the large button in a corner. */
+  launcher?: Launcher;
   /** Your control(s) that open the card, as a CSS selector. */
   openSelector?: string;
   /** Who reports: a token your server signed, or an asserted email. */
@@ -75,6 +80,8 @@ export interface ReportHandle {
   /** Replace the whole context the next report carries; `{}` or null clears it. Invalid entries are dropped and warned about. */
   setContext(next: ReportContextInput): void;
   setLocale(locale: Locale | string): void;
+  /** Show or hide the launcher, live — e.g. hide it while your own modal is open. */
+  setButton(on: boolean): void;
   unmount(): void;
 }
 
@@ -116,7 +123,7 @@ export interface Faces {
   defaultBase: () => string;
 }
 
-const ATTRS = ['key', 'base', 'open-selector', 'locale', 'button'] as const;
+const ATTRS = ['key', 'base', 'open-selector', 'locale', 'button', 'launcher'] as const;
 
 function trimBase(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
@@ -181,6 +188,7 @@ export function defineReportElement(faces: Faces): void {
       if (!this.widget) return;
       if (name === 'locale') this.widget.setLocale(value);
       else if (name === 'button') this.widget.setButton(value !== 'false');
+      else if (name === 'launcher') this.widget.setLauncher(parseLauncher(value));
       else if (name === 'open-selector') this.widget.setOpenSelector(value);
     }
 
@@ -280,6 +288,8 @@ export function defineReportElement(faces: Faces): void {
         key: at.key,
         locale: parseLocale(this.getAttribute('locale')),
         button: this.getAttribute('button') !== 'false',
+        launcher: parseLauncher(this.getAttribute('launcher')),
+        edgeInsets: this.options.edgeInsets,
         openSelector: this.getAttribute('open-selector'),
         identity: this.pendingIdentity,
         context: this.context,
@@ -354,8 +364,9 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
   if (opts.base) el.setAttribute('base', opts.base);
   if (opts.locale) el.setAttribute('locale', String(opts.locale));
   if (opts.button === false) el.setAttribute('button', 'false');
+  if (opts.launcher) el.setAttribute('launcher', opts.launcher);
   if (opts.openSelector) el.setAttribute('open-selector', opts.openSelector);
-  el.options = { appVersion: opts.appVersion, capture: opts.capture, sanitizeUrl: opts.sanitizeUrl };
+  el.options = { appVersion: opts.appVersion, capture: opts.capture, sanitizeUrl: opts.sanitizeUrl, edgeInsets: opts.edgeInsets };
   // null is a choice (anonymous, whatever the page-wide identity); only undefined defers.
   if (opts.identity !== undefined) el.identify(opts.identity);
   if (opts.context !== undefined) el.setContext(opts.context);
@@ -369,6 +380,7 @@ export function mountReport(opts: ReportOptions, faces: Faces): ReportHandle {
     identify: (who) => el.identify(who),
     setContext: (next) => el.setContext(next),
     setLocale: (l) => el.setLocale(l),
+    setButton: (on) => el.setAttribute('button', on ? 'true' : 'false'),
     unmount: () => el.remove(),
   };
 }
@@ -397,6 +409,7 @@ function mountRecorder(opts: ReportOptions, faces: Faces): ReportHandle {
     identify: inert,
     setContext: inert,
     setLocale: inert,
+    setButton: inert,
     unmount: () => {
       gone = true;
       unmount?.();

@@ -1,5 +1,28 @@
 # @vitrinka/web
 
+## 0.12.0
+
+- **Report a problem opens from a drop on the screen's edge.** The default
+  launcher is no longer the large button in a corner, which sat over a
+  page's own bottom bars (an order bar, a phone's tab dock): it is a small
+  ink drop resting on the right edge, a little below the middle, with a
+  meniscus where it meets the edge. Hovered or focused it grows its name
+  and swells; it slides up or down the edge (click, hold and move, or
+  Alt+↑/↓), stretches while it moves, settles when let go and is remembered
+  per site (`vitrinka.report.edge`). It never moves on its own; under
+  reduced motion it neither swells, stretches nor wobbles. The card opens
+  beside it, centred on it.
+- **Upgrading:** to keep the corner button, pass `launcher: 'corner'` (or
+  the attribute `launcher="corner"`); its dock and its remembered corner are
+  unchanged.
+- `edgeInsets: {top, bottom}` sets what the drop keeps clear of (default
+  80 px and 136 px); `--vr-drop-fill` and `--vr-drop-ink` on the HUD host
+  theme it.
+- The handle has `setButton(on)`: hide the launcher while your own modal is
+  up, show it again after.
+- **Slovak.** The report face speaks `sk` (`locale: 'sk'`, or a Slovak
+  browser), beside `cs` and `en`.
+
 ## 0.11.0
 
 - **A report shows how the reporter got there.** Report a problem sent a

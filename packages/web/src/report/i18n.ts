@@ -1,5 +1,5 @@
 /**
- * Every string Report a problem shows, one catalog per locale (cs, en). The
+ * Every string Report a problem shows, one catalog per locale (cs, en, sk). The
  * browser's language picks one by default; the host's `locale` option,
  * `locale` attribute and `setLocale()` switch it live — the widget repaints
  * its text in place, so a draft and its marks survive the switch.
@@ -9,7 +9,7 @@
  */
 import type { MarkerShape } from './markers';
 
-export type Locale = 'cs' | 'en';
+export type Locale = 'cs' | 'en' | 'sk';
 export type ReportKind = 'bug' | 'suggestion' | 'question' | 'other';
 export const REPORT_KINDS: readonly ReportKind[] = ['bug', 'suggestion', 'question', 'other'];
 
@@ -126,6 +126,8 @@ export interface Strings {
   errorFiles: string;
   // -- moving the button, size and technical details (vt-8020 D9) --
   moveHint: string;
+  /** The edge drop's move hint (vt-3811): along the edge only. */
+  edgeHint: string;
   size: string;
   sizes: { sm: string; md: string; lg: string };
   techDetails: string;
@@ -257,6 +259,7 @@ const en: Strings = {
   incFiles: 'The files you attached',
   errorFiles: 'Your report arrived, a file not yet — try again to attach it',
   moveHint: 'Click, hold and move it to another corner, or press Alt and an arrow key.',
+  edgeHint: 'Click, hold and move it up or down along the edge, or press Alt and the up or down arrow.',
   size: 'Size',
   sizes: { sm: 'Small', md: 'Medium', lg: 'Large' },
   techDetails: 'Technical details',
@@ -386,6 +389,7 @@ const cs: Strings = {
   incFiles: 'Soubory, které jste přiložili',
   errorFiles: 'Hlášení dorazilo, soubor zatím ne — zkuste to znovu a přiložíme ho',
   moveHint: 'Klikněte, podržte a veďte ho do jiného rohu, nebo stiskněte Alt a šipku.',
+  edgeHint: 'Klikněte, podržte a posuňte ho nahoru nebo dolů podél okraje, nebo stiskněte Alt a šipku nahoru či dolů.',
   size: 'Velikost',
   sizes: { sm: 'Malá', md: 'Střední', lg: 'Velká' },
   techDetails: 'Technické údaje',
@@ -406,17 +410,148 @@ const cs: Strings = {
   },
 };
 
-const CATALOGS: Readonly<Record<Locale, Strings>> = { cs, en };
+/** Slovak (vt-3811): Slovak plurals take the Czech forms (1 · 2–4 · 5+), so csPlural serves both. */
+const sk: Strings = {
+  button: 'Nahlásiť problém',
+  title: 'Nahlásiť problém',
+  close: 'Zavrieť',
+  settings: 'Nastavenia',
+  prompt: 'Čo sa pokazilo?',
+  placeholder: 'Napíšte, čo sa stalo a čo ste čakali',
+  attached: (sec) => {
+    if (sec < 60) {
+      return csPlural(sec, 'Posledná sekunda je priložená', `Posledné ${sec} sekundy sú priložené`, `Posledných ${sec} sekúnd je priložených`);
+    }
+    const min = Math.round(sec / 60);
+    return csPlural(min, 'Posledná minúta je priložená', `Posledné ${min} minúty sú priložené`, `Posledných ${min} minút je priložených`);
+  },
+  included: 'Čo je priložené',
+  incReplay: 'Záznam toho, čo sa na stránke dialo',
+  incReplayMasked: {
+    strict: 'Texty stránky aj všetko, čo ste napísali, sú v ňom skryté',
+    balanced: 'Všetko, čo ste napísali, je v ňom skryté',
+    full: 'Ukazuje stránku tak, ako ste ju videli',
+  },
+  incErrors: 'Chyby, na ktoré stránka narazila',
+  incConsole: 'Správy z konzoly prehliadača',
+  incNetwork: 'Ktoré adresy stránka načítavala a s akým výsledkom',
+  incFailedRequests: 'Požiadavky, ktoré zlyhali — len adresa a výsledok',
+  incEnv: 'Váš prehliadač, veľkosť obrazovky, jazyk a adresa stránky',
+  incIdentity: 'Vaše meno a e-mail z tejto aplikácie',
+  incMarks: 'Miesta, ktoré ste označili, aj s poznámkami',
+  showWhere: 'Ukážte nám kde',
+  kinds: { bug: 'Chyba', suggestion: 'Návrh', question: 'Otázka', other: 'Iné' },
+  kindsLabel: 'Čo to je?',
+  linesEmpty: 'Každé označené miesto tu dostane riadok na poznámku.',
+  notify: 'Pošlite mi e-mail, keď to bude opravené',
+  send: 'Odoslať',
+  sending: 'Odosielam…',
+  retry: 'Skúsiť znova',
+  errorCreate: 'Nepodarilo sa odoslať — váš text zostal, skúste to znova',
+  errorCapture: 'Hlásenie dorazilo, záznam zatiaľ nie — skúste to znova a priložíme ho',
+  sentTitle: 'Vďaka — máme to',
+  sentBody: 'Tím sa na to pozrie.',
+  sentNotify: 'Keď to bude opravené, pošleme vám e-mail.',
+  seeReport: 'Zobraziť hlásenie',
+  tools: { circle: 'Kruh', box: 'Obdĺžnik', arrow: 'Šípka', hide: 'Zakryť' },
+  toolbar: 'Nástroje na označenie',
+  barLead: 'Označte, kde je problém',
+  barLeadHide: 'Zakryte, čo tím nemá vidieť',
+  cancelMarking: 'Zrušiť',
+  discardMarks: (n) => csPlural(n, 'Zahodiť 1 značku?', `Zahodiť ${n} značky?`, `Zahodiť ${n} značiek?`),
+  discard: 'Zahodiť',
+  keep: 'Ponechať',
+  coach: {
+    box: 'Kliknite, podržte a veďte cez problém.',
+    circle: 'Kliknite, podržte a veďte okolo problému.',
+    arrow: 'Kliknite, podržte a veďte z voľného miesta k problému.',
+    hide: 'Kliknite, podržte a veďte cez všetko súkromné — v hlásení zostane prázdne.',
+  },
+  coachMore: 'Označiť môžete aj viac miest.',
+  coachDismiss: 'Rozumiem, už nezobrazovať',
+  coachSetting: 'Nápoveda pri označovaní',
+  marking: 'Označovanie',
+  keyboardHint: 'Klávesnica: Enter začne, šípky posúvajú, Shift+šípky menia veľkosť, Enter umiestni.',
+  hidden: 'Zakryté — neodošle sa',
+  notePlaceholder: 'Pridajte poznámku (nepovinné)',
+  mark: (n) => `Značka ${n}`,
+  removeMark: (n) => `Odobrať značku ${n}`,
+  shortcut: 'Klávesová skratka',
+  shortcutHint: 'Otvorí Nahlásiť problém kdekoľvek v tejto aplikácii.',
+  notSet: 'Nenastavená',
+  recordShortcut: 'Nahrať novú skratku',
+  pressKeys: 'Stlačte klávesy · Esc zruší',
+  needModifier: 'Pridajte Ctrl, Alt alebo ⌘ — samotná klávesa by prekážala pri písaní',
+  removeShortcut: 'Odobrať',
+  back: 'Späť',
+  account: 'Váš účet',
+  menu: 'Ponuka',
+  anonymous: 'Neprihlásené',
+  anonymousHint: 'Hlásenie najprv skontroluje tím.',
+  signedInByApp: 'Prihlásený touto aplikáciou',
+  linkVitrinka: 'Prepojiť s vitrinkou',
+  linkedAs: (who) => `Prepojené s vitrinkou ako ${who}`,
+  unlink: 'Odpojiť',
+  myReports: 'Moje hlásenia',
+  recentRecordings: 'Nedávne nahrávky',
+  record: 'Nahrávať',
+  recordHasDraft: 'Odošlite alebo zmažte rozpísané hlásenie',
+  openVitrinka: 'Otvoriť vitrinku',
+  openPortal: 'Otvoriť portál hlásení',
+  loading: 'Načítavam…',
+  listFailed: 'Nepodarilo sa načítať — skúste to znova',
+  noReports: 'Zatiaľ žiadne hlásenia.',
+  noRecordings: 'Zatiaľ žiadne nahrávky.',
+  fromThisBrowser: 'Odoslané z tohto prehliadača',
+  steps: { received: 'Prijaté', planned: 'Naplánované', in_progress: 'Riešime', fixed: 'Opravené', done: 'Hotovo' },
+  waiting: 'Čaká na schválenie',
+  sentQueued: 'Kým ho zaradíme, tím ho skontroluje.',
+  linkCode: 'Váš kód',
+  linkHint: 'Schváľte kód vo vitrinke — na tomto alebo inom zariadení, kde ste prihlásení.',
+  linkWaiting: 'Čakám na schválenie…',
+  linkExpired: 'Kód vypršal.',
+  linkFailed: 'Prepojenie sa nepodarilo.',
+  attach: 'Priložiť súbor',
+  removeFile: (name) => `Odobrať ${name}`,
+  fileTooBig: (name, cap) => `${name} prekračuje limit ${cap}`,
+  tooManyFiles: (n) => csPlural(n, 'Najviac 1 súbor na hlásenie', `Najviac ${n} súbory na hlásenie`, `Najviac ${n} súborov na hlásenie`),
+  fileType: (name, types) => `${name} nemožno priložiť — len ${types}`,
+  typeNames: { image: 'obrázky', pdf: 'PDF', text: 'textové súbory', office: 'kancelárske dokumenty' },
+  incFiles: 'Súbory, ktoré ste priložili',
+  errorFiles: 'Hlásenie dorazilo, súbor zatiaľ nie — skúste to znova a priložíme ho',
+  moveHint: 'Kliknite, podržte a veďte ho do iného rohu, alebo stlačte Alt a šípku.',
+  edgeHint: 'Kliknite, podržte a posuňte ho hore alebo dole pozdĺž okraja, alebo stlačte Alt a šípku hore či dole.',
+  size: 'Veľkosť',
+  sizes: { sm: 'Malá', md: 'Stredná', lg: 'Veľká' },
+  techDetails: 'Technické údaje',
+  techVersion: 'Verzia',
+  techWindow: 'Okno záznamu',
+  techCapture: 'Záznam',
+  techBuffer: 'Vyrovnávacia pamäť',
+  techServer: 'Server',
+  captureOn: 'Beží',
+  captureOff: 'Vypnutý',
+  captureStarting: 'Spúšťa sa…',
+  bufferMemory: 'V pamäti',
+  bufferBrowser: 'V tomto prehliadači',
+  windowLength: (sec) => {
+    if (sec < 60) return csPlural(sec, '1 sekunda', `${sec} sekundy`, `${sec} sekúnd`);
+    const min = Math.round(sec / 60);
+    return csPlural(min, '1 minúta', `${min} minúty`, `${min} minút`);
+  },
+};
+
+const CATALOGS: Readonly<Record<Locale, Strings>> = { cs, en, sk };
 
 export function strings(locale: Locale): Strings {
   return CATALOGS[locale];
 }
 
-/** `cs`, `cs-CZ`, `CS` → cs; `en-GB` → en; anything else → null. */
+/** `cs`, `cs-CZ`, `CS` → cs; `sk-SK` → sk; `en-GB` → en; anything else → null. */
 export function parseLocale(raw: unknown): Locale | null {
   if (typeof raw !== 'string') return null;
   const lang = raw.trim().toLowerCase().split(/[-_]/)[0];
-  return lang === 'cs' || lang === 'en' ? lang : null;
+  return lang === 'cs' || lang === 'en' || lang === 'sk' ? lang : null;
 }
 
 /** The first of the browser's languages the widget speaks; English otherwise. */

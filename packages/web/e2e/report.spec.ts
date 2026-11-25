@@ -204,7 +204,7 @@ test('a report carries the clicks and page changes before it, and never the repo
 
 test('markers 1..n with notes; the coach rides on the card, follows the picked shape and leaves for good on "Got it"; no element selector', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(base);
+  await page.goto(`${base}/?corner`);
   await armed(page);
   await page.getByRole('button', { name: /^Report a problem/ }).click();
   const card = page.getByRole('dialog', { name: 'Report a problem' });
@@ -506,7 +506,7 @@ for (const modal of ['dialog', 'aria-dialog']) {
   test(`the report stays at the window corner above a transformed ${modal}`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 810 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto(`${base}/?${modal}`);
+    await page.goto(`${base}/?${modal}&corner`);
     await armed(page);
     const fab = page.getByRole('button', { name: /^Report a problem/ });
     const position = () => fab.evaluate((el) => {

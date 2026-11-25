@@ -1,9 +1,11 @@
 /**
  * Report a problem — the report face's UI (QA Studio D12 C, D21 B).
  *
- * - A large floating "Report a problem" button (hidden with `button: false`;
- *   the host then opens it from its own control, `open-selector`, or
- *   `open()`), and the reporter's own shortcut (keybind.ts).
+ * - The launcher (hidden with `button: false`; the host then opens the card
+ *   from its own control, `open-selector`, or `open()`), and the reporter's
+ *   own shortcut (keybind.ts). By default it is the edge drop (vt-3811,
+ *   edge.ts): a drop resting on the right edge that grows its name on hover
+ *   and slides along the edge; `launcher: 'corner'` is the large button.
  * - ONE card (vt-8020 D10 A), one fixed size from drafting through sending
  *   to thanks: the reporter's word for it (vt-8020 D11 chips), "What went wrong?",
  *   one numbered note line per mark, and Send — the capture frozen when the
@@ -18,8 +20,9 @@
  * - The reporter's files (vt-8020 D9, attachments.ts): 📎 in the card's foot,
  *   paste or drop onto the card; chips above the foot, refused at once past
  *   the project's caps, sent on the wire's attachment leg.
- * - The button drags to any corner, or moves with Alt+arrows (drag.ts); the
- *   card rests beside it. Settings adds the size (S · M · L, settings.ts)
+ * - The corner button drags to any corner, or moves with Alt+arrows (drag.ts);
+ *   the edge drop slides along the edge, or moves with Alt+↑/↓ (edge.ts); the
+ *   card rests beside either. Settings adds the size (S · M · L, settings.ts)
  *   and the technical details a support conversation asks for.
  * - Rendered once into the shared HUD host's shadow root (top layer,
  *   shielded, blocked from rrweb); `paint()` rewrites text and state in place,
@@ -39,6 +42,7 @@ import { RECORDER_VERSION } from '../recorder/version';
 import { admit, type AttachmentCaps, DEFAULT_ATTACHMENT_CAPS, formatBytes, pastedName, type Refusal, typesLabel } from './attachments';
 import { contextField, type ReportContext } from './context';
 import { cornerToward, DRAG_THRESHOLD, nearestCorner, readDock, saveDock } from './drag';
+import { cardTopBeside, edgeCorner, edgeFraction, type EdgeInsets, edgeInsets, edgeTop, edgeToward, type Launcher, readEdge, saveEdge } from './edge';
 import { memberLinked, memberLinkGone, memberTokenFor, rememberDisplayMode, watchMemberLink } from './face';
 import { acquireEngine, type BuiltCapture, type CaptureEngine, type Frozen, type RecordLoader, releaseEngine, type ReportConfig } from './engine';
 import { browserLocale, type Locale, parseLocale, REPORT_KINDS, type ReportKind, strings, type Strings } from './i18n';
@@ -75,6 +79,10 @@ export interface WidgetOptions {
   button: boolean;
   /** CSS selector of the host's own control(s) that open the card. */
   openSelector?: string | null;
+  /** `edge` (default): the drop on the right edge (edge.ts); `corner`: the four-corner button (drag.ts). */
+  launcher?: Launcher;
+  /** The clear space the edge drop keeps at the top and the bottom of the viewport (px). */
+  edgeInsets?: Partial<EdgeInsets> | null;
   identity?: IdentifyInput;
   /** The host's claimed context, already validated by element.ts (context.ts, vt-9515). */
   context?: ReportContext;
@@ -99,6 +107,8 @@ const MIN_KB_SIZE = 16;
 /** The one card's size (vt-8020 D10: it never changes between states) and the clear band the marking bar keeps at the top. */
 const CARD = { w: 380, h: 460 } as const;
 const BAR_CLEAR = 72;
+/** The edge drop's height and the gap the card keeps to it, before the size setting scales them (styles: `.vr[data-launcher="edge"]`). */
+const DROP = { h: 48, w: 44, gap: 12 } as const;
 /** The coach's box beside the card (styles: `.coach`), before the size setting scales it, and its gap to the card. */
 const COACH = { w: 300, h: 160, gap: 10 } as const;
 /** The gap a parked card keeps on a side it did not rest against. */
@@ -129,6 +139,9 @@ const ICON = {
   clip: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 4.5l-5 5a1.6 1.6 0 002.3 2.3l5.4-5.4a3 3 0 00-4.2-4.2L3.6 7.6a4.4 4.4 0 006.2 6.2l4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   chevron: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   pen: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.7l2.5 2.5-7.6 7.6-3.1 0.6 0.6-3.1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  // A speech bubble with an exclamation mark: the edge drop's glyph (vt-3811).
+  report:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-5.4A8.5 8.5 0 1 1 21 12Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 8v4.2M12 15.6h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 } as const;
 
@@ -291,11 +304,13 @@ export function hitsOpener(ev: Event, sel: string | null): boolean {
 
 /** The widget's DOM, built once into the HUD host's shadow mount. */
 function buildDom(mount: HTMLElement) {
-  const fabLabel = h('span');
+  const fabLabel = h('span', { class: 'fab-label' });
   // The chord is painted for the eye only: in the name it would rename the button ("Report a problem Alt+Shift+A");
   // assistive technology hears it from aria-keyshortcuts (paint).
   const fabKbd = h('kbd', { 'aria-hidden': 'true' });
-  const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabLabel, fabKbd);
+  // The edge drop shows the glyph and grows the label out of it; the corner button shows the label alone (styles).
+  const fabGlyph = h('span', { class: 'fab-glyph', 'aria-hidden': 'true' }, icon(ICON.report));
+  const fab = h('button', { class: 'fab', type: 'button', part: 'button', 'aria-haspopup': 'dialog' }, fabGlyph, fabLabel, fabKbd);
 
   const title = h('h2', { id: 'vr-title' });
   // Who you are, at a glance (vt-8020 D5 A): the chip opens the account popover, ⋯ the menu.
@@ -480,7 +495,7 @@ function buildDom(mount: HTMLElement) {
   root.prepend(style);
   mount.append(root);
   return {
-    root, fab, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
+    root, fab, fabGlyph, fabLabel, fabKbd, card, head, title, whoBtn, whoAv, whoName, more, closeBtn, body, foot,
     accountPop, accName, accMail, accVia, accLinked, accUnlink, accLink, accPortal,
     morePop, mReports, mRecents, mRecord, mRecordWhy, mSettings, mOpen,
     reports, repBack, repStatus, repRows, repLocal, repPortal, recents, recBack, recStatus, recRows,
@@ -569,10 +584,14 @@ export class ReportWidget {
   private parkInsets: Pick<Frame, 'top' | 'bottom' | 'edge'> | null = null;
   /** The corner the button docks in (drag.ts); the card rests beside it and marking parks it from there. */
   private dock: Corner = readDock();
+  /** Which launcher shows (edge.ts); the edge drop's place along the right edge as a fraction of its band, and that band's insets. */
+  private launcher: Launcher;
+  private edge: number = readEdge();
+  private readonly insets: EdgeInsets;
   private size: WidgetSize = readSize();
   private techOpen = false;
   /** A press on the button: it becomes a drag once it travels DRAG_THRESHOLD; `grab` is where the pointer holds it. */
-  private fabDrag: { pointer: number; start: Point; grab: Point; moved: boolean } | null = null;
+  private fabDrag: { pointer: number; start: Point; grab: Point; moved: boolean; edgeTop?: number } | null = null;
   /** The click that ends a drag is the drop, not a press of the button. */
   private swallowClick = false;
   /** The button's glide to its new corner, while it runs. */
@@ -631,6 +650,8 @@ export class ReportWidget {
     this.locale = opts.locale ?? browserLocale();
     this.s = strings(this.locale);
     this.button = opts.button;
+    this.launcher = opts.launcher ?? 'edge';
+    this.insets = edgeInsets(opts.edgeInsets);
     this.openSelector = opts.openSelector ?? null;
     this.identity = opts.identity === undefined ? undefined : normalizeIdentity(opts.identity);
     this.context = opts.context ?? {};
@@ -726,6 +747,12 @@ export class ReportWidget {
     this.paint();
   }
 
+  setLauncher(l: Launcher): void {
+    if (l === this.launcher) return;
+    this.launcher = l;
+    this.paint();
+  }
+
   setOpenSelector(sel: string | null): void {
     this.openSelector = sel || null;
   }
@@ -783,6 +810,13 @@ export class ReportWidget {
     on(e.fab, 'pointercancel', (ev) => this.fabUp(ev, false));
     on(e.fab, 'keydown', (ev) => {
       if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      if (this.launcher === 'edge') {
+        const to = edgeToward(this.edge, ev.key);
+        if (to === null) return;
+        ev.preventDefault();
+        if (to !== this.edge) this.moveEdge(to);
+        return;
+      }
       const next = cornerToward(this.dock, ev.key);
       if (!next) return;
       ev.preventDefault(); // Alt+← is the browser's Back
@@ -1004,6 +1038,7 @@ export class ReportWidget {
       }),
     );
     this.offs.push(listen(window, 'resize', () => {
+      if (this.launcher === 'edge') this.placeEdge();
       if (this.parked) this.placeCard(true);
       if (this.marking) this.placeSeg();
     }));
@@ -1418,6 +1453,15 @@ export class ReportWidget {
     const r = fab.getBoundingClientRect();
     const vw = globalThis.innerWidth || 800;
     const vh = globalThis.innerHeight || 600;
+    if (this.launcher === 'edge') {
+      // The drop slides along the edge only, inside its band; it stretches while it moves (styles: `.dragging`).
+      fab.classList.remove('settle');
+      const h = DROP.h * SIZE_SCALE[this.size];
+      const top = edgeTop(edgeFraction(ev.clientY - d.grab.y, vh, h, this.insets), vh, h, this.insets);
+      d.edgeTop = top;
+      this.e.root.style.setProperty('--vr-drop-top', `${top}px`);
+      return;
+    }
     const s = fab.style;
     s.left = `${Math.min(Math.max(0, ev.clientX - d.grab.x), vw - r.width)}px`;
     s.top = `${Math.min(Math.max(0, ev.clientY - d.grab.y), vh - r.height)}px`;
@@ -1442,6 +1486,14 @@ export class ReportWidget {
     }, 0);
     const vw = globalThis.innerWidth || 800;
     const vh = globalThis.innerHeight || 600;
+    if (this.launcher === 'edge') {
+      // Released, it stays where it is (a cancelled drag goes home) and settles with one damped wobble.
+      // Read from where the drag put it, never the painted box: the stretch scales that box.
+      const h = DROP.h * SIZE_SCALE[this.size];
+      this.moveEdge(drop && d.edgeTop !== undefined ? edgeFraction(d.edgeTop, vh, h, this.insets) : this.edge);
+      this.settle();
+      return;
+    }
     this.moveDock(drop ? nearestCorner({ x: at.left + at.width / 2, y: at.top + at.height / 2 }, vw, vh) : this.dock, at);
   }
 
@@ -1477,6 +1529,45 @@ export class ReportWidget {
     fab.addEventListener('transitioncancel', done, { signal: glide.signal });
   }
 
+  // -- the edge drop (vt-3811) -------------------------------------------------
+
+  /** The corner the launcher rests in, for marking and the coach: the dock, or the drop's half of the edge. */
+  private rest(): Corner {
+    return this.launcher === 'edge' ? edgeCorner(this.edge) : this.dock;
+  }
+
+  /** Moves the drop to `fraction` of its band and remembers it; the stylesheet's transition carries it there. */
+  private moveEdge(fraction: number): void {
+    this.edge = fraction;
+    saveEdge(fraction);
+    this.paint();
+  }
+
+  /** One damped wobble after a drag (styles: `.settle`); nothing under reduced motion. */
+  private settle(): void {
+    const fab = this.e.fab;
+    if (reducedMotion()) return;
+    fab.classList.remove('settle');
+    void fab.offsetWidth;
+    fab.classList.add('settle');
+    fab.addEventListener('animationend', () => fab.classList.remove('settle'), { once: true });
+  }
+
+  /**
+   * Places the drop on the right edge and the card beside it, centred on it (edge.ts). Both go through
+   * custom properties so the stylesheet keeps every other rule; a drag in progress owns the drop's top.
+   */
+  private placeEdge(): void {
+    const root = this.e.root;
+    const vh = globalThis.innerHeight || 600;
+    const k = SIZE_SCALE[this.size];
+    const dropH = DROP.h * k;
+    const top = this.fabDrag?.edgeTop ?? edgeTop(this.edge, vh, dropH, this.insets);
+    root.style.setProperty('--vr-drop-top', `${top}px`);
+    const cardH = Math.min(CARD.h * k, vh - 32);
+    root.style.setProperty('--vr-card-top', `${cardTopBeside(top, dropH, cardH, vh)}px`);
+  }
+
   // -- marking --------------------------------------------------------------
 
   private startMarking(): void {
@@ -1486,7 +1577,7 @@ export class ReportWidget {
     this.passKeys = new Set(this.markers.map((m) => m.key));
     // Marking parks the card from where it is (beside the button's dock, or a corner an earlier pass
     // chose), with the insets it has there: starting never moves it — only a mark landing under it does.
-    const corner = this.parked ?? this.dock;
+    const corner = this.parked ?? this.rest();
     this.parkInsets = this.insetsAt(corner, this.e.card.getBoundingClientRect());
     this.parked = corner;
     this.renderMarks();
@@ -1577,7 +1668,7 @@ export class ReportWidget {
     const coach = this.e.coach;
     coach.dataset.side = 'above';
     const h = coach.offsetHeight || COACH.h;
-    coach.dataset.side = coachSide(this.parked ?? this.dock, this.frame(), { w: COACH.w * k, h: h * k }, COACH.gap * k);
+    coach.dataset.side = coachSide(this.parked ?? this.rest(), this.frame(), { w: COACH.w * k, h: h * k }, COACH.gap * k);
   }
 
   private unpark(): void {
@@ -2051,14 +2142,18 @@ export class ReportWidget {
     e.root.classList.toggle('nobutton', !this.button);
     // The dock and the size (vt-8020 D9): the stylesheet places and scales everything from these two.
     e.root.dataset.dock = this.dock;
+    e.root.dataset.launcher = this.launcher;
+    if (this.launcher === 'edge') this.placeEdge();
     e.root.style.setProperty('--vr-scale', String(SIZE_SCALE[this.size]));
 
     e.fab.hidden = !this.button || this.marking;
     e.fabLabel.textContent = s.button;
     e.fab.setAttribute('aria-expanded', String(this.isOpen));
-    e.fab.setAttribute('aria-description', s.moveHint);
-    e.fab.setAttribute('aria-keyshortcuts', `${this.keybind ? `${keybindAria(this.keybind)} ` : ''}Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight`);
-    e.fabKbd.hidden = !this.keybind;
+    const edge = this.launcher === 'edge';
+    e.fab.setAttribute('aria-description', edge ? s.edgeHint : s.moveHint);
+    e.fab.setAttribute('aria-keyshortcuts', `${this.keybind ? `${keybindAria(this.keybind)} ` : ''}Alt+ArrowUp Alt+ArrowDown${edge ? '' : ' Alt+ArrowLeft Alt+ArrowRight'}`);
+    // The drop is a glyph that grows its name; the chord stays in aria-keyshortcuts and the settings.
+    e.fabKbd.hidden = !this.keybind || edge;
     e.fabKbd.textContent = this.keybind ? keybindLabel(this.keybind) : '';
 
     // The one card stays up while marking (vt-8020 D10): its note lines and Send are where the reporter finishes.

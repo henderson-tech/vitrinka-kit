@@ -85,6 +85,72 @@ kbd {
 .vr[data-dock="bl"] .fab, .vr[data-dock="bl"] .card { transform-origin: 0 100%; }
 .vr[data-dock="tr"] .fab, .vr[data-dock="tr"] .card { transform-origin: 100% 0; }
 .vr[data-dock="tl"] .fab, .vr[data-dock="tl"] .card { transform-origin: 0 0; }
+/* -- the edge drop (vt-3811, the default launcher; edge.ts) ---------------------
+   A half-bead resting on the right edge, with two meniscus feet where it meets it: the edge is the flat
+   surface the liquid sits on. It grows its name on hover or focus, swells with a soft spring, stretches
+   while it is moved along the edge and settles with one damped wobble. It never moves at rest. Ink in
+   both colour schemes; a hairline light rim keeps it visible on a dark page. A host themes it with
+   --vr-drop-fill and --vr-drop-ink on the HUD host. The card opens beside it, centred on it. */
+.fab-glyph { display: none; }
+.fab-glyph svg { display: block; width: 18px; height: 18px; }
+.vr[data-launcher="edge"] {
+  --drop-fill: var(--vr-drop-fill, #131216);
+  --drop-ink: var(--vr-drop-ink, #fff);
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+.vr[data-launcher="edge"] .fab {
+  right: 0; bottom: auto; top: var(--vr-drop-top, 62vh);
+  transform-origin: 100% 50%;
+  height: 48px; gap: 0; padding: 0 11px 0 13px;
+  border-radius: 24px 0 0 24px;
+  background: radial-gradient(7px 3.5px at 15px 10px, rgba(255, 255, 255, .24), transparent) no-repeat, var(--drop-fill);
+  color: var(--drop-ink);
+  font-size: 14px; font-weight: 500; letter-spacing: normal;
+  box-shadow: none;
+  filter: drop-shadow(0 0 .6px rgba(255, 255, 255, .55)) drop-shadow(-3px 5px 9px rgba(0, 0, 0, .22));
+  transition: top var(--dur-slow) var(--ease-smooth-out), transform 420ms var(--spring);
+}
+.vr[data-launcher="edge"] .fab::before, .vr[data-launcher="edge"] .fab::after {
+  content: ""; position: absolute; right: 0; width: 11px; height: 11px; pointer-events: none;
+  transition: transform 420ms var(--spring);
+}
+.vr[data-launcher="edge"] .fab::before {
+  bottom: 100%; transform-origin: 100% 100%;
+  background: radial-gradient(circle at 0 0, transparent 10.5px, var(--drop-fill) 11px);
+}
+.vr[data-launcher="edge"] .fab::after {
+  top: 100%; transform-origin: 100% 0;
+  background: radial-gradient(circle at 0 100%, transparent 10.5px, var(--drop-fill) 11px);
+}
+.vr[data-launcher="edge"] .fab-glyph { display: block; flex: none; }
+.vr[data-launcher="edge"] .fab-label {
+  max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0;
+  transition: max-width 460ms cubic-bezier(.34, 1.4, .64, 1), opacity .2s ease .06s, padding .3s ease;
+}
+.vr[data-launcher="edge"] .fab:hover, .vr[data-launcher="edge"] .fab:focus-visible { transform: scale(1.07); box-shadow: none; }
+.vr[data-launcher="edge"] .fab:hover::before, .vr[data-launcher="edge"] .fab:hover::after,
+.vr[data-launcher="edge"] .fab:focus-visible::before, .vr[data-launcher="edge"] .fab:focus-visible::after { transform: scaleY(1.45); }
+/* Never while the card is open: the name would grow under the card beside it. */
+.vr[data-launcher="edge"] .fab[aria-expanded="false"]:hover .fab-label,
+.vr[data-launcher="edge"] .fab[aria-expanded="false"]:focus-visible .fab-label { max-width: 240px; opacity: 1; padding: 0 7px 0 9px; }
+.vr[data-launcher="edge"] .fab:focus-visible { outline-offset: -4px; }
+/* Moved along the edge it follows the pointer and stretches; released, it settles. */
+.vr[data-launcher="edge"] .fab.dragging { transform: scale(.9, 1.16); transition: transform 200ms var(--spring); cursor: grabbing; }
+.vr[data-launcher="edge"] .fab.settle { animation: vr-settle 520ms ease-out; }
+@keyframes vr-settle {
+  0% { transform: scale(.9, 1.16); }
+  35% { transform: scale(1.08, .9); }
+  60% { transform: scale(.97, 1.04); }
+  80% { transform: scale(1.01, .99); }
+  100% { transform: none; }
+}
+.vr[data-launcher="edge"] .card {
+  right: calc((44px + 12px) * var(--vr-scale)); bottom: auto; top: var(--vr-card-top, 16px);
+  transform-origin: 100% 0;
+  height: min(460px, calc((100vh - 32px) / var(--vr-scale)));
+}
+.vr.nobutton[data-launcher="edge"] .card { right: var(--edge); }
+.vr[data-launcher="edge"] .card.parked { right: auto; transform-origin: 0 0; }
 /* Dragged, the button rides the pointer by its left/top; dropped, it glides into its corner (FLIP on translate). */
 .vr .fab.dragging { transform-origin: 0 0; transition: none; cursor: grabbing; }
 .fab.gliding { transition: translate var(--dur-slow) var(--ease-smooth-out), transform .14s ease, box-shadow .14s ease; }
@@ -400,6 +466,8 @@ a.row:hover { background: var(--faint); }
 @media (max-width: 520px) {
   .vr { --edge: 16px; --lift: calc(var(--edge) + 68px * var(--vr-scale)); }
   .fab { padding: 13px 18px; font-size: 16px; }
+  /* A phone has no room beside the drop: the card takes the width and covers it. */
+  .vr[data-launcher="edge"] .card { right: var(--edge); }
   .tb { max-width: calc((100vw - 16px) / var(--vr-scale)); overflow-x: auto; }
   .tb-lead { display: none; }
   .seg button { padding: 0 9px; }
@@ -410,5 +478,12 @@ a.row:hover { background: var(--faint); }
   .card.parked, .seg-ind, .seg button, .kinds button, .pin .rm, .link svg, .coach, .switch, .switch .knob { transition: none; }
   .card.busy .head::after { animation: none; }
   .fab, .fab.gliding { transition: none; }
+  /* The edge drop stays the still bead: no swell, stretch or wobble, and it moves without gliding. */
+  .vr[data-launcher="edge"] .fab, .vr[data-launcher="edge"] .fab::before, .vr[data-launcher="edge"] .fab::after,
+  .vr[data-launcher="edge"] .fab-label { transition: none; }
+  .vr[data-launcher="edge"] .fab:hover, .vr[data-launcher="edge"] .fab:focus-visible, .vr[data-launcher="edge"] .fab.dragging { transform: none; }
+  .vr[data-launcher="edge"] .fab:hover::before, .vr[data-launcher="edge"] .fab:hover::after,
+  .vr[data-launcher="edge"] .fab:focus-visible::before, .vr[data-launcher="edge"] .fab:focus-visible::after { transform: none; }
+  .vr[data-launcher="edge"] .fab.settle { animation: none; }
 }
 `;

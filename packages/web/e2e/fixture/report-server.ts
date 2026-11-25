@@ -5,7 +5,8 @@
  * records every call, on one origin. Pages: `/` (the tag, English), `/?mount`
  * (`mountReport({locale: 'cs'})`, the handle on `window.report`),
  * `/?nobutton` (no button; the page's Help opens the card), and any of them
- * with `balanced` (the masking profile that keeps page text). `/__events`
+ * with `balanced` (the masking profile that keeps page text) or `corner` (the
+ * four-corner button instead of the default edge drop). `/__events`
  * lists the recorded calls. report.spec.ts drives it; report-serve.ts
  * leaves it running for hand-testing on the devbox (app `report`).
  */
@@ -105,9 +106,11 @@ function page(query: string): string {
         '<p>Edit settlement</p><label>Settlement month<input value="September"></label><button onclick="this.closest(\'dialog\').close()">Close editor</button><button>Save</button></dialog>' +
         '<dialog id="second"><p>Confirm</p></dialog><script>window.openModal = (id = "modal") => document.getElementById(id).showModal()</script>'
       : '';
+  // `corner`: the four-corner button instead of the default edge drop.
+  const launcher = query.includes('corner') ? ' launcher="corner"' : '';
   const tag = query.includes('nobutton')
-    ? '<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"></vitrinka-report>'
-    : '<vitrinka-report key="vkb_e2e" locale="en"></vitrinka-report>';
+    ? `<button id="help">Help</button><vitrinka-report key="vkb_e2e" button="false" open-selector="#help"${launcher}></vitrinka-report>`
+    : `<vitrinka-report key="vkb_e2e" locale="en"${launcher}></vitrinka-report>`;
   return `${head}${TABLE}${modal}${tag}${recorder}<script type="module" src="/vendor/report-widget-1.mjs"></script></body></html>`;
 }
 
